@@ -24,7 +24,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
-logger = logging.getLogger("foodlens")
+logger = logging.getLogger("intake")
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
@@ -106,7 +106,7 @@ def summarize(records: list[dict]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="foodlens — automatic food calorie tracker")
+    parser = argparse.ArgumentParser(description="intake — automatic food calorie tracker")
     parser.add_argument("--date", help="Date to process (YYYY-MM-DD), defaults to today")
     args = parser.parse_args()
 
