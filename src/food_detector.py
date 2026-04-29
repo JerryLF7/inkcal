@@ -1,56 +1,49 @@
 """
-Local food detection via Ollama + moondream.
-
-Runs on NUC, no data leaves this machine.
+Local food detection via SigLIP2 classifier.
+Runs on CPU, no data leaves this machine.
 """
 
-import base64
-import json
+import io
 import logging
 from typing import Any
 
-import httpx
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+MODEL_NAME = "prithivMLmods/Food-or-Not-SigLIP2"
+
 
 class FoodDetector:
-    LOCAL = "moondream"
-    PROMPT = (
-        "Look at this image carefully. Is there food in it? "
-        "A meal, a dish, ingredients, snacks, drinks, or any edible items? "
-        "Answer with exactly one word: yes or no."
-    )
+    def __init__(self):
+        # Lazy imports so torch/transformers don't block the whole script
+        from transformers import AutoImageProcessor, SiglipForImageClassification
+        import torch
 
-    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "moondream"):
-        self.ollama_url = ollama_url.rstrip("/")
-        self.model = model
-        self._client = httpx.Client(timeout=60)
+        self._torch = torch
+        logger.info("Loading food classifier: %s ...", MODEL_NAME)
+        self._model = SiglipForImageClassification.from_pretrained(MODEL_NAME)
+        self._processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
+        self._model.eval()
 
-    def _image_to_base64(self, image_bytes: bytes) -> str:
-        return base64.b64encode(image_bytes).decode("utf-8")
+    def _preprocess(self, image_bytes: bytes):
+        """Convert raw bytes to RGB PIL Image."""
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        return self._processor(images=img, return_tensors="pt")
 
     def is_food(self, image_bytes: bytes) -> bool:
-        """Ask moondream if the image contains food. Returns True/False."""
-        b64 = self._image_to_base64(image_bytes)
-
-        body = {
-            "model": self.model,
-            "prompt": FoodDetector.PROMPT,
-            "stream": False,
-            "images": [b64],
-        }
-
+        """Classify the image: True = food, False = not food."""
         try:
-            r = self._client.post(f"{self.ollama_url}/api/generate", json=body)
-            r.raise_for_status()
-            data = r.json()
-            response_text = data.get("response", "").strip().lower()
-            logger.debug("moondream response: %s", response_text)
-            return "yes" in response_text
+            inputs = self._preprocess(image_bytes)
+            with self._torch.no_grad():
+                outputs = self._model(**inputs)
+                # id2label: {"0": "food", "1": "not-food"}
+                pred = self._torch.argmax(outputs.logits, dim=1).item()
+            logger.debug("Food classifier: %s", "food" if pred == 0 else "not-food")
+            return pred == 0
         except Exception as e:
-            logger.error("Ollama query failed: %s", e)
+            logger.error("Food classification failed: %s", e)
             return False
 
     def close(self):
-        self._client.close()
+        pass
