@@ -1,4 +1,5 @@
-"""Quick scan: classify food/not-food for a date range, no Gemini."""
+"Quick scan: classify food/not-food for given dates, no Gemini."
+import argparse
 import logging
 import os
 import sys
@@ -14,13 +15,23 @@ from food_detector import FoodDetector
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger("scan")
 
+parser = argparse.ArgumentParser(description="Quick food/not-food scan for given dates")
+date_group = parser.add_mutually_exclusive_group(required=True)
+date_group.add_argument("--date", help="Single date (YYYY-MM-DD)")
+date_group.add_argument("--dates", help="Comma-separated dates (YYYY-MM-DD,YYYY-MM-DD,...)")
+args = parser.parse_args()
+
+if args.date:
+    dates = [args.date]
+else:
+    dates = [d.strip() for d in args.dates.split(",")]
+
 immich = ImmichClient(
     os.getenv("IMMICH_URL", "http://your-immich-host:2283"),
     os.getenv("IMMICH_API_KEY"),
 )
 detector = FoodDetector()
 
-dates = ["2026-04-01", "2026-04-02"]
 total = 0
 food_count = 0
 
