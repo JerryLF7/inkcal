@@ -1,14 +1,14 @@
-# foodlens 🍽️
+# intake 🍽️
 
 自动食物热量追踪流水线。
 
-**手机拍照 → Immich → moondream 本地过滤 → Gemini 分析热量 → 记日志**
+**手机拍照 → Immich → SigLIP2 本地过滤 → Gemini 分析热量 → 记日志**
 
 ## 架构
 
 ```
         ┌──────────┐     ┌──────────────┐     ┌─────────┐
- 拍照 → │  Immich  │ ──→ │ moondream    │ ──→ │ Gemini  │
+ 拍照 → │  Immich  │ ──→ │   SigLIP2    │ ──→ │ Gemini  │
         │ (照片库)  │     │ (本地过滤食物) │     │ (热量分析)│
         └──────────┘     └──────────────┘     └─────────┘
                                │                    │
@@ -17,8 +17,8 @@
 ```
 
 三步走：
-1. **Immich** — 拉当天照片列表
-2. **moondream**（Ollama 本地跑） — 判断图片里有没有食物，不是食物的直接跳过，**不出内网**
+1. **Immich** — 拉指定日期的照片列表
+2. **SigLIP2**（本地 CPU 推理 ~0.3s/张） — 判断图片里有没有食物，不是食物的直接跳过，**不出内网**
 3. **Gemini**（OpenAI 兼容格式） — 分析食物热量、蛋白质、碳水、脂肪，记入每日日志
 
 ## 前置
@@ -26,35 +26,35 @@
 | 组件 | 要求 |
 |------|------|
 | [Immich](https://immich.app) | 运行中的实例，获取 API key |
-| [Ollama](https://ollama.com) + moondream | `ollama pull moondream` |
-| Gemini API key | 或者任何 OpenAI 兼容的视觉模型 endpoint |
+| Gemini API key | 或任何 OpenAI 兼容的视觉模型 endpoint |
+| Python 3.11+ | |
 
 ## 设置
 
 ```bash
-# 1. 装 Ollama + moondream
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull moondream
-
-# 2. 配环境变量
-cd ~/Coding/foodlens
+# 1. 克隆并配环境变量
+cd ~/Coding/intake
 cp .env.example .env
 # 编辑 .env 填入 Immich key 和 Gemini key
 
-# 3. 装依赖
+# 2. 装依赖
 pip install -r requirements.txt
 ```
 
 ## 用法
 
 ```bash
+# 分析今天的照片
 python main.py
+
+# 分析指定日期
+python main.py --date 2026-04-28
 ```
 
 跑一次就会：
-1. 从 Immich 拉你今天所有照片
-2. 每张用 moondream 看是不是食物
-3. 是食物的发给 Gemini 分析热量
+1. 从 Immich 拉指定日期所有照片
+2. 每张用 SigLIP2 判断是不是食物（本地 CPU，~0.3s/张）
+3. 是食物的发给 Gemini 分析热量（含截图/海报/菜单等误识别拦截）
 4. 写入 `data/YYYY-MM-DD.json`
 
 ## 数据格式
@@ -64,7 +64,7 @@ python main.py
   {
     "asset_id": "xxxx-xxxx",
     "photo_time": "2026-04-28T12:30:00.000Z",
-    "thumbnail_url": "http://immich:2283/api/asset/xxx/thumbnail",
+    "thumbnail_url": "http://immich:2283/api/assets/xxx/thumbnail",
     "meal": "一碗牛肉面",
     "calories": 550,
     "protein_g": 25,
@@ -78,14 +78,10 @@ python main.py
 
 ## 隐私
 
-moondream 在 NUC 本地跑，食物过滤阶段**图片不离开机器**。只有确认是食物的图片才发往 Gemini 云端分析。Immich 内网可达，不暴露公网。
+SigLIP2 在本地 CPU 推理，食物过滤阶段**图片不离开机器**。只有确认是食物的图片才发往 Gemini 云端分析。Immich 内网可达，不暴露公网。
 
 ## 设计原则
 
-- **隐私优先**：本地过滤后才走云 API
+- **隐私优先**：本地分类器过滤后才走云 API
 - **幂等**：已处理的 asset_id 不会重复分析
-- **精简**：零外部依赖的纯 Python，单文件编排
-
----
-
-Made with 🐙 by Oddy
+- **Gemini prompt 防误识别**：自动拦截截图、海报、菜单、屏幕等假食物图片

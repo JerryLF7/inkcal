@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-foodlens — automatic food calorie tracker.
+intake — automatic food calorie tracker.
 
 Pipeline:
-  Immich API → fetch today's photos → moondream (food filter) → Gemini (calories) → log
+  Immich API → fetch photos → SigLIP2 (local food filter) → Gemini (calories) → log
 """
 
+import argparse
 import json
 import logging
 import os
@@ -36,14 +37,12 @@ def load_config():
         "gemini_key": os.getenv("GEMINI_API_KEY"),
         "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-        "ollama_url": os.getenv("OLLAMA_URL", "http://localhost:11434"),
-        "ollama_model": os.getenv("OLLAMA_MODEL", "moondream"),
     }
 
 
-def already_processed(assets: list[dict]) -> set[str]:
-    """Check which asset IDs have already been processed today."""
-    log_file = DATA_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.json"
+def already_processed(date_str: str) -> set[str]:
+    """Check which asset IDs have already been processed for a given date."""
+    log_file = DATA_DIR / f"{date_str}.json"
     if not log_file.exists():
         return set()
     try:
@@ -54,10 +53,10 @@ def already_processed(assets: list[dict]) -> set[str]:
         return set()
 
 
-def append_log(asset_id: str, photo_time: str, thumbnail_url: str, result: dict):
-    """Append today's analysis result to the daily log."""
+def append_log(date_str: str, asset_id: str, photo_time: str, thumbnail_url: str, result: dict):
+    """Append analysis result to the given date's log."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = DATA_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.json"
+    log_file = DATA_DIR / f"{date_str}.json"
 
     record = {
         "asset_id": asset_id,
@@ -107,69 +106,75 @@ def summarize(records: list[dict]):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="foodlens — automatic food calorie tracker")
+    parser.add_argument("--date", help="Date to process (YYYY-MM-DD), defaults to today")
+    args = parser.parse_args()
+
     config = load_config()
 
     if not config["immich_key"]:
         logger.error("IMMICH_API_KEY not set in .env")
         sys.exit(1)
 
+    if args.date:
+        target_date = datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=timezone(timedelta(hours=8)))
+        date_str = args.date
+    else:
+        target_date = datetime.now(timezone(timedelta(hours=8)))
+        date_str = target_date.strftime("%Y-%m-%d")
+
     immich = ImmichClient(config["immich_url"], config["immich_key"])
-    detector = FoodDetector(config["ollama_url"], config["ollama_model"])
+    detector = FoodDetector()
     analyzer = CalorieAnalyzer(
         config["gemini_key"],
         base_url=config["gemini_base_url"],
         model=config["gemini_model"],
     )
 
-    # Step 1: Fetch today's photos
-    logger.info("📸 Fetching today's photos from Immich...")
-    assets = immich.get_today_assets()
+    # Step 1: Fetch photos for the target date
+    logger.info("📸 Fetching photos for %s from Immich...", date_str)
+    assets = immich.get_date_assets(target_date)
     if not assets:
-        logger.info("今天没有新照片。")
+        logger.info("%s 没有照片。", date_str)
         immich.close()
         detector.close()
         analyzer.close()
         return
 
-    logger.info(f"今天共 {len(assets)} 张照片")
+    logger.info("%s 共 %d 张照片", date_str, len(assets))
 
     # Step 2: Check already processed
-    processed = already_processed(assets)
+    processed = already_processed(date_str)
     new_assets = [a for a in assets if a["id"] not in processed]
-    logger.info(f"未处理: {len(new_assets)} 张")
+    logger.info("未处理: %d 张", len(new_assets))
 
     # Step 3 & 4: Filter by food, then analyze
     food_records = []
     for asset in new_assets:
         aid = asset["id"]
         photo_time = asset.get("exifInfo", {}).get("dateTimeOriginal", "unknown")
-        logger.info(f"  🔍 检测 [{aid[:8]}...] (拍摄于 {photo_time})")
+        logger.info("  🔍 检测 [%s...] (拍摄于 %s)", aid[:8], photo_time)
 
         try:
             thumb = immich.download_thumbnail(aid)
         except Exception as e:
-            logger.error(f"  下载缩略图失败: {e}")
+            logger.error("  下载缩略图失败: %s", e)
             continue
 
         if not detector.is_food(thumb):
-            logger.info(f"  ❌ 不是食物，跳过")
+            logger.info("  ❌ 不是食物，跳过")
             continue
 
-        logger.info(f"  🍽️  检测到食物! 调 Gemini 分析...")
+        logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
         thumbnail_url = immich.get_thumbnail_url(aid)
         result = analyzer.analyze(thumb)
 
-        record = append_log(aid, photo_time, thumbnail_url, result)
+        record = append_log(date_str, aid, photo_time, thumbnail_url, result)
         food_records.append(record)
-        logger.info(f"  ✅ {result.get('meal', '?' )} ~{result.get('calories', 0)}kcal")
+        logger.info("  ✅ %s ~%skcal", result.get("meal", "?"), result.get("calories", 0))
 
-    # Step 5: Summary
-    # Also load any previously processed today
-    all_today = already_processed(assets) | set(r.get("asset_id") for r in food_records)
-    records = append_log.__wrapped__ if hasattr(append_log, "__wrapped__") else []
-
-    # Re-read the full log for summary
-    log_file = DATA_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.json"
+    # Step 5: Summary — re-read the log for a complete picture
+    log_file = DATA_DIR / f"{date_str}.json"
     if log_file.exists():
         with open(log_file) as f:
             all_records = json.load(f)

@@ -2,10 +2,8 @@
 Immich API client — fetch today's assets for food tracking.
 """
 
-import os
 from datetime import datetime, timezone, timedelta
 from typing import Any
-from urllib.parse import urljoin
 
 import httpx
 
@@ -45,15 +43,18 @@ class ImmichClient:
         data = r.json()
         return data.get("assets", {}).get("items", [])
 
+    def get_date_assets(self, date: datetime) -> list[dict[str, Any]]:
+        """Get all images taken on a given date (Asia/Hong_Kong timezone)."""
+        hkt = date.astimezone(timezone(timedelta(hours=8)))
+        start = hkt.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = hkt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return self._fetch_assets_in_range(start.isoformat(), end.isoformat())
+
     def get_today_assets(self) -> list[dict[str, Any]]:
         """Get all images taken today (Asia/Hong_Kong timezone)."""
-        now = datetime.now(timezone(timedelta(hours=8)))
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return self.get_date_assets(datetime.now(timezone(timedelta(hours=8))))
 
-        after = today_start.isoformat()
-        before = today_end.isoformat()
-
+    def _fetch_assets_in_range(self, after: str, before: str) -> list[dict[str, Any]]:
         all_assets = []
         page = 1
         while True:
@@ -62,16 +63,15 @@ class ImmichClient:
                 break
             all_assets.extend(batch)
             page += 1
-
         return all_assets
 
     def get_thumbnail_url(self, asset_id: str) -> str:
         """Get the URL to download a thumbnail for an asset."""
-        return f"{self.base_url}/api/asset/{asset_id}/thumbnail"
+        return f"{self.base_url}/api/assets/{asset_id}/thumbnail?size=preview"
 
     def download_thumbnail(self, asset_id: str) -> bytes:
         """Download thumbnail image bytes for an asset."""
-        r = self._client.get(f"/api/asset/{asset_id}/thumbnail")
+        r = self._client.get(f"/api/assets/{asset_id}/thumbnail?size=preview")
         r.raise_for_status()
         return r.content
 
