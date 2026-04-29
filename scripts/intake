@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# intake CLI — thin wrapper around ~/Coding/intake/main.py
+set -euo pipefail
+cd "$HOME/Coding/intake" && exec python3 main.py "$@"
