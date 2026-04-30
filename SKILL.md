@@ -33,4 +33,15 @@ Trigger on any of: "记一下吃了", "记录一下", "午饭/晚饭/午餐/晚�
 
 | Topic | File |
 |-------|------|
-| CLI commands, workflows, data format | `usage.md` |
+| CLI commands, workflows, web viewer, data format | `usage.md` |
+
+## Web Viewer Workflow
+
+Use the web viewer when Jerry asks to view intake records in a browser or tweak the mobile UI.
+
+1. Inspect `~/Coding/intake/web/server.py` and `~/Coding/intake/web/static/index.html` before editing.
+2. Start preview from the project root with `INTAKE_PORT=5800 python3 web/server.py` using `terminal(background=true)`.
+3. Verify with `curl -sS http://127.0.0.1:5800/api/today` and `ss -ltnp | grep ':5800'`.
+4. Open `http://127.0.0.1:5800/` with the browser tool and test interactions directly.
+5. For date UI, prefer local-date formatting (`getFullYear()`, `getMonth()+1`, `getDate()`) over `toISOString().slice(0,10)` to avoid timezone day shifts.
+6. When adding date selection, keep picker value, visible date label, active shortcut chips, and fetched `/api/records?date=YYYY-MM-DD` data synchronized.
