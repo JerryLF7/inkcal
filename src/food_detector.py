@@ -1,10 +1,12 @@
 """
 Local food detection via SigLIP2 classifier.
 Runs on CPU, no data leaves this machine.
+Prefers fine-tuned local model over HuggingFace base.
 """
 
 import io
 import logging
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -12,18 +14,27 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "prithivMLmods/Food-or-Not-SigLIP2"
+LOCAL_MODEL = Path(__file__).resolve().parent.parent / "data" / "finetuned-model"
+
+
+def _model_path():
+    """Return the best available model path: local fine-tuned > HuggingFace."""
+    if LOCAL_MODEL.exists() and (LOCAL_MODEL / "model.safetensors").exists():
+        return str(LOCAL_MODEL)
+    return MODEL_NAME
 
 
 class FoodDetector:
-    def __init__(self):
+    def __init__(self, model_path=None):
         # Lazy imports so torch/transformers don't block the whole script
-        from transformers import AutoImageProcessor, SiglipForImageClassification
+        from transformers import AutoImageProcessor, AutoModelForImageClassification
         import torch
 
         self._torch = torch
-        logger.info("Loading food classifier: %s ...", MODEL_NAME)
-        self._model = SiglipForImageClassification.from_pretrained(MODEL_NAME)
-        self._processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
+        path = model_path or _model_path()
+        logger.info("Loading food classifier: %s ...", path)
+        self._model = AutoModelForImageClassification.from_pretrained(path)
+        self._processor = AutoImageProcessor.from_pretrained(path)
         self._model.eval()
 
     def _preprocess(self, image_bytes: bytes):
