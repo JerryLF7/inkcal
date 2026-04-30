@@ -28,39 +28,57 @@
     cursor: pointer; padding: 4px 8px; border-radius: 8px;
   }
   .date-nav .nav-btn:active { background: #333; }
-  .date-nav .date-label { font-size: 15px; font-weight: 600; }
-  .date-nav .today-btn {
-    background: #2a6eff; color: #fff; border: none; border-radius: 8px;
-    padding: 4px 12px; font-size: 12px; cursor: pointer;
+  .date-nav .date-label {
+    font-size: 15px; font-weight: 600; color: #e0e0e0; cursor: pointer;
+    user-select: none; padding: 4px 8px; border-radius: 8px;
   }
-  .date-nav .today-btn:active { background: #1a5aee; }
+  .date-nav .date-label:active { background: #2a2a2a; }
 
-  /* Calendar picker */
-  .calendar-row {
-    margin-bottom: 12px;
+  /* Calendar dropdown */
+  .calendar-dropdown {
+    position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    background: #1e1e1e; border: 1px solid #333; border-radius: 12px;
+    padding: 12px; z-index: 10; min-width: 288px; margin-top: 4px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
   }
-  .calendar-row input[type="date"] {
-    width: 100%;
-    background: #1a1a1a; color: #e0e0e0; border: 1px solid #2a2a2a;
-    border-radius: 10px; padding: 10px 12px; font-size: 14px;
-    color-scheme: dark;
+  .cal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
   }
-  .calendar-row button {
-    background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a;
-    border-radius: 10px; padding: 10px 12px; font-size: 13px; cursor: pointer;
+  .cal-month { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+  .cal-nav {
+    background: none; border: none; color: #aaa; font-size: 18px;
+    cursor: pointer; padding: 4px 10px; border-radius: 6px; line-height: 1;
   }
-  .calendar-row button:active { background: #2a2a2a; }
-
-  .date-chips {
-    display: flex; gap: 8px; overflow-x: auto; padding: 0 0 12px;
-    scrollbar-width: none;
+  .cal-nav:active { background: #333; }
+  .cal-weekdays {
+    display: grid; grid-template-columns: repeat(7, 1fr);
+    text-align: center; font-size: 11px; color: #666; margin-bottom: 4px; padding: 4px 0;
   }
-  .date-chips::-webkit-scrollbar { display: none; }
-  .date-chip {
-    flex: 0 0 auto; background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a;
-    border-radius: 999px; padding: 7px 11px; font-size: 12px; cursor: pointer;
+  .cal-grid {
+    display: grid; grid-template-columns: repeat(7, 1fr);
+    gap: 3px; text-align: center;
   }
-  .date-chip.active { background: #2a6eff22; color: #2a6eff; border-color: #2a6eff; }
+  .cal-day {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; border-radius: 8px; cursor: pointer; color: #ccc;
+    position: relative;
+  }
+  .cal-day:hover { background: #2a2a2a; }
+  .cal-day.other { color: #444; pointer-events: none; }
+  .cal-day.today { color: #2a6eff; font-weight: 700; }
+  .cal-day.selected { background: #2a6eff; color: #fff; }
+  .cal-day.selected.today { color: #fff; }
+  .cal-day.has-data:not(.selected)::after {
+    content: ''; position: absolute; bottom: 3px; left: 50%;
+    transform: translateX(-50%); width: 4px; height: 4px;
+    border-radius: 50%; background: #51cf66;
+  }
+  .cal-day.selected.has-data::after {
+    content: ''; position: absolute; bottom: 3px; left: 50%;
+    transform: translateX(-50%); width: 4px; height: 4px;
+    border-radius: 50%; background: rgba(255,255,255,0.6);
+  }
 
   /* Quick links */
   .quick-links { display: flex; gap: 8px; margin-bottom: 16px; }
@@ -70,6 +88,40 @@
   }
   .quick-links button.active { background: #2a6eff22; color: #2a6eff; border-color: #2a6eff; }
   .quick-links button:active { background: #2a2a2a; }
+  #q-progress.active { background: #9775fa22; color: #9775fa; border-color: #9775fa; }
+
+  /* Progress panel */
+  .progress-panel {
+    background: #1a1a1a; border-radius: 12px; padding: 16px; margin-bottom: 16px;
+    border: 1px solid #2a2a2a;
+  }
+  .progress-bar-wrap {
+    height: 6px; background: #2a2a2a; border-radius: 3px; margin-bottom: 12px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%; border-radius: 3px; background: #9775fa;
+    transition: width 0.4s ease;
+  }
+  .progress-stats {
+    font-size: 13px; color: #aaa; margin-bottom: 12px; line-height: 1.6;
+  }
+  .progress-stats .ready { color: #51cf66; }
+  .progress-stats .not-ready { color: #888; }
+  .progress-list {
+    max-height: 240px; overflow-y: auto; font-size: 12px;
+  }
+  .progress-item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 0;
+    border-bottom: 1px solid #222;
+  }
+  .progress-item .lbl-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+  .progress-item .lbl-dot.correct { background: #51cf66; }
+  .progress-item .lbl-dot.wrong { background: #ff6b6b; }
+  .progress-item .lbl-name { flex: 1; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress-item .lbl-tag { color: #888; font-size: 11px; }
 
   /* Summary bar */
   .summary {
@@ -136,6 +188,48 @@
     animation: spin 0.8s linear infinite; margin: 0 auto 8px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Lightbox */
+  .lightbox {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.95);
+    z-index: 100; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .lightbox img {
+    max-width: 100%; max-height: 60vh; object-fit: contain;
+    border-radius: 4px;
+  }
+  .lightbox-close {
+    position: absolute; top: 16px; right: 16px;
+    color: #aaa; font-size: 24px; cursor: pointer;
+    width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  }
+  .lightbox-meta {
+    margin-top: 12px; color: #aaa; font-size: 14px; text-align: center;
+    padding: 0 24px;
+  }
+  .lightbox-labels {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .lbl-btn {
+    background: #2a2a2a; color: #888; border: 1px solid #333;
+    border-radius: 6px; padding: 6px 14px; cursor: pointer;
+    font-size: 13px; font-family: inherit;
+  }
+  .lbl-btn:active { background: #3a3a3a; }
+  .lbl-btn.correct.active { background: #51cf6622; color: #51cf66; border-color: #51cf66; }
+  .lbl-btn.wrong.active { background: #ff6b6b22; color: #ff6b6b; border-color: #ff6b6b; }
+  .lbl-btn.upload { padding: 6px 10px; }
+
+  .meal-card.has-image { cursor: pointer; }
+  .meal-card.has-image:active { background: #222; }
+
+  /* Card thumbnail */
+  .card-thumb {
+    width: 48px; height: 48px; border-radius: 8px; object-fit: cover;
+    flex-shrink: 0; cursor: pointer; background: #2a2a2a;
+  }
+  .card-thumb:active { opacity: 0.7; }
 </style>
 </head>
 <body>
@@ -147,17 +241,32 @@
     <button onclick="loadDay('today')" id="q-today">今日</button>
     <button onclick="loadDay('yesterday')" id="q-yesterday">昨日</button>
     <button onclick="loadWeek()" id="q-week">本周</button>
+    <button onclick="toggleProgress()" id="q-progress" style="flex:0.6;background:#2a2a2a;font-size:12px">训练进度</button>
   </div>
 
-  <div class="calendar-row">
-    <input type="date" id="date-picker" onchange="loadSelectedDate()" aria-label="选择日期">
+  <div class="progress-panel" id="progress-panel" style="display:none">
+    <div class="progress-bar-wrap">
+      <div class="progress-bar-fill" id="progress-fill"></div>
+    </div>
+    <div class="progress-stats" id="progress-stats"></div>
+    <div class="progress-list" id="progress-list"></div>
   </div>
-  <div class="date-chips" id="date-chips"></div>
 
   <div class="date-nav">
     <button class="nav-btn" onclick="prevDay()">‹</button>
-    <div style="flex: 1; text-align: center;">
-      <div class="date-label" id="date-label">—</div>
+    <div style="flex:1;text-align:center;position:relative">
+      <span class="date-label" id="date-label" onclick="toggleCalendar()"></span>
+      <div class="calendar-dropdown" id="calendar-dropdown" style="display:none">
+        <div class="cal-header">
+          <button class="cal-nav" onclick="event.stopPropagation();changeMonth(-1)">‹</button>
+          <span class="cal-month" id="cal-month"></span>
+          <button class="cal-nav" onclick="event.stopPropagation();changeMonth(1)">›</button>
+        </div>
+        <div class="cal-weekdays">
+          <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
+      </div>
     </div>
     <button class="nav-btn" onclick="nextDay()">›</button>
   </div>
@@ -172,10 +281,27 @@
   <div id="content"><div class="loading"><div class="spinner"></div>加载中...</div></div>
 </div>
 
+<input type="file" id="upload-input" accept="image/*" style="display:none" onchange="handleUpload(event)">
+
+<div class="lightbox" id="lightbox" style="display:none" onclick="closeLightbox()">
+  <div class="lightbox-close" onclick="closeLightbox()">✕</div>
+  <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
+  <div class="lightbox-meta" id="lightbox-meta" onclick="event.stopPropagation()"></div>
+  <div class="lightbox-labels" id="lightbox-labels" style="display:none" onclick="event.stopPropagation()">
+    <button class="lbl-btn correct" id="lbl-correct" onclick="setLabel('correct')">正确</button>
+    <button class="lbl-btn wrong" id="lbl-wrong" onclick="setLabel('wrong')">有误</button>
+    <button class="lbl-btn upload" onclick="triggerUpload(event)">换图</button>
+  </div>
+</div>
+
 <script>
 const API = '';
 let currentDate = new Date();
+let currentLoadedDate = '';
+let currentLightboxAssetId = '';
 let viewMode = 'day'; // 'day' | 'week'
+let availableDates = new Set();
+let calendarYear, calendarMonth;
 
 function fmtDate(d) {
   const y = d.getFullYear();
@@ -195,6 +321,61 @@ function hktNow() {
   const now = new Date();
   return new Date(now.toLocaleString('en-US', {timeZone:'Asia/Hong_Kong'}));
 }
+
+// ── Calendar ──────────────────────────────────────────────────
+
+function toggleCalendar() {
+  const dd = document.getElementById('calendar-dropdown');
+  if (dd.style.display === 'none') {
+    calendarYear = currentDate.getFullYear();
+    calendarMonth = currentDate.getMonth();
+    renderCalendar(calendarYear, calendarMonth);
+    dd.style.display = 'block';
+  } else {
+    dd.style.display = 'none';
+  }
+}
+
+function changeMonth(delta) {
+  calendarMonth += delta;
+  if (calendarMonth > 11) { calendarMonth = 0; calendarYear++; }
+  if (calendarMonth < 0) { calendarMonth = 11; calendarYear--; }
+  renderCalendar(calendarYear, calendarMonth);
+}
+
+function renderCalendar(y, m) {
+  document.getElementById('cal-month').textContent = `${y}年${String(m+1).padStart(2,'0')}月`;
+  const grid = document.getElementById('cal-grid');
+  const firstDay = new Date(y, m, 1).getDay();
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const today = fmtDate(hktNow());
+  const selected = fmtDate(currentDate);
+
+  let html = '';
+  for (let i = 0; i < firstDay; i++) {
+    html += '<span class="cal-day other"></span>';
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    let cls = 'cal-day';
+    if (ds === today) cls += ' today';
+    if (ds === selected) cls += ' selected';
+    if (availableDates.has(ds)) cls += ' has-data';
+    html += `<span class="${cls}" onclick="event.stopPropagation();loadDay('${ds}');toggleCalendar()">${d}</span>`;
+  }
+  grid.innerHTML = html;
+}
+
+// Close calendar when clicking outside
+document.addEventListener('click', function(e) {
+  const dd = document.getElementById('calendar-dropdown');
+  const label = document.getElementById('date-label');
+  if (dd && dd.style.display === 'block' && !dd.contains(e.target) && e.target !== label) {
+    dd.style.display = 'none';
+  }
+});
+
+// ── Data loading ──────────────────────────────────────────────
 
 function loadDay(dateKey) {
   viewMode = 'day';
@@ -217,17 +398,10 @@ function loadDay(dateKey) {
   }
 
   document.getElementById('date-label').textContent = displayDate(ds);
-  document.getElementById('date-picker').value = ds;
-  updateDateChips(ds);
   fetch(`${API}/api/records?date=${ds}`)
     .then(r => r.json())
     .then(data => renderDay(data))
     .catch(() => showError());
-}
-
-function loadSelectedDate() {
-  const ds = document.getElementById('date-picker').value;
-  if (ds) loadDay(ds);
 }
 
 function prevDay() {
@@ -257,6 +431,7 @@ function loadWeek() {
 
 function renderDay(data) {
   const { date: ds, records, summary } = data;
+  currentLoadedDate = ds;
   document.getElementById('date-label').textContent = displayDate(ds);
   document.getElementById('summary-bar').style.display = 'grid';
   document.getElementById('s-cal').textContent = summary.calories;
@@ -274,9 +449,7 @@ function renderDay(data) {
 }
 
 function renderWeek(data) {
-  document.getElementById('date-label').textContent = `${data.start} ~ ${data.end}`;
-  document.getElementById('date-picker').value = fmtDate(currentDate);
-  updateDateChips('');
+  document.getElementById('date-label').textContent = displayDate(fmtDate(currentDate));
   document.getElementById('summary-bar').style.display = 'grid';
   document.getElementById('s-cal').textContent = data.summary.calories;
   document.getElementById('s-protein').textContent = data.summary.protein;
@@ -303,6 +476,7 @@ function renderWeek(data) {
 function mealCard(r) {
   const conf = r.confidence || 'low';
   const src = r.asset_id && r.asset_id.startsWith('manual') ? '手动' : 'Immich';
+  const isManual = src === '手动';
   const time = r.photo_time ? r.photo_time.replace('T',' ').slice(0,16) : '';
   const macros = (r.protein_g || r.carbs_g || r.fat_g) ? `
     <div class="macros">
@@ -310,9 +484,29 @@ function mealCard(r) {
       <span class="c">C ${r.carbs_g||0}g</span>
       <span class="f">F ${r.fat_g||0}g</span>
     </div>` : '';
+
+  // Thumbnail
+  let thumb = '';
+  let clickClass = '';
+  let clickAttr = '';
+  let imgSrc = '';
+  if (!isManual) {
+    if (r.replacement_image) {
+      imgSrc = `${API}/api/local-image?path=${encodeURIComponent(r.replacement_image)}`;
+    } else if (r.thumbnail_url) {
+      imgSrc = `${API}/api/image?url=${encodeURIComponent(r.thumbnail_url)}`;
+    }
+    if (imgSrc) {
+      thumb = `<img class="card-thumb" src="${imgSrc}" onclick="event.stopPropagation();openLightboxForRecord('${esc(r.asset_id)}')" loading="lazy">`;
+      clickClass = ' has-image';
+      clickAttr = ` onclick="openLightboxForRecord('${esc(r.asset_id)}')" data-asset-id="${esc(r.asset_id)}" data-img-src="${esc(imgSrc)}" data-meal="${esc(r.meal)}" data-user-label="${esc(r.user_label||'')}"`;
+    }
+  }
+
   return `
-    <div class="meal-card">
+    <div class="meal-card${clickClass}"${clickAttr}>
       <div class="conf-indicator conf-${conf}"></div>
+      ${thumb}
       <div class="body">
         <div class="meal-name">${esc(r.meal)}</div>
         <div class="meal-meta">${time} <span class="source">· ${src}</span></div>
@@ -329,43 +523,138 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function openLightboxForRecord(assetId) {
+  const card = document.querySelector(`.meal-card[data-asset-id="${assetId}"]`);
+  if (!card) return;
+
+  currentLightboxAssetId = assetId;
+  document.getElementById('lightbox-img').src = card.dataset.imgSrc;
+  document.getElementById('lightbox-meta').textContent = card.dataset.meal || '';
+
+  const labels = document.getElementById('lightbox-labels');
+  labels.style.display = 'flex';
+  const lblCorrect = document.getElementById('lbl-correct');
+  const lblWrong = document.getElementById('lbl-wrong');
+  lblCorrect.classList.toggle('active', card.dataset.userLabel === 'correct');
+  lblWrong.classList.toggle('active', card.dataset.userLabel === 'wrong');
+
+  document.getElementById('lightbox').style.display = 'flex';
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').style.display = 'none';
+  document.getElementById('lightbox-img').src = '';
+  document.getElementById('lightbox-labels').style.display = 'none';
+  currentLightboxAssetId = '';
+}
+
+function setLabel(label) {
+  if (!currentLightboxAssetId) return;
+  document.getElementById('lbl-correct').classList.toggle('active', label === 'correct');
+  document.getElementById('lbl-wrong').classList.toggle('active', label === 'wrong');
+
+  // Also update the card's data attribute for next lightbox open
+  const card = document.querySelector(`.meal-card[data-asset-id="${currentLightboxAssetId}"]`);
+  if (card) card.dataset.userLabel = label;
+
+  fetch(`${API}/api/label`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: currentLoadedDate, asset_id: currentLightboxAssetId, label: label })
+  }).catch(() => {});
+}
+
+function triggerUpload(e) {
+  e.stopPropagation();
+  if (!currentLightboxAssetId) return;
+  document.getElementById('upload-input').click();
+}
+
+function handleUpload(e) {
+  const file = e.target.files[0];
+  const assetId = currentLightboxAssetId;
+  if (!file || !assetId) return;
+
+  const form = new FormData();
+  form.append('date', currentLoadedDate);
+  form.append('asset_id', assetId);
+  form.append('image', file);
+
+  fetch(`${API}/api/upload-image`, { method: 'POST', body: form })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        if (data.matched) {
+          document.getElementById('lightbox-img').src = `${API}/api/image?url=${encodeURIComponent(data.thumbnail_url)}`;
+        } else {
+          document.getElementById('lightbox-img').src = `${API}/api/local-image?path=${encodeURIComponent(data.replacement_image)}`;
+        }
+        // Refresh card list in background
+        const ds = currentLoadedDate;
+        fetch(`${API}/api/records?date=${ds}`)
+          .then(r => r.json())
+          .then(d => renderDay(d));
+      }
+    })
+    .catch(() => {});
+  e.target.value = '';
+}
+
 function showError() {
   document.getElementById('content').innerHTML =
     '<div class="empty"><div class="icon">⚠️</div><p>加载失败</p></div>';
 }
 
-function updateDateChips(activeDate) {
-  document.querySelectorAll('.date-chip').forEach(chip => {
-    chip.classList.toggle('active', chip.dataset.date === activeDate);
-  });
+function toggleProgress() {
+  const panel = document.getElementById('progress-panel');
+  const btn = document.getElementById('q-progress');
+  if (panel.style.display === 'none') {
+    loadProgress();
+    panel.style.display = 'block';
+    btn.classList.add('active');
+  } else {
+    panel.style.display = 'none';
+    btn.classList.remove('active');
+  }
 }
 
-function labelDateChip(ds) {
-  const d = parseDate(ds);
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${mm}/${dd}`;
+function loadProgress() {
+  fetch(`${API}/api/finetune-status`)
+    .then(r => r.json())
+    .then(data => {
+      const pct = data.min_needed ? Math.min(100, Math.round(data.total / data.min_needed * 100)) : 100;
+      document.getElementById('progress-fill').style.width = pct + '%';
+
+      const cls = data.ready ? 'ready' : 'not-ready';
+      document.getElementById('progress-stats').innerHTML =
+        `已标注 <b>${data.total}</b> 条（正确 ${data.correct} · 有误 ${data.wrong}）` +
+        ` — 需 ${data.min_needed} 条可训练 ` +
+        `<span class="${cls}">${data.ready ? ' 已达训练门槛' : ' 还差 ' + (data.min_needed - data.total) + ' 条'}</span>`;
+
+      const list = document.getElementById('progress-list');
+      if (!data.labeled.length) {
+        list.innerHTML = '<div style="color:#666;padding:8px 0">暂无标注数据</div>';
+        return;
+      }
+      list.innerHTML = data.labeled.map(x => `
+        <div class="progress-item">
+          <span class="lbl-dot ${x.label}"></span>
+          <span class="lbl-name">${esc(x.meal)}</span>
+          <span class="lbl-tag">${x.date} · ${x.has_replacement ? ' 已换图' : ''}</span>
+        </div>
+      `).join('');
+    })
+    .catch(() => {});
 }
 
 function loadAvailableDates() {
   fetch(`${API}/api/dates`)
     .then(r => r.json())
-    .then(dates => {
-      const el = document.getElementById('date-chips');
-      if (!dates.length) {
-        el.innerHTML = '';
-        return;
-      }
-      el.innerHTML = dates.slice(0, 14).map(ds => `
-        <button class="date-chip" data-date="${ds}" onclick="loadDay('${ds}')">${labelDateChip(ds)}</button>
-      `).join('');
-      updateDateChips(fmtDate(currentDate));
-    })
+    .then(dates => { availableDates = new Set(dates); })
     .catch(() => {});
 }
 
 // Init: load today
-document.getElementById('date-picker').max = fmtDate(hktNow());
 loadAvailableDates();
 loadDay('today');
 </script>

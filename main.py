@@ -276,6 +276,36 @@ def cmd_add(args):
     return record
 
 
+# ── subcommand: finetune ──────────────────────────────────────────────
+
+def cmd_finetune(args):
+    from src.immich_client import ImmichClient
+    from src.finetune import collect_labeled_data, export_dataset, finetune
+
+    config = load_config()
+    immich = ImmichClient(config["immich_url"], config["immich_key"]) if config["immich_key"] else None
+
+    samples = collect_labeled_data(immich)
+    if immich:
+        immich.close()
+
+    if not samples:
+        logger.warning("No labeled data found. Use the web UI to label records first.")
+        return
+
+    food_count = sum(1 for _, l in samples if l == "correct")
+    not_food_count = sum(1 for _, l in samples if l == "wrong")
+    logger.info("Labeled data: %d food, %d not-food", food_count, not_food_count)
+
+    if args.export:
+        export_dataset(samples)
+        logger.info("Exported. Review images in data/training/ then re-run without --export to train.")
+        return
+
+    output = args.model_path or None
+    finetune(samples, output_dir=output)
+
+
 # ── subcommand: serve ─────────────────────────────────────────────────
 
 def cmd_serve(args):
@@ -313,6 +343,11 @@ def main():
     p_add.add_argument("--confidence", default="medium",
                        choices=["high", "medium", "low"])
 
+    p_finetune = sub.add_parser("finetune", help="Fine-tune food classifier on labeled data")
+    p_finetune.add_argument("--export", action="store_true",
+                            help="Export labeled images for review (no training)")
+    p_finetune.add_argument("--model-path", help="Output directory for fine-tuned model")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -321,6 +356,8 @@ def main():
         cmd_view(args)
     elif args.command == "add":
         cmd_add(args)
+    elif args.command == "finetune":
+        cmd_finetune(args)
 
 
 if __name__ == "__main__":
