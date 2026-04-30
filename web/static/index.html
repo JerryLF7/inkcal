@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>intake</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f0f0f; color: #e0e0e0; min-height: 100vh;
+  }
+  .container { max-width: 480px; margin: 0 auto; padding: 16px; }
+
+  /* Header */
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  h1 span { color: #888; font-size: 14px; font-weight: 400; }
+  .subtitle { color: #666; font-size: 13px; margin-bottom: 16px; }
+
+  /* Date nav */
+  .date-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    background: #1a1a1a; border-radius: 12px; padding: 8px 12px; margin-bottom: 12px;
+  }
+  .date-nav .nav-btn {
+    background: none; border: none; color: #888; font-size: 20px;
+    cursor: pointer; padding: 4px 8px; border-radius: 8px;
+  }
+  .date-nav .nav-btn:active { background: #333; }
+  .date-nav .date-label { font-size: 15px; font-weight: 600; }
+  .date-nav .today-btn {
+    background: #2a6eff; color: #fff; border: none; border-radius: 8px;
+    padding: 4px 12px; font-size: 12px; cursor: pointer;
+  }
+  .date-nav .today-btn:active { background: #1a5aee; }
+
+  /* Calendar picker */
+  .calendar-row {
+    display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
+  }
+  .calendar-row input[type="date"] {
+    flex: 1; min-width: 0;
+    background: #1a1a1a; color: #e0e0e0; border: 1px solid #2a2a2a;
+    border-radius: 10px; padding: 10px 12px; font-size: 14px;
+    color-scheme: dark;
+  }
+  .calendar-row button {
+    background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a;
+    border-radius: 10px; padding: 10px 12px; font-size: 13px; cursor: pointer;
+  }
+  .calendar-row button:active { background: #2a2a2a; }
+
+  .date-chips {
+    display: flex; gap: 8px; overflow-x: auto; padding: 0 0 12px;
+    scrollbar-width: none;
+  }
+  .date-chips::-webkit-scrollbar { display: none; }
+  .date-chip {
+    flex: 0 0 auto; background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a;
+    border-radius: 999px; padding: 7px 11px; font-size: 12px; cursor: pointer;
+  }
+  .date-chip.active { background: #2a6eff22; color: #2a6eff; border-color: #2a6eff; }
+
+  /* Quick links */
+  .quick-links { display: flex; gap: 8px; margin-bottom: 16px; }
+  .quick-links button {
+    flex: 1; background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a;
+    border-radius: 10px; padding: 8px 0; font-size: 13px; cursor: pointer;
+  }
+  .quick-links button.active { background: #2a6eff22; color: #2a6eff; border-color: #2a6eff; }
+  .quick-links button:active { background: #2a2a2a; }
+
+  /* Summary bar */
+  .summary {
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px;
+  }
+  .summary .stat { text-align: center; }
+  .summary .stat .val { font-size: 20px; font-weight: 700; }
+  .summary .stat .val.cal { color: #ff6b6b; }
+  .summary .stat .val.protein { color: #51cf66; }
+  .summary .stat .val.carbs { color: #ffd43b; }
+  .summary .stat .val.fat { color: #9775fa; }
+  .summary .stat .label { font-size: 11px; color: #888; margin-top: 2px; }
+
+  /* Meal cards */
+  .meal-card {
+    background: #1a1a1a; border-radius: 12px; padding: 14px 16px;
+    margin-bottom: 10px; display: flex; align-items: flex-start; gap: 12px;
+  }
+  .meal-card .conf-indicator {
+    width: 4px; height: 100%; min-height: 48px; border-radius: 2px; flex-shrink: 0;
+  }
+  .meal-card .conf-high { background: #51cf66; }
+  .meal-card .conf-medium { background: #ffd43b; }
+  .meal-card .conf-low { background: #ff6b6b; }
+  .meal-card .body { flex: 1; min-width: 0; }
+  .meal-card .meal-name { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .meal-card .meal-meta { font-size: 12px; color: #888; }
+  .meal-card .meal-meta .source { color: #555; }
+  .meal-card .meal-cals {
+    text-align: right; flex-shrink: 0; font-size: 18px; font-weight: 700; color: #ff6b6b;
+  }
+  .meal-card .meal-cals small {
+    font-size: 12px; font-weight: 400; color: #888;
+  }
+
+  /* Macros inline */
+  .macros { display: flex; gap: 12px; margin-top: 6px; font-size: 12px; }
+  .macros span { color: #888; }
+  .macros .p { color: #51cf66; }
+  .macros .c { color: #ffd43b; }
+  .macros .f { color: #9775fa; }
+
+  /* Empty state */
+  .empty {
+    text-align: center; padding: 48px 16px; color: #555;
+  }
+  .empty .icon { font-size: 48px; margin-bottom: 12px; }
+  .empty p { font-size: 14px; }
+
+  /* Multi-day / week view */
+  .day-group { margin-bottom: 16px; }
+  .day-group .day-header {
+    font-size: 13px; color: #888; margin-bottom: 8px; padding-left: 4px;
+  }
+  .day-group .day-header .day-total { color: #ff6b6b; font-weight: 600; float: right; }
+
+  /* Loading */
+  .loading { text-align: center; padding: 32px; color: #555; }
+  .spinner {
+    width: 24px; height: 24px; border: 3px solid #2a2a2a;
+    border-top-color: #2a6eff; border-radius: 50%;
+    animation: spin 0.8s linear infinite; margin: 0 auto 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>intake <span>🍽️</span></h1>
+  <div class="subtitle">食物热量追踪</div>
+
+  <div class="quick-links">
+    <button onclick="loadDay('today')" id="q-today">今日</button>
+    <button onclick="loadDay('yesterday')" id="q-yesterday">昨日</button>
+    <button onclick="loadWeek()" id="q-week">本周</button>
+  </div>
+
+  <div class="calendar-row">
+    <input type="date" id="date-picker" onchange="loadSelectedDate()" aria-label="选择日期">
+    <button onclick="loadSelectedDate()">查看</button>
+  </div>
+  <div class="date-chips" id="date-chips"></div>
+
+  <div class="date-nav">
+    <button class="nav-btn" onclick="prevDay()">‹</button>
+    <span class="date-label" id="date-label">—</span>
+    <div>
+      <button class="today-btn" onclick="loadDay('today')">今天</button>
+    </div>
+    <button class="nav-btn" onclick="nextDay()">›</button>
+  </div>
+
+  <div id="summary-bar" class="summary" style="display:none">
+    <div class="stat"><div class="val cal" id="s-cal">0</div><div class="label">kcal</div></div>
+    <div class="stat"><div class="val protein" id="s-protein">0</div><div class="label">蛋白(g)</div></div>
+    <div class="stat"><div class="val carbs" id="s-carbs">0</div><div class="label">碳水(g)</div></div>
+    <div class="stat"><div class="val fat" id="s-fat">0</div><div class="label">脂肪(g)</div></div>
+  </div>
+
+  <div id="content"><div class="loading"><div class="spinner"></div>加载中...</div></div>
+</div>
+
+<script>
+const API = '';
+let currentDate = new Date();
+let viewMode = 'day'; // 'day' | 'week'
+
+function fmtDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function parseDate(s) { const [y,m,d]=s.split('-'); return new Date(+y,+m-1,+d); }
+function displayDate(ds) {
+  const d = parseDate(ds);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}年${mm}月${dd}日`;
+}
+
+function hktNow() {
+  const now = new Date();
+  return new Date(now.toLocaleString('en-US', {timeZone:'Asia/Hong_Kong'}));
+}
+
+function loadDay(dateKey) {
+  viewMode = 'day';
+  document.querySelectorAll('.quick-links button').forEach(b => b.classList.remove('active'));
+
+  let ds;
+  if (dateKey === 'today') {
+    const now = hktNow();
+    ds = fmtDate(now);
+    currentDate = now;
+    document.getElementById('q-today').classList.add('active');
+  } else if (dateKey === 'yesterday') {
+    const d = hktNow(); d.setDate(d.getDate()-1);
+    ds = fmtDate(d);
+    currentDate = d;
+    document.getElementById('q-yesterday').classList.add('active');
+  } else {
+    ds = dateKey;
+    currentDate = parseDate(ds);
+  }
+
+  document.getElementById('date-label').textContent = displayDate(ds);
+  document.getElementById('date-picker').value = ds;
+  updateDateChips(ds);
+  fetch(`${API}/api/records?date=${ds}`)
+    .then(r => r.json())
+    .then(data => renderDay(data))
+    .catch(() => showError());
+}
+
+function loadSelectedDate() {
+  const ds = document.getElementById('date-picker').value;
+  if (ds) loadDay(ds);
+}
+
+function prevDay() {
+  const d = new Date(currentDate);
+  d.setDate(d.getDate()-1);
+  loadDay(fmtDate(d));
+}
+
+function nextDay() {
+  const d = new Date(currentDate);
+  d.setDate(d.getDate()+1);
+  const tomorrow = hktNow(); tomorrow.setDate(tomorrow.getDate()+1);
+  if (d > tomorrow) return;
+  loadDay(fmtDate(d));
+}
+
+function loadWeek() {
+  viewMode = 'week';
+  document.querySelectorAll('.quick-links button').forEach(b => b.classList.remove('active'));
+  document.getElementById('q-week').classList.add('active');
+
+  fetch(`${API}/api/week`)
+    .then(r => r.json())
+    .then(data => renderWeek(data))
+    .catch(() => showError());
+}
+
+function renderDay(data) {
+  const { date: ds, records, summary } = data;
+  document.getElementById('date-label').textContent = displayDate(ds);
+  document.getElementById('summary-bar').style.display = 'grid';
+  document.getElementById('s-cal').textContent = summary.calories;
+  document.getElementById('s-protein').textContent = summary.protein;
+  document.getElementById('s-carbs').textContent = summary.carbs;
+  document.getElementById('s-fat').textContent = summary.fat;
+
+  const el = document.getElementById('content');
+  if (!records.length) {
+    el.innerHTML = '<div class="empty"><div class="icon">🍽️</div><p>暂无记录</p></div>';
+    return;
+  }
+
+  el.innerHTML = records.map(r => mealCard(r)).join('');
+}
+
+function renderWeek(data) {
+  document.getElementById('date-label').textContent = `${data.start} ~ ${data.end}`;
+  document.getElementById('date-picker').value = fmtDate(currentDate);
+  updateDateChips('');
+  document.getElementById('summary-bar').style.display = 'grid';
+  document.getElementById('s-cal').textContent = data.summary.calories;
+  document.getElementById('s-protein').textContent = data.summary.protein;
+  document.getElementById('s-carbs').textContent = data.summary.carbs;
+  document.getElementById('s-fat').textContent = data.summary.fat;
+
+  const el = document.getElementById('content');
+  const days = Object.entries(data.by_day).filter(([_, d]) => d.records.length > 0);
+  if (!days.length) {
+    el.innerHTML = '<div class="empty"><div class="icon">📅</div><p>本周暂无记录</p></div>';
+    return;
+  }
+
+  el.innerHTML = days.map(([ds, day]) => `
+    <div class="day-group">
+      <div class="day-header">
+        ${ds} <span class="day-total">${day.summary.calories} kcal</span>
+      </div>
+      ${day.records.map(r => mealCard(r)).join('')}
+    </div>
+  `).join('');
+}
+
+function mealCard(r) {
+  const conf = r.confidence || 'low';
+  const src = r.asset_id && r.asset_id.startsWith('manual') ? '手动' : 'Immich';
+  const time = r.photo_time ? r.photo_time.replace('T',' ').slice(0,16) : '';
+  const macros = (r.protein_g || r.carbs_g || r.fat_g) ? `
+    <div class="macros">
+      <span class="p">P ${r.protein_g||0}g</span>
+      <span class="c">C ${r.carbs_g||0}g</span>
+      <span class="f">F ${r.fat_g||0}g</span>
+    </div>` : '';
+  return `
+    <div class="meal-card">
+      <div class="conf-indicator conf-${conf}"></div>
+      <div class="body">
+        <div class="meal-name">${esc(r.meal)}</div>
+        <div class="meal-meta">${time} <span class="source">· ${src}</span></div>
+        ${macros}
+      </div>
+      <div class="meal-cals">${r.calories || 0}<small> kcal</small></div>
+    </div>
+  `;
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function showError() {
+  document.getElementById('content').innerHTML =
+    '<div class="empty"><div class="icon">⚠️</div><p>加载失败</p></div>';
+}
+
+function updateDateChips(activeDate) {
+  document.querySelectorAll('.date-chip').forEach(chip => {
+    chip.classList.toggle('active', chip.dataset.date === activeDate);
+  });
+}
+
+function labelDateChip(ds) {
+  const d = parseDate(ds);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${mm}/${dd}`;
+}
+
+function loadAvailableDates() {
+  fetch(`${API}/api/dates`)
+    .then(r => r.json())
+    .then(dates => {
+      const el = document.getElementById('date-chips');
+      if (!dates.length) {
+        el.innerHTML = '';
+        return;
+      }
+      el.innerHTML = dates.slice(0, 14).map(ds => `
+        <button class="date-chip" data-date="${ds}" onclick="loadDay('${ds}')">${labelDateChip(ds)}</button>
+      `).join('');
+      updateDateChips(fmtDate(currentDate));
+    })
+    .catch(() => {});
+}
+
+// Init: load today
+document.getElementById('date-picker').max = fmtDate(hktNow());
+loadAvailableDates();
+loadDay('today');
+</script>
+</body>
+</html>
