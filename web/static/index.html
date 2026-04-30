@@ -37,10 +37,10 @@
 
   /* Calendar picker */
   .calendar-row {
-    display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
+    margin-bottom: 12px;
   }
   .calendar-row input[type="date"] {
-    flex: 1; min-width: 0;
+    width: 100%;
     background: #1a1a1a; color: #e0e0e0; border: 1px solid #2a2a2a;
     border-radius: 10px; padding: 10px 12px; font-size: 14px;
     color-scheme: dark;
@@ -151,15 +151,13 @@
 
   <div class="calendar-row">
     <input type="date" id="date-picker" onchange="loadSelectedDate()" aria-label="选择日期">
-    <button onclick="loadSelectedDate()">查看</button>
   </div>
   <div class="date-chips" id="date-chips"></div>
 
   <div class="date-nav">
     <button class="nav-btn" onclick="prevDay()">‹</button>
-    <span class="date-label" id="date-label">—</span>
-    <div>
-      <button class="today-btn" onclick="loadDay('today')">今天</button>
+    <div style="flex: 1; text-align: center;">
+      <div class="date-label" id="date-label">—</div>
     </div>
     <button class="nav-btn" onclick="nextDay()">›</button>
   </div>

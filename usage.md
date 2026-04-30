@@ -48,6 +48,23 @@ user: 看看周一吃了什么
 → reply with table
 ```
 
+## Web Viewer
+
+A simple mobile-friendly web viewer exists at `~/Coding/intake/web/server.py`.
+
+```bash
+cd ~/Coding/intake
+INTAKE_PORT=5800 python3 web/server.py
+```
+
+- Default port: `5800`
+- Binds to `0.0.0.0`, so it can be opened from LAN as `http://<NUC-LAN-IP>:5800`
+- Useful health checks:
+  - `ss -ltnp | grep ':5800'`
+  - `curl -sS http://127.0.0.1:5800/api/today`
+- If no process is listening on `:5800` and no intake service exists in `systemctl --user list-units`, the web viewer is not running.
+- For quick preview in Hermes, start it with `terminal(background=true)` rather than shell `nohup`; for long-term use, create a systemd user service.
+
 ## Data Storage
 
 - Records: `~/Coding/intake/data/YYYY-MM-DD.json`

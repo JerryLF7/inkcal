@@ -276,6 +276,17 @@ def cmd_add(args):
     return record
 
 
+# ── subcommand: serve ─────────────────────────────────────────────────
+
+def cmd_serve(args):
+    """Start the web UI server."""
+    port = args.port
+    web_dir = Path(__file__).resolve().parent / "web"
+    os.chdir(web_dir)
+    os.execvp(sys.executable, [sys.executable, "server.py"])
+    # Note: os.execvp replaces the process, so this never returns
+
+
 # ── entry point ──────────────────────────────────────────────────────
 
 def main():
