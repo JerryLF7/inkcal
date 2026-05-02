@@ -1,5 +1,6 @@
 """intake Web — mobile-friendly meal records viewer."""
 import io
+import ipaddress
 import json
 import os
 import re
@@ -58,8 +59,29 @@ def _check_auth() -> bool:
     return session.get("auth") is True
 
 
+_TRUSTED_PROXIES = {"127.0.0.1", "::1"}
+
+
 def _client_ip() -> str:
-    return request.remote_addr or "unknown"
+    direct = request.remote_addr or "unknown"
+    if direct not in _TRUSTED_PROXIES:
+        return direct
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        try:
+            ipaddress.ip_address(first)
+            return first
+        except ValueError:
+            pass
+    real_ip = request.headers.get("X-Real-IP", "")
+    if real_ip:
+        try:
+            ipaddress.ip_address(real_ip.strip())
+            return real_ip.strip()
+        except ValueError:
+            pass
+    return direct
 
 
 def _login_rate_limited(ip: str) -> bool:
