@@ -2,12 +2,17 @@
 import io
 import json
 import os
+import re
 import secrets
+import sys
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
+from time import monotonic
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
-import imagehash
 from PIL import Image
 from flask import Flask, jsonify, request, send_from_directory, Response, session, redirect, url_for
 
@@ -16,20 +21,56 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 app.secret_key = os.getenv("INTAKE_SECRET", secrets.token_hex(32))
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("INTAKE_HTTPS", "0") == "1",
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 HKT = timezone(timedelta(hours=8))
 
+INTAKE_USER = os.getenv("INTAKE_USER", "")
+INTAKE_PASS = os.getenv("INTAKE_PASS", "")
 
-def _check_auth():
-    """Return True if user is authenticated or auth is not configured."""
-    user = os.getenv("INTAKE_USER", "")
-    pwd = os.getenv("INTAKE_PASS", "")
-    if not user or not pwd:
+if bool(INTAKE_USER) != bool(INTAKE_PASS):
+    raise RuntimeError(
+        "INTAKE_USER and INTAKE_PASS must be set together, or both left empty to disable auth."
+    )
+
+AUTH_REQUIRED = bool(INTAKE_USER)
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+ALLOWED_IMAGE_MIME = {"image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"}
+
+_LOGIN_WINDOW = 300  # seconds
+_LOGIN_MAX = 5
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+
+
+def _valid_date(date_str: str) -> bool:
+    return bool(DATE_RE.fullmatch(date_str or ""))
+
+
+def _check_auth() -> bool:
+    if not AUTH_REQUIRED:
         return True
-    return session.get("auth") == True
+    return session.get("auth") is True
 
-AUTH_REQUIRED = bool(os.getenv("INTAKE_USER", ""))
+
+def _client_ip() -> str:
+    return request.remote_addr or "unknown"
+
+
+def _login_rate_limited(ip: str) -> bool:
+    now = monotonic()
+    attempts = [t for t in _login_attempts[ip] if now - t < _LOGIN_WINDOW]
+    _login_attempts[ip] = attempts
+    return len(attempts) >= _LOGIN_MAX
+
+
+def _record_login_failure(ip: str) -> None:
+    _login_attempts[ip].append(monotonic())
 
 
 def _immich_headers() -> dict:
@@ -87,6 +128,8 @@ def api_records():
     end = request.args.get("end")
 
     if date_str:
+        if not _valid_date(date_str):
+            return jsonify({"error": "invalid date"}), 400
         records = _load_date(date_str)
         return jsonify({
             "date": date_str,
@@ -95,9 +138,13 @@ def api_records():
         })
 
     if start and end:
+        if not (_valid_date(start) and _valid_date(end)):
+            return jsonify({"error": "invalid date range"}), 400
         all_records = []
         cursor = datetime.strptime(start, "%Y-%m-%d")
         end_dt = datetime.strptime(end, "%Y-%m-%d")
+        if (end_dt - cursor).days > 366:
+            return jsonify({"error": "range too large"}), 400
         while cursor <= end_dt:
             ds = cursor.strftime("%Y-%m-%d")
             all_records.extend({"date": ds, **r} for r in _load_date(ds))
@@ -150,8 +197,13 @@ def api_week():
 @app.route("/api/image")
 def api_image():
     url = request.args.get("url", "")
+    immich_url = os.getenv("IMMICH_URL", "").rstrip("/")
     if not url:
         return "missing url", 400
+    if not immich_url:
+        return "immich not configured", 500
+    if not url.startswith(immich_url + "/"):
+        return "forbidden", 403
     try:
         r = httpx.get(url, headers=_immich_headers(), timeout=15)
         return Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
@@ -161,11 +213,11 @@ def api_image():
 
 @app.route("/api/label", methods=["POST"])
 def api_label():
-    data = request.get_json()
+    data = request.get_json() or {}
     date_str = data.get("date", "")
     asset_id = data.get("asset_id", "")
     label = data.get("label", "")
-    if not date_str or not asset_id or label not in ("correct", "wrong"):
+    if not _valid_date(date_str) or not asset_id or label not in ("correct", "wrong"):
         return jsonify({"error": "invalid params"}), 400
 
     records = _load_date(date_str)
@@ -182,38 +234,44 @@ def api_upload_image():
     date_str = request.form.get("date", "")
     asset_id = request.form.get("asset_id", "")
     file = request.files.get("image")
-    if not date_str or not asset_id or not file:
-        return jsonify({"error": "missing params"}), 400
+    if not _valid_date(date_str) or not asset_id or not file:
+        return jsonify({"error": "missing or invalid params"}), 400
+    if file.mimetype not in ALLOWED_IMAGE_MIME:
+        return jsonify({"error": "unsupported mime"}), 400
 
-    # Compute pHash of uploaded image
-    uploaded_img = Image.open(io.BytesIO(file.read())).convert("RGB")
-    uploaded_hash = imagehash.phash(uploaded_img)
+    image_bytes = file.read()
+    try:
+        Image.open(io.BytesIO(image_bytes)).verify()
+    except Exception:
+        return jsonify({"error": "invalid image"}), 400
 
-    # Extract EXIF timestamp to narrow search window
-    time_window = _extract_exif_time(uploaded_img)
-
-    # Try to match against Immich photos from the same day
     immich_url = os.getenv("IMMICH_URL", "")
+
     if immich_url:
-        matched_asset = _match_immich_photo(date_str, uploaded_hash, time_window)
-        if matched_asset:
+        from src.immich_client import ImmichClient
+        immich = ImmichClient(immich_url, os.getenv("IMMICH_API_KEY", ""))
+        time_window = ImmichClient.extract_exif_time(image_bytes)
+        matched = immich.match_by_phash(date_str, image_bytes, time_window=time_window)
+        immich.close()
+
+        if matched:
             records = _load_date(date_str)
             for r in records:
                 if r.get("asset_id") == asset_id:
-                    r["thumbnail_url"] = matched_asset["thumbnail_url"]
-                    r["asset_id"] = matched_asset["id"]
-                    r["photo_time"] = matched_asset.get("photo_time", r.get("photo_time", ""))
+                    r["thumbnail_url"] = matched["thumbnail_url"]
+                    r["asset_id"] = matched["id"]
+                    r["photo_time"] = matched.get("photo_time", r.get("photo_time", ""))
                     r.pop("replacement_image", None)
                     _save_date(date_str, records)
-                    return jsonify({"ok": True, "matched": True, "asset_id": matched_asset["id"],
-                                    "thumbnail_url": matched_asset["thumbnail_url"]})
+                    return jsonify({"ok": True, "matched": True, "asset_id": matched["id"],
+                                    "thumbnail_url": matched["thumbnail_url"]})
 
-    # Fallback: save locally
     img_dir = DATA_DIR / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{date_str}_{asset_id}.jpg"
+    safe_asset = re.sub(r"[^A-Za-z0-9_-]", "_", asset_id)[:64]
+    filename = f"{date_str}_{safe_asset}.jpg"
     filepath = img_dir / filename
-    uploaded_img.save(str(filepath))
+    filepath.write_bytes(image_bytes)
 
     records = _load_date(date_str)
     for r in records:
@@ -224,80 +282,21 @@ def api_upload_image():
     return jsonify({"error": "record not found"}), 404
 
 
-def _extract_exif_time(img):
-    """Extract DateTimeOriginal from EXIF, return HKT ISO string or None."""
-    try:
-        exif = img._getexif() or {}
-        dt_str = exif.get(36867) or exif.get(306)  # 36867=DateTimeOriginal, 306=DateTime
-        if dt_str:
-            dt = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
-            hkt = dt.replace(tzinfo=timezone(timedelta(hours=8)))
-            return hkt.isoformat()
-    except Exception:
-        pass
-    return None
-
-
-def _match_immich_photo(date_str, target_hash, time_window=None, threshold=12):
-    """Search Immich for a photo whose pHash matches target_hash.
-
-    If time_window is provided (ISO timestamp), search ±5 minutes around it.
-    Otherwise search the full day.
-    """
-    url = os.getenv("IMMICH_URL", "").rstrip("/")
-    try:
-        if time_window:
-            ts = datetime.fromisoformat(time_window)
-            start = (ts - timedelta(minutes=5)).isoformat()
-            end = (ts + timedelta(minutes=5)).isoformat()
-            size = 50
-        else:
-            start = f"{date_str}T00:00:00+08:00"
-            end = f"{date_str}T23:59:59+08:00"
-            size = 500
-
-        body = {"takenAfter": start, "takenBefore": end, "type": "IMAGE", "size": size}
-        r = httpx.post(f"{url}/api/search/metadata", json=body, headers=_immich_headers(), timeout=20)
-        r.raise_for_status()
-        assets = r.json().get("assets", {}).get("items", [])
-
-        best_match = None
-        best_dist = threshold + 1
-        for asset in assets:
-            try:
-                rid = asset["id"]
-                thumb_r = httpx.get(
-                    f"{url}/api/assets/{rid}/thumbnail?size=preview",
-                    headers=_immich_headers(), timeout=10,
-                )
-                thumb_r.raise_for_status()
-                thumb = Image.open(io.BytesIO(thumb_r.content)).convert("RGB")
-                dist = imagehash.phash(thumb) - target_hash
-                if dist < best_dist:
-                    best_dist = dist
-                    best_match = {
-                        "id": rid,
-                        "thumbnail_url": f"{url}/api/assets/{rid}/thumbnail?size=preview",
-                        "photo_time": asset.get("exifInfo", {}).get("dateTimeOriginal", ""),
-                    }
-                    if dist <= 2:
-                        break
-            except Exception:
-                continue
-
-        if best_match and best_dist <= threshold:
-            return best_match
-    except Exception:
-        pass
-    return None
-
-
 @app.route("/api/local-image")
 def api_local_image():
     path = request.args.get("path", "")
-    if not path or not os.path.exists(path):
-        return "not found", 404
-    return send_from_directory(os.path.dirname(path), os.path.basename(path))
+    if not path:
+        return "missing path", 400
+    try:
+        resolved = Path(path).resolve()
+        allowed_root = (DATA_DIR / "images").resolve()
+        if not resolved.is_relative_to(allowed_root):
+            return "forbidden", 403
+        if not resolved.is_file():
+            return "not found", 404
+        return send_from_directory(resolved.parent, resolved.name)
+    except (OSError, ValueError):
+        return "invalid path", 400
 
 
 @app.route("/api/finetune-status")
@@ -333,7 +332,7 @@ def api_finetune_status():
 def _require_auth():
     if not AUTH_REQUIRED:
         return None
-    if request.path.startswith("/api/login") or request.path.startswith("/login"):
+    if request.path in {"/api/login", "/login"}:
         return None
     if not _check_auth():
         if request.path.startswith("/api/"):
@@ -388,23 +387,33 @@ body:JSON.stringify({user:document.getElementById('user').value,password:documen
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
+    ip = _client_ip()
+    if _login_rate_limited(ip):
+        return jsonify({"error": "too many attempts, try again later"}), 429
     data = request.get_json() or {}
     user = os.getenv("INTAKE_USER", "")
     pwd = os.getenv("INTAKE_PASS", "")
-    if data.get("user") == user and data.get("password") == pwd:
+    submitted_user = data.get("user", "")
+    submitted_pass = data.get("password", "")
+    user_ok = secrets.compare_digest(submitted_user, user)
+    pass_ok = secrets.compare_digest(submitted_pass, pwd)
+    if user and pwd and user_ok and pass_ok:
         session["auth"] = True
+        _login_attempts.pop(ip, None)
         return jsonify({"ok": True})
+    _record_login_failure(ip)
     return jsonify({"error": "bad credentials"}), 401
 
 
-@app.route("/api/logout")
+@app.route("/api/logout", methods=["POST"])
 def api_logout():
     session.clear()
-    return redirect("/login")
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
+    host = os.getenv("INTAKE_HOST", "127.0.0.1")
     port = int(os.getenv("INTAKE_PORT", "5800"))
     debug = os.getenv("INTAKE_DEBUG", "0") == "1"
-    print(f"  intake Web — http://0.0.0.0:{port}")
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    print(f"  intake Web — http://{host}:{port}")
+    app.run(host=host, port=port, debug=debug)
