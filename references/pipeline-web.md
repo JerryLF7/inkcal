@@ -72,3 +72,15 @@ ss -ltnp | grep ':5800'
 - Inspect `data/training/food/` and `data/training/not-food/`.
 - Train with `intake finetune`; model saves to `data/finetuned-model/` and auto-loads on later runs.
 - Training needs at least 4 labeled samples; useful training needs both `correct` and `wrong` examples.
+
+## Reverse Proxy / FRP
+
+When the web viewer sits behind a reverse proxy (FRP, nginx, Caddy, etc.), login rate limiting relies on the real client IP instead of the proxy's IP.
+
+- The server reads `X-Forwarded-For` and `X-Real-IP` headers **only when the direct connection comes from `127.0.0.1` or `::1`**.
+- If FRP runs on the same host, this works automatically.
+- If your reverse proxy is on a different machine (e.g., a remote server forwarding to this host), set the proxy IP as trusted via env. Default local-only trust prevents header spoofing from the public internet.
+
+### Cookie security behind HTTPS
+
+If your reverse proxy terminates TLS, set `INTAKE_HTTPS=1` in `.env`. This adds the `Secure` flag to session cookies so browsers won't send them over plain HTTP.
