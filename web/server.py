@@ -26,6 +26,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.getenv("INTAKE_HTTPS", "0") == "1",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
     MAX_CONTENT_LENGTH=16 * 1024 * 1024,
 )
 
@@ -421,6 +422,7 @@ def api_login():
     pass_ok = secrets.compare_digest(submitted_pass, pwd)
     if user and pwd and user_ok and pass_ok:
         session["auth"] = True
+        session.permanent = True
         _login_attempts.pop(ip, None)
         return jsonify({"ok": True})
     _record_login_failure(ip)
