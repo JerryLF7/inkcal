@@ -1,47 +1,48 @@
 ---
 name: intake
 slug: intake
-version: 1.1.0
-description: Record, view, and query food/calorie intake via the intake CLI.
+version: 1.4.0
+description: Log meals, analyze food photos, track calories and macros, and label results.
 category: productivity
 ---
 
 ## When to Use
 
-Trigger on any of: "记一下吃了", "记录一下", "午饭/晚饭/午餐/晚餐吃了", "今天吃了", "热量", "卡路里", "吃了多少", or explicit macros mention.
+Use this skill for Jerry's food intake tracker:
+
+- Meal logging: "记一下吃了", "午饭/晚饭吃了", "今天吃了", "昨晚吃了"
+- Calorie or macro queries: "热量", "卡路里", "蛋白", "碳水", "脂肪", "吃了多少"
+- Photo pipeline: Immich → SigLIP2 → Gemini → daily records
+- Web UI viewing, labeling, image replacement, or mobile UI tweaks
+- Classifier accuracy tracking via labeling
+
+## Data Storage
+
+- Project path: `~/Coding/intake/`
+- Records: `~/Coding/intake/data/YYYY-MM-DD.json`
+- Fine-tuned model (optional): `~/Coding/intake/data/finetuned-model/`
+
+## External Endpoints
+
+| Service | Use | Privacy note |
+|---------|-----|--------------|
+| Immich | Photo listing and thumbnails on local network | Private photos stay in LAN during filtering |
+| Gemini-compatible vision API | Calorie/macro analysis for detected food photos | Only photos passing local food filter are sent |
 
 ## Core Rules
 
-1. **Use `intake` CLI only.** Never read/write `data/*.json` directly.
-2. **Parse natural language**: Extract meal description, calories, macros. Estimate reasonably if user is vague.
-3. **Always include `--meal` and `--calories`**. Macros (protein/carbs/fat) are optional.
-4. **Default date is today** unless user specifies yesterday/last night etc.
-5. **Default confidence**: `medium` for manual entries.
-6. **Chinese preferred** for meal description.
-
-## Boundary Conditions
-
-| Situation | Action |
-|-----------|--------|
-| Vague "吃了点东西" with no calories | Ask "大概多少卡？" or estimate reasonably |
-| No macro info | Skip macros, record meal + calories only |
-| Yesterday/last night | Pass `--date` accordingly |
-| Multiple meals in one message | Call `intake add` for each separately |
-| Query returns empty | Reply "该时段暂无记录" |
+1. Use `intake` CLI for all records, labels, and replacements; avoid direct JSON edits.
+2. Parse natural language into meal, calories, macros, date, and time. Prefer Chinese meal descriptions.
+3. Manual entries require `--meal` and `--calories`; macros via `--protein`, `--carbs`, `--fat`.
+4. Default date is today in Asia/Hong_Kong. Use `--date YYYY-MM-DD` and `--time HH:MM` when implied.
+5. Default confidence is `medium`; use `high` for exact numbers, `low` for rough estimates.
+6. After mutations, verify with `intake view`, `intake label --status`, or the web UI.
+7. For code changes, inspect files first, preserve existing user changes, verify, then commit.
 
 ## Quick Reference
 
-| Topic | File |
-|-------|------|
-| CLI commands, workflows, web viewer, data format | `usage.md` |
-
-## Web Viewer Workflow
-
-Use the web viewer when Jerry asks to view intake records in a browser or tweak the mobile UI.
-
-1. Inspect `~/Coding/intake/web/server.py` and `~/Coding/intake/web/static/index.html` before editing.
-2. Start preview from the project root with `INTAKE_PORT=5800 python3 web/server.py` using `terminal(background=true)`.
-3. Verify with `curl -sS http://127.0.0.1:5800/api/today` and `ss -ltnp | grep ':5800'`.
-4. Open `http://127.0.0.1:5800/` with the browser tool and test interactions directly.
-5. For date UI, prefer local-date formatting (`getFullYear()`, `getMonth()+1`, `getDate()`) over `toISOString().slice(0,10)` to avoid timezone day shifts.
-6. When adding date selection, keep picker value, visible date label, active shortcut chips, and fetched `/api/records?date=YYYY-MM-DD` data synchronized.
+| Task | Load |
+|------|------|
+| CLI commands, meal logging, queries, estimation | `references/cli-workflows.md` |
+| Photo pipeline, env vars, web UI, labeling | `references/pipeline-web.md` |
+| User-facing docs and architecture | `README.md`, `usage.md` |

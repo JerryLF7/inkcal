@@ -281,36 +281,6 @@ def cmd_add(args):
     return record
 
 
-# ── subcommand: finetune ──────────────────────────────────────────────
-
-def cmd_finetune(args):
-    from src.immich_client import ImmichClient
-    from src.finetune import collect_labeled_data, export_dataset, finetune
-
-    config = load_config()
-    immich = ImmichClient(config["immich_url"], config["immich_key"]) if config["immich_key"] else None
-
-    samples = collect_labeled_data(immich)
-    if immich:
-        immich.close()
-
-    if not samples:
-        logger.warning("No labeled data found. Use the web UI to label records first.")
-        return
-
-    food_count = sum(1 for _, l in samples if l == "correct")
-    not_food_count = sum(1 for _, l in samples if l == "wrong")
-    logger.info("Labeled data: %d food, %d not-food", food_count, not_food_count)
-
-    if args.export:
-        export_dataset(samples)
-        logger.info("Exported. Review images in data/training/ then re-run without --export to train.")
-        return
-
-    output = args.model_path or None
-    finetune(samples, output_dir=output)
-
-
 # ── subcommand: label ─────────────────────────────────────────────────
 
 def cmd_label(args):
@@ -331,7 +301,7 @@ def cmd_label(args):
         correct = sum(1 for x in labeled if x["label"] == "correct")
         wrong = sum(1 for x in labeled if x["label"] == "wrong")
         total = len(labeled)
-        print(f"标注进度: {total} 条  (需 ≥4 条可微调)")
+        print(f"标注进度: {total} 条")
         print(f"  正确: {correct}  有误: {wrong}")
         if labeled:
             print("\n明细:")
@@ -451,12 +421,7 @@ def main():
     p_add.add_argument("--confidence", default="medium",
                        choices=["high", "medium", "low"])
 
-    p_finetune = sub.add_parser("finetune", help="Fine-tune food classifier on labeled data")
-    p_finetune.add_argument("--export", action="store_true",
-                            help="Export labeled images for review (no training)")
-    p_finetune.add_argument("--model-path", help="Output directory for fine-tuned model")
-
-    p_label = sub.add_parser("label", help="Label records for fine-tuning")
+    p_label = sub.add_parser("label", help="Label records")
     p_label.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
     p_label.add_argument("--id", help="Asset ID (prefix match)")
     p_label.add_argument("--label", choices=["correct", "wrong"], help="Label to apply")
@@ -476,8 +441,6 @@ def main():
         cmd_view(args)
     elif args.command == "add":
         cmd_add(args)
-    elif args.command == "finetune":
-        cmd_finetune(args)
     elif args.command == "label":
         cmd_label(args)
     elif args.command == "replace":

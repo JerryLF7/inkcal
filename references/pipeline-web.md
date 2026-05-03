@@ -63,15 +63,12 @@ ss -ltnp | grep ':5800'
 6. For date UI, use local-date formatting (`getFullYear()`, `getMonth()+1`, `getDate()`) to avoid timezone day shifts.
 7. Keep picker value, visible date label, active shortcut chips, and fetched `/api/records?date=YYYY-MM-DD` data synchronized.
 
-## Labeling and Fine-Tuning
+## Labeling
 
 - `correct`: classifier/Gemini result is valid food recognition.
 - `wrong`: a non-food image or wrong detection slipped through.
 - Check progress with `intake label --status`.
-- Export before training: `intake finetune --export`.
-- Inspect `data/training/food/` and `data/training/not-food/`.
-- Train with `intake finetune`; model saves to `data/finetuned-model/` and auto-loads on later runs.
-- Training needs at least 4 labeled samples; useful training needs both `correct` and `wrong` examples.
+- Labeled records help track classifier accuracy over time.
 
 ## Reverse Proxy / FRP
 

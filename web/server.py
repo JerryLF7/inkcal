@@ -322,35 +322,6 @@ def api_local_image():
         return "invalid path", 400
 
 
-@app.route("/api/finetune-status")
-def api_finetune_status():
-    MIN_SAMPLES = 4
-    labeled = []
-    for date_str in _available_dates():
-        for r in _load_date(date_str):
-            if r.get("user_label"):
-                labeled.append({
-                    "date": date_str,
-                    "asset_id": r.get("asset_id", ""),
-                    "meal": r.get("meal", "?"),
-                    "label": r["user_label"],
-                    "has_replacement": bool(r.get("replacement_image")),
-                })
-
-    correct = sum(1 for x in labeled if x["label"] == "correct")
-    wrong = sum(1 for x in labeled if x["label"] == "wrong")
-    total = len(labeled)
-
-    return jsonify({
-        "total": total,
-        "correct": correct,
-        "wrong": wrong,
-        "min_needed": MIN_SAMPLES,
-        "ready": total >= MIN_SAMPLES,
-        "labeled": labeled,
-    })
-
-
 @app.before_request
 def _require_auth():
     if not AUTH_REQUIRED:
