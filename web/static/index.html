@@ -183,8 +183,6 @@
     font-size: 13px; font-family: inherit;
   }
   .lbl-btn:active { background: #3a3a3a; }
-  .lbl-btn.correct.active { background: #51cf6622; color: #51cf66; border-color: #51cf66; }
-  .lbl-btn.wrong.active { background: #ff6b6b22; color: #ff6b6b; border-color: #ff6b6b; }
   .lbl-btn.upload { padding: 6px 10px; }
 
   .meal-card.has-image { cursor: pointer; }
@@ -246,8 +244,6 @@
   <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
   <div class="lightbox-meta" id="lightbox-meta" onclick="event.stopPropagation()"></div>
   <div class="lightbox-labels" id="lightbox-labels" style="display:none" onclick="event.stopPropagation()">
-    <button class="lbl-btn correct" id="lbl-correct" onclick="setLabel('correct')">正确</button>
-    <button class="lbl-btn wrong" id="lbl-wrong" onclick="setLabel('wrong')">有误</button>
     <button class="lbl-btn upload" onclick="triggerUpload(event)">换图</button>
   </div>
 </div>
@@ -489,12 +485,7 @@ function openLightboxForRecord(assetId) {
   document.getElementById('lightbox-img').src = card.dataset.imgSrc;
   document.getElementById('lightbox-meta').textContent = card.dataset.meal || '';
 
-  const labels = document.getElementById('lightbox-labels');
-  labels.style.display = 'flex';
-  const lblCorrect = document.getElementById('lbl-correct');
-  const lblWrong = document.getElementById('lbl-wrong');
-  lblCorrect.classList.toggle('active', card.dataset.userLabel === 'correct');
-  lblWrong.classList.toggle('active', card.dataset.userLabel === 'wrong');
+  document.getElementById('lightbox-labels').style.display = 'flex';
 
   document.getElementById('lightbox').style.display = 'flex';
 }
@@ -504,22 +495,6 @@ function closeLightbox() {
   document.getElementById('lightbox-img').src = '';
   document.getElementById('lightbox-labels').style.display = 'none';
   currentLightboxAssetId = '';
-}
-
-function setLabel(label) {
-  if (!currentLightboxAssetId) return;
-  document.getElementById('lbl-correct').classList.toggle('active', label === 'correct');
-  document.getElementById('lbl-wrong').classList.toggle('active', label === 'wrong');
-
-  // Also update the card's data attribute for next lightbox open
-  const card = document.querySelector(`.meal-card[data-asset-id="${currentLightboxAssetId}"]`);
-  if (card) card.dataset.userLabel = label;
-
-  fetch(`${API}/api/label`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ date: currentLoadedDate, asset_id: currentLightboxAssetId, label: label })
-  }).catch(() => {});
 }
 
 function triggerUpload(e) {
