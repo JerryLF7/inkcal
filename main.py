@@ -152,6 +152,11 @@ def cmd_run(args):
         thumbnail_url = immich.get_thumbnail_url(aid)
         result = analyzer.analyze(thumb)
 
+        # Gemini may reject non-real-food images (screenshots, menus, etc.)
+        if result.get("meal") in ("not real food", "unknown"):
+            logger.info("  ❌ Gemini 判定非真实食物，跳过")
+            continue
+
         record = append_log(date_str, aid, photo_time, thumbnail_url, result)
         food_records.append(record)
         logger.info("  ✅ %s ~%skcal", result.get("meal", "?"), result.get("calories", 0))
@@ -306,6 +311,109 @@ def cmd_finetune(args):
     finetune(samples, output_dir=output)
 
 
+# ── subcommand: label ─────────────────────────────────────────────────
+
+def cmd_label(args):
+    if args.status:
+        labeled = []
+        for f in sorted(DATA_DIR.glob("*.json")):
+            if f.stem.count("-") != 2:
+                continue
+            for r in load_records(f.stem):
+                if r.get("user_label"):
+                    labeled.append({
+                        "date": f.stem,
+                        "asset_id": r.get("asset_id", ""),
+                        "meal": r.get("meal", "?"),
+                        "label": r["user_label"],
+                    })
+
+        correct = sum(1 for x in labeled if x["label"] == "correct")
+        wrong = sum(1 for x in labeled if x["label"] == "wrong")
+        total = len(labeled)
+        print(f"标注进度: {total} 条  (需 ≥4 条可微调)")
+        print(f"  正确: {correct}  有误: {wrong}")
+        if labeled:
+            print("\n明细:")
+            for item in labeled:
+                aid = item["asset_id"][:8]
+                print(f"  [{item['date']}] {aid}... {item['meal']} → {item['label']}")
+        return
+
+    if args.list:
+        date_str = args.date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        records = load_records(date_str)
+        unlabeled = [r for r in records if not r.get("user_label")]
+        if not unlabeled:
+            print(f"{date_str}  所有 {len(records)} 条记录已标注")
+        else:
+            print(f"{date_str}  未标注 {len(unlabeled)}/{len(records)}:")
+            for r in unlabeled:
+                aid = r.get("asset_id", "?")[:8]
+                print(f"  {aid}...  {r.get('meal', '?')}")
+        return
+
+    # Label a specific record
+    date_str = args.date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    label = args.label
+
+    records = load_records(date_str)
+    for r in records:
+        if r.get("asset_id", "").startswith(args.id):
+            r["user_label"] = label
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            (DATA_DIR / f"{date_str}.json").write_text(
+                json.dumps(records, indent=2, ensure_ascii=False))
+            aid = r["asset_id"][:8]
+            print(f"✅ 已标注 [{date_str}] {aid}... {r.get('meal', '?')} → {label}")
+            return
+    print(f"❌ 未找到匹配记录: {args.id}")
+
+
+# ── subcommand: replace ────────────────────────────────────────────────
+
+def cmd_replace(args):
+    from src.immich_client import ImmichClient
+
+    config = load_config()
+    date_str = args.date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+
+    image_path = Path(args.image).expanduser()
+    if not image_path.exists():
+        print(f"❌ 图片不存在: {image_path}")
+        sys.exit(1)
+    image_bytes = image_path.read_bytes()
+
+    immich = ImmichClient(config["immich_url"], config["immich_key"])
+    time_window = ImmichClient.extract_exif_time(image_bytes)
+    matched = immich.match_by_phash(date_str, image_bytes, time_window=time_window)
+    immich.close()
+
+    records = load_records(date_str)
+    for r in records:
+        if r.get("asset_id", "").startswith(args.id):
+            if matched:
+                r["thumbnail_url"] = matched["thumbnail_url"]
+                r["asset_id"] = matched["id"]
+                r["photo_time"] = matched.get("photo_time", r.get("photo_time", ""))
+                r.pop("replacement_image", None)
+                (DATA_DIR / f"{date_str}.json").write_text(
+                    json.dumps(records, indent=2, ensure_ascii=False))
+                print(f"✅ 已匹配并替换: {matched['id'][:8]}...")
+            else:
+                img_dir = DATA_DIR / "images"
+                img_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"{date_str}_{r['asset_id'][:8]}.jpg"
+                filepath = img_dir / filename
+                filepath.write_bytes(image_bytes)
+                r["replacement_image"] = str(filepath)
+                (DATA_DIR / f"{date_str}.json").write_text(
+                    json.dumps(records, indent=2, ensure_ascii=False))
+                print(f"⚠️ 未匹配到 Immich 照片，已保存本地: {filepath}")
+            return
+    print(f"❌ 未找到匹配记录: {args.id}")
+
+
 # ── subcommand: serve ─────────────────────────────────────────────────
 
 def cmd_serve(args):
@@ -348,6 +456,18 @@ def main():
                             help="Export labeled images for review (no training)")
     p_finetune.add_argument("--model-path", help="Output directory for fine-tuned model")
 
+    p_label = sub.add_parser("label", help="Label records for fine-tuning")
+    p_label.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
+    p_label.add_argument("--id", help="Asset ID (prefix match)")
+    p_label.add_argument("--label", choices=["correct", "wrong"], help="Label to apply")
+    p_label.add_argument("--list", action="store_true", help="List unlabeled records for a date")
+    p_label.add_argument("--status", action="store_true", help="Show global labeling progress")
+
+    p_replace = sub.add_parser("replace", help="Replace a record's image via pHash matching")
+    p_replace.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
+    p_replace.add_argument("--id", required=True, help="Asset ID to replace (prefix match)")
+    p_replace.add_argument("--image", required=True, help="Path to replacement image")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -358,6 +478,10 @@ def main():
         cmd_add(args)
     elif args.command == "finetune":
         cmd_finetune(args)
+    elif args.command == "label":
+        cmd_label(args)
+    elif args.command == "replace":
+        cmd_replace(args)
 
 
 if __name__ == "__main__":
