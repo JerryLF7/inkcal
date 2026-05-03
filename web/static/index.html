@@ -88,40 +88,6 @@
   }
   .quick-links button.active { background: #2a6eff22; color: #2a6eff; border-color: #2a6eff; }
   .quick-links button:active { background: #2a2a2a; }
-  #q-progress.active { background: #9775fa22; color: #9775fa; border-color: #9775fa; }
-
-  /* Progress panel */
-  .progress-panel {
-    background: #1a1a1a; border-radius: 12px; padding: 16px; margin-bottom: 16px;
-    border: 1px solid #2a2a2a;
-  }
-  .progress-bar-wrap {
-    height: 6px; background: #2a2a2a; border-radius: 3px; margin-bottom: 12px;
-    overflow: hidden;
-  }
-  .progress-bar-fill {
-    height: 100%; border-radius: 3px; background: #9775fa;
-    transition: width 0.4s ease;
-  }
-  .progress-stats {
-    font-size: 13px; color: #aaa; margin-bottom: 12px; line-height: 1.6;
-  }
-  .progress-stats .ready { color: #51cf66; }
-  .progress-stats .not-ready { color: #888; }
-  .progress-list {
-    max-height: 240px; overflow-y: auto; font-size: 12px;
-  }
-  .progress-item {
-    display: flex; align-items: center; gap: 8px; padding: 6px 0;
-    border-bottom: 1px solid #222;
-  }
-  .progress-item .lbl-dot {
-    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-  }
-  .progress-item .lbl-dot.correct { background: #51cf66; }
-  .progress-item .lbl-dot.wrong { background: #ff6b6b; }
-  .progress-item .lbl-name { flex: 1; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .progress-item .lbl-tag { color: #888; font-size: 11px; }
 
   /* Summary bar */
   .summary {
@@ -241,16 +207,8 @@
     <button onclick="loadDay('today')" id="q-today">今日</button>
     <button onclick="loadDay('yesterday')" id="q-yesterday">昨日</button>
     <button onclick="loadWeek()" id="q-week">本周</button>
-    <button onclick="toggleProgress()" id="q-progress" style="flex:0.6;background:#2a2a2a;font-size:12px">训练进度</button>
   </div>
 
-  <div class="progress-panel" id="progress-panel" style="display:none">
-    <div class="progress-bar-wrap">
-      <div class="progress-bar-fill" id="progress-fill"></div>
-    </div>
-    <div class="progress-stats" id="progress-stats"></div>
-    <div class="progress-list" id="progress-list"></div>
-  </div>
 
   <div class="date-nav">
     <button class="nav-btn" onclick="prevDay()">‹</button>
@@ -603,48 +561,6 @@ function handleUpload(e) {
 function showError() {
   document.getElementById('content').innerHTML =
     '<div class="empty"><div class="icon">⚠️</div><p>加载失败</p></div>';
-}
-
-function toggleProgress() {
-  const panel = document.getElementById('progress-panel');
-  const btn = document.getElementById('q-progress');
-  if (panel.style.display === 'none') {
-    loadProgress();
-    panel.style.display = 'block';
-    btn.classList.add('active');
-  } else {
-    panel.style.display = 'none';
-    btn.classList.remove('active');
-  }
-}
-
-function loadProgress() {
-  fetch(`${API}/api/finetune-status`)
-    .then(r => r.json())
-    .then(data => {
-      const pct = data.min_needed ? Math.min(100, Math.round(data.total / data.min_needed * 100)) : 100;
-      document.getElementById('progress-fill').style.width = pct + '%';
-
-      const cls = data.ready ? 'ready' : 'not-ready';
-      document.getElementById('progress-stats').innerHTML =
-        `已标注 <b>${data.total}</b> 条（正确 ${data.correct} · 有误 ${data.wrong}）` +
-        ` — 需 ${data.min_needed} 条可训练 ` +
-        `<span class="${cls}">${data.ready ? ' 已达训练门槛' : ' 还差 ' + (data.min_needed - data.total) + ' 条'}</span>`;
-
-      const list = document.getElementById('progress-list');
-      if (!data.labeled.length) {
-        list.innerHTML = '<div style="color:#666;padding:8px 0">暂无标注数据</div>';
-        return;
-      }
-      list.innerHTML = data.labeled.map(x => `
-        <div class="progress-item">
-          <span class="lbl-dot ${x.label}"></span>
-          <span class="lbl-name">${esc(x.meal)}</span>
-          <span class="lbl-tag">${x.date} · ${x.has_replacement ? ' 已换图' : ''}</span>
-        </div>
-      `).join('');
-    })
-    .catch(() => {});
 }
 
 function loadAvailableDates() {

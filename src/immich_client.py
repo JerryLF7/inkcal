@@ -1,11 +1,14 @@
 """
-Immich API client — fetch today's assets for food tracking.
+Immich API client — fetch assets, match by perceptual hash.
 """
 
+import io
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import httpx
+import imagehash
+from PIL import Image
 
 
 class ImmichClient:
@@ -74,6 +77,67 @@ class ImmichClient:
         r = self._client.get(f"/api/assets/{asset_id}/thumbnail?size=preview")
         r.raise_for_status()
         return r.content
+
+    def match_by_phash(self, date_str: str, image_bytes: bytes,
+                       time_window: str | None = None, threshold: int = 12
+                       ) -> dict | None:
+        """Find a photo in Immich whose pHash matches the given image bytes.
+
+        If time_window is provided (ISO timestamp), search ±5 min around it.
+        Otherwise search the full date.
+        Returns {id, thumbnail_url, photo_time} or None.
+        """
+        try:
+            if time_window:
+                ts = datetime.fromisoformat(time_window)
+                start = (ts - timedelta(minutes=5)).isoformat()
+                end = (ts + timedelta(minutes=5)).isoformat()
+                size = 50
+            else:
+                start = f"{date_str}T00:00:00+08:00"
+                end = f"{date_str}T23:59:59+08:00"
+                size = 500
+
+            assets = self.search_assets(taken_after=start, taken_before=end, size=size)
+        except Exception:
+            return None
+
+        target_hash = imagehash.phash(Image.open(io.BytesIO(image_bytes)).convert("RGB"))
+        best_match = None
+        best_dist = threshold + 1
+
+        for asset in assets:
+            try:
+                rid = asset["id"]
+                thumb = self.download_thumbnail(rid)
+                dist = imagehash.phash(Image.open(io.BytesIO(thumb)).convert("RGB")) - target_hash
+                if dist < best_dist:
+                    best_dist = dist
+                    best_match = {
+                        "id": rid,
+                        "thumbnail_url": self.get_thumbnail_url(rid),
+                        "photo_time": asset.get("exifInfo", {}).get("dateTimeOriginal", ""),
+                    }
+                    if dist <= 2:
+                        break
+            except Exception:
+                continue
+
+        return best_match if best_match and best_dist <= threshold else None
+
+    @staticmethod
+    def extract_exif_time(image_bytes: bytes) -> str | None:
+        """Extract DateTimeOriginal from EXIF, return HKT ISO string or None."""
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            exif = img._getexif() or {}
+            dt_str = exif.get(36867) or exif.get(306)
+            if dt_str:
+                dt = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
+                return dt.replace(tzinfo=timezone(timedelta(hours=8))).isoformat()
+        except Exception:
+            pass
+        return None
 
     def close(self):
         self._client.close()

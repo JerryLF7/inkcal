@@ -39,6 +39,14 @@ cp .env.example .env
 pip install -r requirements.txt
 ```
 
+## 自动化
+
+```bash
+./setup.sh   # 创建 symlink + 配置 cron（每 20 分钟自动运行）
+```
+
+流水线幂等，重复运行不会产生重复记录。手动管理 cron：`crontab -e`。
+
 ## 用法
 
 ```bash
@@ -59,8 +67,12 @@ python main.py view --week
 ## Web 查看器
 
 ```bash
-python web/server.py    # http://localhost:5800
+python web/server.py    # 默认 http://127.0.0.1:5800（仅本机）
 ```
+
+如需在手机/其他设备访问，建议在 `.env` 配 `INTAKE_HOST=0.0.0.0` 或前面挂 caddy/nginx 反向代理（生产推荐配 HTTPS + `INTAKE_HTTPS=1`）。**Flask 自带 server 不适合直接暴露公网**。
+
+反向代理/FRP 场景下，登录限速会自动读取 `X-Forwarded-For` / `X-Real-IP`，按真实访客 IP 隔离（仅在本地回环连接时信任该头，防止伪造）。
 
 功能：
 - 日历日期选择器，有记录的日期显示绿点
@@ -68,21 +80,7 @@ python web/server.py    # http://localhost:5800
 - **人工标注**：每张图片可标记「正确/有误」，数据写回 JSON
 - **替换图片**：上传新图自动用 pHash 匹配 Immich 中的原图，替换误识别记录
 - 训练进度面板
-- 可选的用户名密码认证（`.env` 中配 `INTAKE_USER`/`INTAKE_PASS`）
-
-## 微调分类器
-
-Web 端标注积累后可微调 SigLIP2：
-
-```bash
-# 导出标注数据到 data/training/ 供检查
-python main.py finetune --export
-
-# 确认无误后训练
-python main.py finetune
-
-# 训练完成后自动加载 data/finetuned-model/ 下的新模型
-```
+- 可选的用户名密码认证：`.env` 配 `INTAKE_USER` + `INTAKE_PASS`（必须同时设；登录有 IP 限速）。固定 `INTAKE_SECRET` 让 session 跨重启保留。
 
 标注正误的含义：
 - **正确**（correct）→ 分类器判断正确，是食物
