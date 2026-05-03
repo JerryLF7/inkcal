@@ -234,23 +234,6 @@ def api_image():
         return "image fetch failed", 502
 
 
-@app.route("/api/label", methods=["POST"])
-def api_label():
-    data = request.get_json() or {}
-    date_str = data.get("date", "")
-    asset_id = data.get("asset_id", "")
-    label = data.get("label", "")
-    if not _valid_date(date_str) or not asset_id or label not in ("correct", "wrong"):
-        return jsonify({"error": "invalid params"}), 400
-
-    records = _load_date(date_str)
-    for r in records:
-        if r.get("asset_id") == asset_id:
-            r["user_label"] = label
-            _save_date(date_str, records)
-            return jsonify({"ok": True, "user_label": label})
-    return jsonify({"error": "record not found"}), 404
-
 
 @app.route("/api/upload-image", methods=["POST"])
 def api_upload_image():
