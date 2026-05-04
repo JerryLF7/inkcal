@@ -53,7 +53,8 @@ Critical ones: `IMMICH_URL`, `IMMICH_API_KEY`, `GEMINI_API_KEY`, `INTAKE_SECRET`
 - **Rate limiting**: In-memory, 5 attempts / 300s per IP. Cleared on successful login.
 - **Trusted proxies**: `X-Forwarded-For` / `X-Real-IP` only read when `request.remote_addr` is `127.0.0.1` or `::1`. IPs validated with `ipaddress.ip_address()`.
 - **Image proxy**: `/api/image?url=` validates URL starts with `IMMICH_URL`, adds API key header, streams response. `/api/local-image` has path traversal guard via `Path.is_relative_to()`.
-- **Start with**: `INTAKE_PORT=5800 python3 web/server.py` from project root. Use `fuser -k 5801/tcp` to stop (not pkill which may leave port bound).
+- **Manual upload**: `/api/manual-upload` accepts an image file, runs Gemini analysis, matches against Immich via pHash, and saves the record. Used for photos missed by SigLIP2 (e.g., drinks in cups). Returns 422 if Gemini says "not food", 409 if already processed.
+- **Start with**: `INTAKE_PORT=5800 python3 web/server.py` from project root. Use `fuser -k 5800/tcp` to stop (not pkill which may leave port bound).
 - **Login page**: Hardcoded inline HTML in server.py (not served from static/).
 
 ## CLI (`main.py`)
@@ -78,6 +79,7 @@ See `references/cli-workflows.md` for full workflow. Key points:
 3. **Login behind FRP**: Without `X-Forwarded-For` handling, all users share the same IP (the reverse proxy's). The trusted proxy logic in `_client_ip()` fixes this.
 4. **Port already in use after kill**: `pkill -f web/server.py` sometimes leaves the port bound. Use `fuser -k <port>/tcp` instead.
 5. **Gemini rejection**: Gemini may return `meal: "not real food"` for screenshots/menus/packaging. The pipeline now checks this and skips those records.
+6. **SigLIP2 blind spot — drinks**: The base `prithivMLmods/Food-or-Not-SigLIP2` model systematically under-detects handheld beverages (milk tea, coffee, bottled drinks in transparent cups). Its "food" concept skews toward plated meals. Missed photos can be manually uploaded via the web UI.
 
 ## Related Project: food-classifier
 

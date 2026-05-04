@@ -81,3 +81,24 @@ When the web viewer sits behind a reverse proxy (FRP, nginx, Caddy, etc.), login
 ### Cookie security behind HTTPS
 
 If your reverse proxy terminates TLS, set `INTAKE_HTTPS=1` in `.env`. This adds the `Secure` flag to session cookies so browsers won't send them over plain HTTP.
+
+## Manual Photo Upload
+
+When a photo is missed by the pipeline (e.g., beverages that SigLIP2 fails to recognize as food), use the web UI's manual upload button.
+
+### Flow
+
+1. Click "📤 上传" in the top-right corner of the web UI.
+2. Select a photo from your device. The original file is preferred over screenshots or compressed versions.
+3. The server extracts EXIF data for date/time, sends the photo to Gemini for calorie analysis, then searches Immich for a matching photo via perceptual hash.
+4. If matched in Immich, the record is linked to the real Immich `asset_id` and thumbnail URL — it looks and behaves like any auto-processed record.
+5. If no Immich match is found, a `manual-<timestamp>` asset_id is generated and the image is saved to `data/images/`.
+
+### API Endpoint
+
+`POST /api/manual-upload` (requires auth if enabled)
+
+- Body: `multipart/form-data` with `image` field (JPEG/PNG/HEIC/WebP).
+- Returns 200 `{ok: true, record: {...}, matched: bool, date: "YYYY-MM-DD"}` on success.
+- Returns 422 if Gemini determines the image is not real food.
+- Returns 409 if the photo is already recorded for that date (duplicate check by Immich `asset_id`).
