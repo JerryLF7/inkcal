@@ -581,10 +581,17 @@ function renderDay(data) {
   const el = document.getElementById('content');
   if (!records.length) {
     el.innerHTML = '<div class="empty"><div class="icon">🍽️</div><p>暂无记录</p></div>';
+    _pendingLightboxAsset = '';
     return;
   }
 
   el.innerHTML = records.map(r => mealCard(r)).join('');
+
+  if (_pendingLightboxAsset) {
+    const aid = _pendingLightboxAsset;
+    _pendingLightboxAsset = '';
+    setTimeout(() => openLightboxForRecord(aid), 100);
+  }
 }
 
 function renderWeek(data) {
@@ -785,6 +792,8 @@ function pickFromFile() {
   document.getElementById('manual-upload-input').click();
 }
 
+let _pendingLightboxAsset = '';
+
 function processUpload(file) {
   const overlay = document.getElementById('upload-overlay');
   const detail = document.getElementById('upload-detail');
@@ -804,21 +813,8 @@ function processUpload(file) {
       btn.disabled = false;
       if (data.ok) {
         loadAvailableDates();
-        const ds = data.date;
-        fetch(`${API}/api/records?date=${ds}`)
-          .then(r => r.json())
-          .then(d => {
-            if (ds !== currentLoadedDate) {
-              currentLoadedDate = ds;
-              currentDate = parseDate(ds);
-              document.getElementById('date-label').textContent = displayDate(ds);
-              document.querySelectorAll('.quick-links button').forEach(b => b.classList.remove('active'));
-            }
-            renderDay(d);
-            setTimeout(() => {
-              openLightboxForRecord(data.record.asset_id);
-            }, 200);
-          });
+        _pendingLightboxAsset = data.record.asset_id;
+        loadDay(data.date);
       } else if (data.error === 'not food') {
         alert('Gemini 判定此图片不是真实食物，无法记录。');
       } else if (data.error === 'already processed') {
