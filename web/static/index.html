@@ -524,6 +524,7 @@ function loadDay(dateKey) {
   }
 
   document.getElementById('date-label').textContent = displayDate(ds);
+  document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
   const seq = ++_loadSeq;
   fetch(`${API}/api/records?date=${ds}`)
     .then(r => r.json())
@@ -557,6 +558,7 @@ function loadWeek() {
   viewMode = 'week';
   document.querySelectorAll('.quick-links button').forEach(b => b.classList.remove('active'));
   document.getElementById('q-week').classList.add('active');
+  document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
 
   const seq = ++_loadSeq;
   fetch(`${API}/api/week`)
