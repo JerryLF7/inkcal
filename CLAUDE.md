@@ -17,7 +17,7 @@ intake/
 │   └── calorie_analyzer.py    # Gemini-compatible vision API (OpenAI format, JSON structured output, retry)
 ├── web/
 │   ├── server.py              # Flask app (auth, image proxy, records API)
-│   └── static/index.html      # SPA (vanilla JS, dark theme, calendar, lightbox, image replacement)
+│   └── static/index.html      # SPA (vanilla JS, dark theme, responsive mobile/desktop layout, calendar sidebar, lightbox, drag-and-drop upload)
 ├── references/
 │   ├── cli-workflows.md       # CLI commands, natural-language meal logging, estimation rules
 │   └── pipeline-web.md        # Photo pipeline steps, env vars, web UI workflow, labeling, reverse proxy
@@ -53,7 +53,9 @@ Critical ones: `IMMICH_URL`, `IMMICH_API_KEY`, `GEMINI_API_KEY`, `INTAKE_SECRET`
 - **Rate limiting**: In-memory, 5 attempts / 300s per IP. Cleared on successful login.
 - **Trusted proxies**: `X-Forwarded-For` / `X-Real-IP` only read when `request.remote_addr` is `127.0.0.1` or `::1`. IPs validated with `ipaddress.ip_address()`.
 - **Image proxy**: `/api/image?url=` validates URL starts with `IMMICH_URL`, adds API key header, streams response. `/api/local-image` has path traversal guard via `Path.is_relative_to()`.
-- **Manual upload**: `/api/manual-upload` accepts an image file, runs Gemini analysis, matches against Immich via pHash, and saves the record. Used for photos missed by SigLIP2 (e.g., drinks in cups). Returns 422 if Gemini says "not food", 409 if already processed.
+- **Manual upload**: `/api/manual-upload` accepts an image file, runs Gemini analysis, matches against Immich via pHash, and saves the record. Used for photos missed by SigLIP2 (e.g., drinks in cups). Returns 422 if Gemini says "not food", 409 if already processed. The web UI offers a drop-zone with drag-and-drop, clipboard paste (Ctrl+V), and file picker.
+- **Responsive layout**: Mobile (<768px) preserves the original single-column 480px layout. Desktop (>=768px) uses CSS Grid with a 280px sidebar (always-visible calendar, quick links) and a 2-column meal card grid.
+- **FRP optimization**: Card thumbnails use Immich `size=thumbnail` (7KB, not 157KB `preview`) for faster loading over tunneled connections. Request sequencing prevents stale responses from overwriting the current view. Images auto-retry on load failure.
 - **Start with**: `INTAKE_PORT=5800 python3 web/server.py` from project root. Use `fuser -k 5800/tcp` to stop (not pkill which may leave port bound).
 - **Login page**: Hardcoded inline HTML in server.py (not served from static/).
 
@@ -80,6 +82,7 @@ See `references/cli-workflows.md` for full workflow. Key points:
 4. **Port already in use after kill**: `pkill -f web/server.py` sometimes leaves the port bound. Use `fuser -k <port>/tcp` instead.
 5. **Gemini rejection**: Gemini may return `meal: "not real food"` for screenshots/menus/packaging. The pipeline now checks this and skips those records.
 6. **SigLIP2 blind spot — drinks**: The base `prithivMLmods/Food-or-Not-SigLIP2` model systematically under-detects handheld beverages (milk tea, coffee, bottled drinks in transparent cups). Its "food" concept skews toward plated meals. Missed photos can be manually uploaded via the web UI.
+7. **FRP / slow network**: Over tunneled connections, large thumbnail images (157KB `preview` size) can cause broken images and slow loads. The frontend now requests `size=thumbnail` (7KB) for cards. Also, rapid date-switching can cause out-of-order API responses to overwrite the current view — request sequencing (`_loadSeq`) prevents this.
 
 ## Related Project: food-classifier
 
