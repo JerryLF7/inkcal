@@ -288,6 +288,100 @@ def api_upload_image():
     return jsonify({"error": "record not found"}), 404
 
 
+@app.route("/api/manual-upload", methods=["POST"])
+def api_manual_upload():
+    """Upload a photo for Gemini analysis + Immich matching."""
+    file = request.files.get("image")
+    if not file:
+        return jsonify({"error": "missing image"}), 400
+    if file.mimetype not in ALLOWED_IMAGE_MIME:
+        return jsonify({"error": "unsupported mime"}), 400
+
+    image_bytes = file.read()
+    try:
+        Image.open(io.BytesIO(image_bytes)).verify()
+    except Exception:
+        return jsonify({"error": "invalid image"}), 400
+
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
+    if not gemini_key:
+        return jsonify({"error": "GEMINI_API_KEY not configured"}), 500
+
+    # Determine date from EXIF
+    from src.immich_client import ImmichClient
+    exif_time = ImmichClient.extract_exif_time(image_bytes)
+    if exif_time:
+        dt = datetime.fromisoformat(exif_time)
+        date_str = dt.strftime("%Y-%m-%d")
+        photo_time = exif_time
+    else:
+        now = datetime.now(HKT)
+        date_str = now.strftime("%Y-%m-%d")
+        photo_time = now.isoformat()
+
+    # Run Gemini analysis
+    from src.calorie_analyzer import CalorieAnalyzer
+    analyzer = CalorieAnalyzer(
+        gemini_key,
+        base_url=os.getenv("GEMINI_BASE_URL"),
+        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
+    )
+    result = analyzer.analyze(image_bytes)
+    analyzer.close()
+
+    if result.get("meal") in ("not real food", "unknown"):
+        return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
+
+    # Try to match in Immich via pHash
+    immich_url = os.getenv("IMMICH_URL", "")
+    matched = None
+    if immich_url:
+        immich = ImmichClient(immich_url, os.getenv("IMMICH_API_KEY", ""))
+        time_window = ImmichClient.extract_exif_time(image_bytes)
+        matched = immich.match_by_phash(date_str, image_bytes, time_window=time_window)
+        immich.close()
+
+    if matched:
+        records = _load_date(date_str)
+        if any(r.get("asset_id") == matched["id"] for r in records):
+            return jsonify({"error": "already processed", "asset_id": matched["id"][:8]}), 409
+        asset_id = matched["id"]
+        thumbnail_url = matched["thumbnail_url"]
+        photo_time = matched.get("photo_time", photo_time)
+        image_path = None
+    else:
+        asset_id = f"manual-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        thumbnail_url = ""
+        img_dir = DATA_DIR / "images"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", asset_id)[:64]
+        filename = f"{date_str}_{safe_id}.jpg"
+        filepath = img_dir / filename
+        filepath.write_bytes(image_bytes)
+        image_path = str(filepath)
+
+    record = {
+        "asset_id": asset_id,
+        "photo_time": photo_time,
+        "thumbnail_url": thumbnail_url,
+        "meal": result.get("meal", "unknown"),
+        "calories": result.get("calories", 0),
+        "protein_g": result.get("protein_g", 0),
+        "carbs_g": result.get("carbs_g", 0),
+        "fat_g": result.get("fat_g", 0),
+        "confidence": result.get("confidence", "low"),
+        "analyzed_at": datetime.now(HKT).isoformat(),
+    }
+    if image_path:
+        record["replacement_image"] = image_path
+
+    records = _load_date(date_str)
+    records.append(record)
+    _save_date(date_str, records)
+
+    return jsonify({"ok": True, "record": record, "matched": bool(matched), "date": date_str})
+
+
 @app.route("/api/local-image")
 def api_local_image():
     path = request.args.get("path", "")

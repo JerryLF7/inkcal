@@ -194,12 +194,38 @@
     flex-shrink: 0; cursor: pointer; background: #2a2a2a;
   }
   .card-thumb:active { opacity: 0.7; }
+
+  /* Upload button */
+  .header-row {
+    display: flex; align-items: flex-start; justify-content: space-between;
+  }
+  .upload-btn {
+    background: #2a6eff; color: #fff; border: none;
+    border-radius: 10px; padding: 8px 14px; font-size: 14px;
+    cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .upload-btn:active { background: #1a5aee; }
+  .upload-btn:disabled { background: #555; cursor: not-allowed; }
+
+  /* Upload overlay */
+  .upload-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+    z-index: 200; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; color: #e0e0e0;
+  }
+  .upload-overlay .msg { margin-top: 16px; font-size: 16px; }
+  .upload-overlay .detail { margin-top: 8px; font-size: 13px; color: #888; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>intake <span>🍽️</span></h1>
-  <div class="subtitle">食物热量追踪</div>
+  <div class="header-row">
+    <div>
+      <h1>intake <span>🍽️</span></h1>
+      <div class="subtitle">食物热量追踪</div>
+    </div>
+    <button class="upload-btn" id="upload-btn" onclick="triggerManualUpload()">📤 上传</button>
+  </div>
 
   <div class="quick-links">
     <button onclick="loadDay('today')" id="q-today">今日</button>
@@ -238,6 +264,13 @@
 </div>
 
 <input type="file" id="upload-input" accept="image/*" style="display:none" onchange="handleUpload(event)">
+<input type="file" id="manual-upload-input" accept="image/*" style="display:none" onchange="handleManualUpload(event)">
+
+<div class="upload-overlay" id="upload-overlay" style="display:none">
+  <div class="spinner"></div>
+  <div class="msg">Gemini 分析中...</div>
+  <div class="detail" id="upload-detail"></div>
+</div>
 
 <div class="lightbox" id="lightbox" style="display:none" onclick="closeLightbox()">
   <div class="lightbox-close" onclick="closeLightbox()">✕</div>
@@ -536,6 +569,64 @@ function handleUpload(e) {
 function showError() {
   document.getElementById('content').innerHTML =
     '<div class="empty"><div class="icon">⚠️</div><p>加载失败</p></div>';
+}
+
+function triggerManualUpload() {
+  document.getElementById('manual-upload-input').click();
+}
+
+function handleManualUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const overlay = document.getElementById('upload-overlay');
+  const detail = document.getElementById('upload-detail');
+  const btn = document.getElementById('upload-btn');
+
+  overlay.style.display = 'flex';
+  detail.textContent = file.name;
+  btn.disabled = true;
+
+  const form = new FormData();
+  form.append('image', file);
+
+  fetch(`${API}/api/manual-upload`, { method: 'POST', body: form })
+    .then(r => r.json())
+    .then(data => {
+      overlay.style.display = 'none';
+      btn.disabled = false;
+      if (data.ok) {
+        const ds = data.date;
+        // Refresh and open lightbox
+        fetch(`${API}/api/records?date=${ds}`)
+          .then(r => r.json())
+          .then(d => {
+            if (ds !== currentLoadedDate) {
+              currentLoadedDate = ds;
+              currentDate = parseDate(ds);
+              document.getElementById('date-label').textContent = displayDate(ds);
+              document.querySelectorAll('.quick-links button').forEach(b => b.classList.remove('active'));
+            }
+            renderDay(d);
+            setTimeout(() => {
+              openLightboxForRecord(data.record.asset_id);
+            }, 200);
+          });
+      } else if (data.error === 'not food') {
+        alert('Gemini 判定此图片不是真实食物，无法记录。');
+      } else if (data.error === 'already processed') {
+        alert('此照片已在记录中。');
+      } else {
+        alert('上传失败: ' + (data.error || '未知错误'));
+      }
+    })
+    .catch(() => {
+      overlay.style.display = 'none';
+      btn.disabled = false;
+      alert('上传失败，请检查网络连接。');
+    });
+
+  e.target.value = '';
 }
 
 function loadAvailableDates() {
