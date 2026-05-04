@@ -224,30 +224,32 @@
     align-items: center; justify-content: center;
   }
   .upload-picker-box {
-    background: #1e1e1e; border-radius: 16px; padding: 28px 24px;
-    width: 90%; max-width: 360px; text-align: center;
+    background: #1e1e1e; border-radius: 16px; padding: 24px;
+    width: 90%; max-width: 380px; text-align: center;
   }
   .upload-picker-box h2 {
-    font-size: 18px; font-weight: 600; margin-bottom: 20px; color: #e0e0e0;
+    font-size: 17px; font-weight: 600; margin-bottom: 16px; color: #e0e0e0;
   }
-  .upload-picker-btn {
-    display: block; width: 100%; padding: 14px; margin-bottom: 10px;
-    border-radius: 10px; border: 1px solid #333; background: #2a2a2a;
-    color: #e0e0e0; font-size: 15px; cursor: pointer; font-family: inherit;
+  .drop-zone {
+    border: 2px dashed #444; border-radius: 14px;
+    padding: 40px 20px; cursor: pointer; transition: border-color 0.2s, background 0.2s;
+    position: relative;
   }
-  .upload-picker-btn:hover { background: #333; }
-  .upload-picker-btn.primary {
-    background: #2a6eff; border-color: #2a6eff; color: #fff;
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: #2a6eff; background: rgba(42,110,255,0.08);
   }
-  .upload-picker-btn.primary:hover { background: #1a5aee; }
+  .drop-zone .dz-icon { font-size: 40px; margin-bottom: 10px; }
+  .drop-zone .dz-title { font-size: 15px; color: #ccc; margin-bottom: 4px; }
+  .drop-zone .dz-hint { font-size: 12px; color: #666; }
+  .drop-zone .dz-hint kbd {
+    background: #333; color: #aaa; border-radius: 4px;
+    padding: 1px 6px; font-size: 11px; font-family: inherit;
+  }
   .upload-picker-cancel {
     background: none; border: none; color: #888; font-size: 14px;
-    cursor: pointer; margin-top: 6px; font-family: inherit;
+    cursor: pointer; margin-top: 12px; font-family: inherit;
   }
   .upload-picker-cancel:hover { color: #aaa; }
-  .clipboard-hint {
-    font-size: 13px; color: #666; margin-top: 4px; margin-bottom: 12px;
-  }
 
   /* ── Desktop layout (>=768px) ──────────────────────────────── */
   @media (min-width: 768px) {
@@ -397,9 +399,11 @@
 <div class="upload-picker" id="upload-picker" style="display:none" onclick="closeUploadPicker()">
   <div class="upload-picker-box" onclick="event.stopPropagation()">
     <h2>上传食物照片</h2>
-    <button class="upload-picker-btn primary" id="clipboard-btn" onclick="pickFromClipboard(event)">📋 从剪贴板粘贴</button>
-    <div class="clipboard-hint" id="clipboard-hint"></div>
-    <button class="upload-picker-btn" onclick="pickFromFile()">📁 从本地上传</button>
+    <div class="drop-zone" id="drop-zone" onclick="pickFromFile()">
+      <div class="dz-icon">🖼️</div>
+      <div class="dz-title">点击选择图片 / 拖拽图片到此处</div>
+      <div class="dz-hint">或直接按 <kbd>Ctrl+V</kbd> 粘贴剪贴板中的图片</div>
+    </div>
     <button class="upload-picker-cancel" onclick="closeUploadPicker()">取消</button>
   </div>
 </div>
@@ -719,52 +723,66 @@ function showError() {
     '<div class="empty"><div class="icon">⚠️</div><p>加载失败</p></div>';
 }
 
+let _pasteHandler = null;
+
 function triggerManualUpload() {
-  document.getElementById('upload-picker').style.display = 'flex';
-  document.getElementById('clipboard-hint').textContent = '';
-}
+  const picker = document.getElementById('upload-picker');
+  picker.style.display = 'flex';
 
-function closeUploadPicker() {
-  document.getElementById('upload-picker').style.display = 'none';
-}
-
-function pickFromFile() {
-  closeUploadPicker();
-  document.getElementById('manual-upload-input').click();
-}
-
-function pickFromClipboard(e) {
-  e.stopPropagation();
-  const hint = document.getElementById('clipboard-hint');
-  hint.textContent = '请在此页面按 Ctrl+V / ⌘V 粘贴剪贴板中的图片';
-  hint.style.color = '#ffd43b';
-
-  const handler = function(ev) {
+  // Global paste listener while picker is open
+  if (_pasteHandler) document.removeEventListener('paste', _pasteHandler);
+  _pasteHandler = function(ev) {
     const items = ev.clipboardData && ev.clipboardData.items;
     if (!items) return;
     for (const item of items) {
       if (item.type.startsWith('image/')) {
+        ev.preventDefault();
         const file = item.getAsFile();
         if (file) {
-          document.removeEventListener('paste', handler);
           closeUploadPicker();
           processUpload(file);
           return;
         }
       }
     }
-    hint.textContent = '未检测到剪贴板中的图片，请先复制图片后再试';
-    hint.style.color = '#ff6b6b';
   };
+  document.addEventListener('paste', _pasteHandler);
 
-  document.addEventListener('paste', handler);
-  // Auto-remove listener after 15s
-  setTimeout(() => {
-    document.removeEventListener('paste', handler);
-    if (hint.textContent.startsWith('请在此')) {
-      hint.textContent = '';
+  // Drag-and-drop on the drop zone
+  const zone = document.getElementById('drop-zone');
+  zone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    zone.classList.add('drag-over');
+  });
+  zone.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    zone.classList.remove('drag-over');
+  });
+  zone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    zone.classList.remove('drag-over');
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files[0] && files[0].type.startsWith('image/')) {
+      closeUploadPicker();
+      processUpload(files[0]);
     }
-  }, 15000);
+  });
+}
+
+function closeUploadPicker() {
+  document.getElementById('upload-picker').style.display = 'none';
+  if (_pasteHandler) {
+    document.removeEventListener('paste', _pasteHandler);
+    _pasteHandler = null;
+  }
+}
+
+function pickFromFile() {
+  closeUploadPicker();
+  document.getElementById('manual-upload-input').click();
 }
 
 function processUpload(file) {
