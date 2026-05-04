@@ -118,10 +118,17 @@ def _save_date(date_str: str, records: list[dict]):
 def _available_dates() -> list[str]:
     if not DATA_DIR.exists():
         return []
-    return sorted(
-        (f.stem for f in DATA_DIR.glob("*.json") if f.stem.count("-") == 2),
-        reverse=True,
-    )
+    dates = []
+    for f in DATA_DIR.glob("*.json"):
+        if f.stem.count("-") != 2:
+            continue
+        try:
+            records = json.loads(f.read_text())
+            if records:  # only count dates with actual records
+                dates.append(f.stem)
+        except (json.JSONDecodeError, FileNotFoundError):
+            pass
+    return sorted(dates, reverse=True)
 
 
 def _summarize(records: list[dict]) -> dict:
