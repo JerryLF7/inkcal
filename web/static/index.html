@@ -217,6 +217,38 @@
   .upload-overlay .msg { margin-top: 16px; font-size: 16px; }
   .upload-overlay .detail { margin-top: 8px; font-size: 13px; color: #888; }
 
+  /* Upload picker modal */
+  .upload-picker {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+    z-index: 190; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .upload-picker-box {
+    background: #1e1e1e; border-radius: 16px; padding: 28px 24px;
+    width: 90%; max-width: 360px; text-align: center;
+  }
+  .upload-picker-box h2 {
+    font-size: 18px; font-weight: 600; margin-bottom: 20px; color: #e0e0e0;
+  }
+  .upload-picker-btn {
+    display: block; width: 100%; padding: 14px; margin-bottom: 10px;
+    border-radius: 10px; border: 1px solid #333; background: #2a2a2a;
+    color: #e0e0e0; font-size: 15px; cursor: pointer; font-family: inherit;
+  }
+  .upload-picker-btn:hover { background: #333; }
+  .upload-picker-btn.primary {
+    background: #2a6eff; border-color: #2a6eff; color: #fff;
+  }
+  .upload-picker-btn.primary:hover { background: #1a5aee; }
+  .upload-picker-cancel {
+    background: none; border: none; color: #888; font-size: 14px;
+    cursor: pointer; margin-top: 6px; font-family: inherit;
+  }
+  .upload-picker-cancel:hover { color: #aaa; }
+  .clipboard-hint {
+    font-size: 13px; color: #666; margin-top: 4px; margin-bottom: 12px;
+  }
+
   /* ── Desktop layout (>=768px) ──────────────────────────────── */
   @media (min-width: 768px) {
     .app-layout {
@@ -360,6 +392,16 @@
   <div class="spinner"></div>
   <div class="msg">Gemini 分析中...</div>
   <div class="detail" id="upload-detail"></div>
+</div>
+
+<div class="upload-picker" id="upload-picker" style="display:none" onclick="closeUploadPicker()">
+  <div class="upload-picker-box" onclick="event.stopPropagation()">
+    <h2>上传食物照片</h2>
+    <button class="upload-picker-btn primary" id="clipboard-btn" onclick="pickFromClipboard(event)">📋 从剪贴板粘贴</button>
+    <div class="clipboard-hint" id="clipboard-hint"></div>
+    <button class="upload-picker-btn" onclick="pickFromFile()">📁 从本地上传</button>
+    <button class="upload-picker-cancel" onclick="closeUploadPicker()">取消</button>
+  </div>
 </div>
 
 <div class="lightbox" id="lightbox" style="display:none" onclick="closeLightbox()">
@@ -678,19 +720,60 @@ function showError() {
 }
 
 function triggerManualUpload() {
+  document.getElementById('upload-picker').style.display = 'flex';
+  document.getElementById('clipboard-hint').textContent = '';
+}
+
+function closeUploadPicker() {
+  document.getElementById('upload-picker').style.display = 'none';
+}
+
+function pickFromFile() {
+  closeUploadPicker();
   document.getElementById('manual-upload-input').click();
 }
 
-function handleManualUpload(e) {
-  const file = e.target.files[0];
-  if (!file) return;
+function pickFromClipboard(e) {
+  e.stopPropagation();
+  const hint = document.getElementById('clipboard-hint');
+  hint.textContent = '请在此页面按 Ctrl+V / ⌘V 粘贴剪贴板中的图片';
+  hint.style.color = '#ffd43b';
 
+  const handler = function(ev) {
+    const items = ev.clipboardData && ev.clipboardData.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          document.removeEventListener('paste', handler);
+          closeUploadPicker();
+          processUpload(file);
+          return;
+        }
+      }
+    }
+    hint.textContent = '未检测到剪贴板中的图片，请先复制图片后再试';
+    hint.style.color = '#ff6b6b';
+  };
+
+  document.addEventListener('paste', handler);
+  // Auto-remove listener after 15s
+  setTimeout(() => {
+    document.removeEventListener('paste', handler);
+    if (hint.textContent.startsWith('请在此')) {
+      hint.textContent = '';
+    }
+  }, 15000);
+}
+
+function processUpload(file) {
   const overlay = document.getElementById('upload-overlay');
   const detail = document.getElementById('upload-detail');
   const btn = document.getElementById('upload-btn');
 
   overlay.style.display = 'flex';
-  detail.textContent = file.name;
+  detail.textContent = file.name || '剪贴板图片';
   btn.disabled = true;
 
   const form = new FormData();
@@ -704,7 +787,6 @@ function handleManualUpload(e) {
       if (data.ok) {
         loadAvailableDates();
         const ds = data.date;
-        // Refresh and open lightbox
         fetch(`${API}/api/records?date=${ds}`)
           .then(r => r.json())
           .then(d => {
@@ -732,7 +814,12 @@ function handleManualUpload(e) {
       btn.disabled = false;
       alert('上传失败，请检查网络连接。');
     });
+}
 
+function handleManualUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  processUpload(file);
   e.target.value = '';
 }
 
