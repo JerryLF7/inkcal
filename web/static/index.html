@@ -425,6 +425,7 @@ let currentLightboxAssetId = '';
 let viewMode = 'day'; // 'day' | 'week'
 let availableDates = new Set();
 let calendarYear, calendarMonth;
+let _loadSeq = 0;
 
 function fmtDate(d) {
   const y = d.getFullYear();
@@ -523,9 +524,11 @@ function loadDay(dateKey) {
   }
 
   document.getElementById('date-label').textContent = displayDate(ds);
+  const seq = ++_loadSeq;
   fetch(`${API}/api/records?date=${ds}`)
     .then(r => r.json())
     .then(data => {
+      if (seq !== _loadSeq) return;  // stale request
       renderDay(data);
       if (window.innerWidth >= 768) {
         calendarYear = currentDate.getFullYear();
@@ -533,7 +536,7 @@ function loadDay(dateKey) {
         renderCalendar(calendarYear, calendarMonth);
       }
     })
-    .catch(() => showError());
+    .catch(() => { if (seq === _loadSeq) showError(); });
 }
 
 function prevDay() {
@@ -555,9 +558,11 @@ function loadWeek() {
   document.querySelectorAll('.quick-links button').forEach(b => b.classList.remove('active'));
   document.getElementById('q-week').classList.add('active');
 
+  const seq = ++_loadSeq;
   fetch(`${API}/api/week`)
     .then(r => r.json())
     .then(data => {
+      if (seq !== _loadSeq) return;
       renderWeek(data);
       if (window.innerWidth >= 768) {
         calendarYear = currentDate.getFullYear();
@@ -565,7 +570,7 @@ function loadWeek() {
         renderCalendar(calendarYear, calendarMonth);
       }
     })
-    .catch(() => showError());
+    .catch(() => { if (seq === _loadSeq) showError(); });
 }
 
 function renderDay(data) {
@@ -631,21 +636,23 @@ function mealCard(r) {
       <span class="f">F ${r.fat_g||0}g</span>
     </div>` : '';
 
-  // Thumbnail
+  // Thumbnail — small size for card, preview size for lightbox
   let thumb = '';
   let clickClass = '';
   let clickAttr = '';
-  let imgSrc = '';
   if (!isManual) {
+    let cardSrc = '';
+    let lightboxSrc = '';
     if (r.replacement_image) {
-      imgSrc = `${API}/api/local-image?path=${encodeURIComponent(r.replacement_image)}`;
+      cardSrc = lightboxSrc = `${API}/api/local-image?path=${encodeURIComponent(r.replacement_image)}`;
     } else if (r.thumbnail_url) {
-      imgSrc = `${API}/api/image?url=${encodeURIComponent(r.thumbnail_url)}`;
+      lightboxSrc = `${API}/api/image?url=${encodeURIComponent(r.thumbnail_url)}`;
+      cardSrc = `${API}/api/image?url=${encodeURIComponent(r.thumbnail_url.replace('size=preview', 'size=thumbnail'))}`;
     }
-    if (imgSrc) {
-      thumb = `<img class="card-thumb" src="${imgSrc}" onclick="event.stopPropagation();openLightboxForRecord('${esc(r.asset_id)}')" loading="lazy">`;
+    if (cardSrc) {
+      thumb = `<img class="card-thumb" src="${cardSrc}" onclick="event.stopPropagation();openLightboxForRecord('${esc(r.asset_id)}')" loading="lazy" onerror="retryImg(this)">`;
       clickClass = ' has-image';
-      clickAttr = ` onclick="openLightboxForRecord('${esc(r.asset_id)}')" data-asset-id="${esc(r.asset_id)}" data-img-src="${esc(imgSrc)}" data-meal="${esc(r.meal)}" data-user-label="${esc(r.user_label||'')}"`;
+      clickAttr = ` onclick="openLightboxForRecord('${esc(r.asset_id)}')" data-asset-id="${esc(r.asset_id)}" data-img-src="${esc(lightboxSrc)}" data-meal="${esc(r.meal)}" data-user-label="${esc(r.user_label||'')}"`;
     }
   }
 
@@ -723,6 +730,12 @@ function handleUpload(e) {
     })
     .catch(() => {});
   e.target.value = '';
+}
+
+function retryImg(img) {
+  if (img.dataset.retried) return;
+  img.dataset.retried = '1';
+  setTimeout(() => { img.src = img.src; }, 1000);
 }
 
 function showError() {
