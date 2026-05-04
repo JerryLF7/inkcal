@@ -89,10 +89,14 @@ When a photo is missed by the pipeline (e.g., beverages that SigLIP2 fails to re
 ### Flow
 
 1. Click "📤 上传" in the top-right corner of the web UI.
-2. Select a photo from your device. The original file is preferred over screenshots or compressed versions.
+2. In the upload dialog, choose one of three methods:
+   - **Click the drop zone** to open the system file picker
+   - **Drag and drop** an image file onto the dashed-border area
+   - **Press Ctrl+V** (or ⌘V) to paste an image from the clipboard
 3. The server extracts EXIF data for date/time, sends the photo to Gemini for calorie analysis, then searches Immich for a matching photo via perceptual hash.
 4. If matched in Immich, the record is linked to the real Immich `asset_id` and thumbnail URL — it looks and behaves like any auto-processed record.
 5. If no Immich match is found, a `manual-<timestamp>` asset_id is generated and the image is saved to `data/images/`.
+6. After analysis completes, the view automatically refreshes and opens the new record in the lightbox.
 
 ### API Endpoint
 
@@ -102,3 +106,23 @@ When a photo is missed by the pipeline (e.g., beverages that SigLIP2 fails to re
 - Returns 200 `{ok: true, record: {...}, matched: bool, date: "YYYY-MM-DD"}` on success.
 - Returns 422 if Gemini determines the image is not real food.
 - Returns 409 if the photo is already recorded for that date (duplicate check by Immich `asset_id`).
+
+## Desktop Layout
+
+The web UI is fully responsive. At viewport width >= 768px, it switches from single-column mobile layout to a two-panel desktop layout:
+
+- **Left sidebar (280px)**: App header, upload button, quick-link buttons (今日/昨日/本周), always-visible calendar with green dots for dates with data.
+- **Right main area**: Date navigation bar, summary stats bar, 2-column meal card grid.
+- **Week view**: Day groups span the full width, cards within each day group flow in 2 columns.
+
+All interactions (date switching, calendar clicks, lightbox, upload) work identically across both layouts.
+
+## FRP / Slow Network Optimizations
+
+When accessing via a reverse proxy or tunneled connection:
+
+- Card thumbnails use Immich `size=thumbnail` (~7KB) instead of `size=preview` (~157KB). The lightbox still uses the full preview size.
+- API responses include request sequencing (`_loadSeq`) to discard stale responses from rapid date-switching.
+- Failed image loads retry once after 1 second.
+- Empty JSON files (all records deleted) are excluded from the `/api/dates` calendar dots.
+- Content area shows a loading spinner immediately on date switch for instant feedback.
