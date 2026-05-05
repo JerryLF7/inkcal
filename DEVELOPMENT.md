@@ -21,6 +21,7 @@
 | 05-04 | 手动上传（拖拽/粘贴/选文件）+ Immich pHash 匹配 |
 | 05-04 | PC 端响应式布局（侧边栏日历 + 双列卡片） |
 | 05-04 | FRP 优化（缩略图缩小 20x、请求排序、加载反馈） |
+| 05-05 | 网络韧性：AbortController 超时重试、localStorage 缓存优先、手动刷新按钮 |
 
 ## 架构
 
@@ -128,7 +129,7 @@ SigLIP2 过滤后仍有漏网之鱼（截图、菜单、海报）。在 Gemini s
 - `response_format={"type": "json_object"}` 强制返回结构化 JSON
 - 解析失败返回零值，不阻塞流水线
 
-### web/server.py + index.html — Web 界面（460 + 910行）
+### web/server.py + index.html — Web 界面（460 + 1038行）
 
 - Flask 提供 REST API + 静态文件
 - 前端纯原生 JS，无框架，暗色主题，响应式布局（移动端 480px + 桌面端双栏）
@@ -140,6 +141,9 @@ SigLIP2 过滤后仍有漏网之鱼（截图、菜单、海报）。在 Gemini s
 - 请求序号（`_loadSeq`）防止快速切换日期时旧响应覆盖新数据
 - 图片代理：`/api/image?url=` 转发 Immich 请求，附加 API key，避免前端暴露凭据
 - 认证：Flask session + before_request 钩子，未登录重定向到 /login
+- **localStorage 缓存优先**：所有日期统一 cache-first，缓存命中立即渲染，后台 fetch 静默更新。周视图按周一日缓存，日期列表 5 分钟 TTL。上传/替换图片后自动失效对应缓存。隐私模式下降级为纯网络请求
+- **网络韧性**：`apiFetch()` 封装 AbortController 10s 超时 + 1 次自动重试。跨请求 abort（`_abortController`）取消旧导航的进行中请求。`_fetchId` 去重防止重试污染新视图
+- **手动刷新**：日期标签旁的 ↻ 按钮清除当前日缓存后强制重新拉取，请求期间旋转动画
 
 ### setup.sh — 一键部署（27行）
 
