@@ -29,6 +29,11 @@
     user-select: none; padding: 4px 8px; border-radius: 8px;
   }
   .date-nav .date-label:active { background: #2a2a2a; }
+  .date-label-wrap {
+    display: inline-flex; align-items: center; gap: 2px;
+  }
+  .refresh-btn { font-size: 16px; padding: 4px 6px; color: #888; }
+  .refresh-btn:active { color: #2a6eff; }
 
   /* Calendar dropdown */
   .calendar-dropdown {
@@ -150,6 +155,7 @@
     animation: spin 0.8s linear infinite; margin: 0 auto 8px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .refresh-btn.spinning { animation: spin 0.8s linear infinite; pointer-events: none; }
 
   /* Lightbox */
   .lightbox {
@@ -361,7 +367,7 @@
   <div class="date-nav-wrapper">
     <div class="date-nav">
       <button class="nav-btn" onclick="prevDay()">‹</button>
-      <span class="date-label" id="date-label" onclick="toggleCalendar()"></span>
+      <span class="date-label-wrap"><span class="date-label" id="date-label" onclick="toggleCalendar()"></span><button class="nav-btn refresh-btn" id="refresh-btn" onclick="refreshDay()" title="刷新">↻</button></span>
       <button class="nav-btn" onclick="nextDay()">›</button>
     </div>
     <div class="calendar-dropdown" id="calendar-dropdown" style="display:none">
@@ -418,6 +424,19 @@
 </div>
 
 <script>
+const CACHE_PREFIX = 'intake:';
+
+function cacheGet(key) {
+  try { const item = localStorage.getItem(CACHE_PREFIX + key); return item ? JSON.parse(item) : null; }
+  catch { return null; }
+}
+function cacheSet(key, data) {
+  try { localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(data)); } catch {}
+}
+function cacheDel(key) {
+  try { localStorage.removeItem(CACHE_PREFIX + key); } catch {}
+}
+
 const API = '';
 let currentDate = new Date();
 let currentLoadedDate = '';
@@ -426,6 +445,34 @@ let viewMode = 'day'; // 'day' | 'week'
 let availableDates = new Set();
 let calendarYear, calendarMonth;
 let _loadSeq = 0;
+let _fetchId = 0;
+let _abortController = null;
+
+function apiFetch(path, timeoutMs = 10000) {
+  if (_abortController) _abortController.abort();
+  _abortController = new AbortController();
+  const url = `${API}${path}`;
+  const fetchId = ++_fetchId;
+
+  function _doFetch(signal) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => signal.abort(), timeoutMs);
+      fetch(url, { signal })
+        .then(r => { clearTimeout(timer); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(resolve)
+        .catch(err => { clearTimeout(timer); reject(err); });
+    });
+  }
+
+  return _doFetch(_abortController.signal).catch(err => {
+    if (err.name === 'AbortError' && fetchId === _fetchId) {
+      // Retry once with a local controller (don't interfere with global _abortController)
+      const ctrl = new AbortController();
+      return _doFetch(ctrl.signal);
+    }
+    throw err;
+  });
+}
 
 function fmtDate(d) {
   const y = d.getFullYear();
@@ -524,12 +571,19 @@ function loadDay(dateKey) {
   }
 
   document.getElementById('date-label').textContent = displayDate(ds);
-  document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
   const seq = ++_loadSeq;
-  fetch(`${API}/api/records?date=${ds}`)
-    .then(r => r.json())
+
+  const cached = cacheGet('day:' + ds);
+  if (cached) {
+    renderDay(cached);
+  } else {
+    document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+  }
+
+  apiFetch(`/api/records?date=${ds}`)
     .then(data => {
-      if (seq !== _loadSeq) return;  // stale request
+      if (seq !== _loadSeq) return;
+      cacheSet('day:' + ds, data);
       renderDay(data);
       if (window.innerWidth >= 768) {
         calendarYear = currentDate.getFullYear();
@@ -537,7 +591,10 @@ function loadDay(dateKey) {
         renderCalendar(calendarYear, calendarMonth);
       }
     })
-    .catch(() => { if (seq === _loadSeq) showError(); });
+    .catch(() => {
+      if (seq !== _loadSeq) return;
+      if (!cacheGet('day:' + ds)) showError();
+    });
 }
 
 function prevDay() {
@@ -554,17 +611,46 @@ function nextDay() {
   loadDay(fmtDate(d));
 }
 
+function refreshDay() {
+  const ds = currentLoadedDate;
+  if (!ds) return;
+  const btn = document.getElementById('refresh-btn');
+  btn.classList.add('spinning');
+  cacheDel('day:' + ds);
+  fetch(`${API}/api/records?date=${ds}`)
+    .then(r => r.json())
+    .then(data => {
+      cacheSet('day:' + ds, data);
+      renderDay(data);
+    })
+    .catch(() => {})
+    .finally(() => btn.classList.remove('spinning'));
+}
+
 function loadWeek() {
   viewMode = 'week';
   document.querySelectorAll('.quick-links button').forEach(b => b.classList.remove('active'));
   document.getElementById('q-week').classList.add('active');
-  document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
 
   const seq = ++_loadSeq;
-  fetch(`${API}/api/week`)
-    .then(r => r.json())
+
+  // Monday of current HKT week as cache key
+  const now = hktNow();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  const weekKey = fmtDate(monday);
+
+  const cached = cacheGet('week:' + weekKey);
+  if (cached) {
+    renderWeek(cached);
+  } else {
+    document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+  }
+
+  apiFetch(`/api/week`)
     .then(data => {
       if (seq !== _loadSeq) return;
+      cacheSet('week:' + weekKey, data);
       renderWeek(data);
       if (window.innerWidth >= 768) {
         calendarYear = currentDate.getFullYear();
@@ -572,7 +658,10 @@ function loadWeek() {
         renderCalendar(calendarYear, calendarMonth);
       }
     })
-    .catch(() => { if (seq === _loadSeq) showError(); });
+    .catch(() => {
+      if (seq !== _loadSeq) return;
+      if (!cacheGet('week:' + weekKey)) showError();
+    });
 }
 
 function renderDay(data) {
@@ -714,23 +803,45 @@ function handleUpload(e) {
   form.append('asset_id', assetId);
   form.append('image', file);
 
-  fetch(`${API}/api/upload-image`, { method: 'POST', body: form })
-    .then(r => r.json())
-    .then(data => {
-      if (data.ok) {
-        if (data.matched) {
-          document.getElementById('lightbox-img').src = `${API}/api/image?url=${encodeURIComponent(data.thumbnail_url)}`;
-        } else {
-          document.getElementById('lightbox-img').src = `${API}/api/local-image?path=${encodeURIComponent(data.replacement_image)}`;
-        }
-        // Refresh card list in background
-        const ds = currentLoadedDate;
-        fetch(`${API}/api/records?date=${ds}`)
-          .then(r => r.json())
-          .then(d => renderDay(d));
+  if (_abortController) _abortController.abort();
+  _abortController = new AbortController();
+  const replaceId = ++_fetchId;
+
+  function _doReplace(signal) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => signal.abort(), 15000);
+      fetch(`${API}/api/upload-image`, { method: 'POST', body: form, signal })
+        .then(r => { clearTimeout(timer); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(resolve)
+        .catch(err => { clearTimeout(timer); reject(err); });
+    });
+  }
+
+  _doReplace(_abortController.signal).then(data => {
+    if (data.ok) {
+      if (data.matched) {
+        document.getElementById('lightbox-img').src = `${API}/api/image?url=${encodeURIComponent(data.thumbnail_url)}`;
+      } else {
+        document.getElementById('lightbox-img').src = `${API}/api/local-image?path=${encodeURIComponent(data.replacement_image)}`;
       }
-    })
-    .catch(() => {});
+      const ds = currentLoadedDate;
+      fetch(`${API}/api/records?date=${ds}`)
+        .then(r => r.json())
+        .then(d => { cacheSet('day:' + ds, d); renderDay(d); });
+    }
+  }).catch(err => {
+    if (err.name === 'AbortError' && replaceId === _fetchId) {
+      const ctrl = new AbortController();
+      _doReplace(ctrl.signal).then(data => {
+        if (data.ok) {
+          const ds = currentLoadedDate;
+          fetch(`${API}/api/records?date=${ds}`)
+            .then(r => r.json())
+            .then(d => { cacheSet('day:' + ds, d); renderDay(d); });
+        }
+      }).catch(() => {});
+    }
+  });
   e.target.value = '';
 }
 
@@ -821,28 +932,52 @@ function processUpload(file) {
   const form = new FormData();
   form.append('image', file);
 
-  fetch(`${API}/api/manual-upload`, { method: 'POST', body: form })
-    .then(r => r.json())
-    .then(data => {
-      overlay.style.display = 'none';
-      btn.disabled = false;
-      if (data.ok) {
-        loadAvailableDates();
-        _pendingLightboxAsset = data.record.asset_id;
-        loadDay(data.date);
-      } else if (data.error === 'not food') {
-        alert('Gemini 判定此图片不是真实食物，无法记录。');
-      } else if (data.error === 'already processed') {
-        alert('此照片已在记录中。');
-      } else {
-        alert('上传失败: ' + (data.error || '未知错误'));
-      }
-    })
-    .catch(() => {
-      overlay.style.display = 'none';
-      btn.disabled = false;
-      alert('上传失败，请检查网络连接。');
+  if (_abortController) _abortController.abort();
+  _abortController = new AbortController();
+  const uploadId = ++_fetchId;
+
+  function _doUpload(signal) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => signal.abort(), 60000);
+      fetch(`${API}/api/manual-upload`, { method: 'POST', body: form, signal })
+        .then(r => { clearTimeout(timer); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(resolve)
+        .catch(err => { clearTimeout(timer); reject(err); });
     });
+  }
+
+  function handleResult(data) {
+    overlay.style.display = 'none';
+    btn.disabled = false;
+    if (data.ok) {
+      cacheDel('day:' + data.date);
+      cacheDel('dates');
+      loadAvailableDates();
+      _pendingLightboxAsset = data.record.asset_id;
+      loadDay(data.date);
+    } else if (data.error === 'not food') {
+      alert('Gemini 判定此图片不是真实食物，无法记录。');
+    } else if (data.error === 'already processed') {
+      alert('此照片已在记录中。');
+    } else {
+      alert('上传失败: ' + (data.error || '未知错误'));
+    }
+  }
+
+  _doUpload(_abortController.signal).then(handleResult).catch(err => {
+    if (err.name === 'AbortError' && uploadId === _fetchId) {
+      const ctrl = new AbortController();
+      _doUpload(ctrl.signal).then(handleResult).catch(() => {
+        overlay.style.display = 'none';
+        btn.disabled = false;
+        alert('上传超时，请检查网络连接后重试。');
+      });
+      return;
+    }
+    overlay.style.display = 'none';
+    btn.disabled = false;
+    alert('上传失败，请检查网络连接。');
+  });
 }
 
 function handleManualUpload(e) {
@@ -853,9 +988,33 @@ function handleManualUpload(e) {
 }
 
 function loadAvailableDates() {
+  const cached = cacheGet('dates');
+
+  // Under 5 minutes: use cache, skip network
+  if (cached && cached.ts && (Date.now() - cached.ts < 300000)) {
+    availableDates = new Set(cached.data);
+    if (window.innerWidth >= 768) {
+      calendarYear = currentDate.getFullYear();
+      calendarMonth = currentDate.getMonth();
+      renderCalendar(calendarYear, calendarMonth);
+    }
+    return;
+  }
+
+  // Stale but exists: render optimistically
+  if (cached && cached.data) {
+    availableDates = new Set(cached.data);
+    if (window.innerWidth >= 768) {
+      calendarYear = currentDate.getFullYear();
+      calendarMonth = currentDate.getMonth();
+      renderCalendar(calendarYear, calendarMonth);
+    }
+  }
+
   fetch(`${API}/api/dates`)
     .then(r => r.json())
     .then(dates => {
+      cacheSet('dates', { data: dates, ts: Date.now() });
       availableDates = new Set(dates);
       if (window.innerWidth >= 768) {
         calendarYear = currentDate.getFullYear();
