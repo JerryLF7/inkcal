@@ -314,44 +314,69 @@ def api_manual_upload():
     if not gemini_key:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 500
 
-    # Determine date from EXIF
+    # ── Date determination ────────────────────────────────────────
+    # Priority: user-provided > EXIF > now(HKT)
     from src.immich_client import ImmichClient
-    exif_time = ImmichClient.extract_exif_time(image_bytes)
-    if exif_time:
+
+    user_date = request.args.get("date", "") or request.form.get("date", "")
+    user_date = user_date if _valid_date(user_date) else None
+    exif_time = ImmichClient.extract_exif_time(image_bytes) if not user_date else None
+
+    if user_date:
+        date_str = user_date
+        now = datetime.now(HKT)
+        photo_time = f"{date_str}T{now.strftime('%H:%M:%S')}+08:00"
+        _source = "user"
+    elif exif_time:
         dt = datetime.fromisoformat(exif_time)
         date_str = dt.strftime("%Y-%m-%d")
         photo_time = exif_time
+        _source = "exif"
     else:
         now = datetime.now(HKT)
         date_str = now.strftime("%Y-%m-%d")
         photo_time = now.isoformat()
+        _source = "fallback"
 
-    # Run Gemini analysis
+    # ── Immich pHash match (before Gemini) ───────────────────────
+    immich_url = os.getenv("IMMICH_URL", "")
+    matched = None
+    immich_thumb = None
+
+    if immich_url:
+        immich = ImmichClient(immich_url, os.getenv("IMMICH_API_KEY", ""))
+        matched = immich.match_by_phash(date_str, image_bytes, time_window=exif_time)
+
+        if matched:
+            records = _load_date(date_str)
+            if any(r.get("asset_id") == matched["id"] for r in records):
+                immich.close()
+                return jsonify({"error": "already processed", "asset_id": matched["id"][:8]}), 409
+
+            # Download Immich thumbnail for Gemini analysis
+            try:
+                immich_thumb = immich.download_thumbnail(matched["id"])
+            except Exception:
+                pass
+
+        immich.close()
+
+    # ── Gemini analysis ──────────────────────────────────────────
     from src.calorie_analyzer import CalorieAnalyzer
+
     analyzer = CalorieAnalyzer(
         gemini_key,
         base_url=os.getenv("GEMINI_BASE_URL"),
         model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
     )
-    result = analyzer.analyze(image_bytes)
+    result = analyzer.analyze(immich_thumb if immich_thumb else image_bytes)
     analyzer.close()
 
     if result.get("meal") in ("not real food", "unknown"):
         return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
 
-    # Try to match in Immich via pHash
-    immich_url = os.getenv("IMMICH_URL", "")
-    matched = None
-    if immich_url:
-        immich = ImmichClient(immich_url, os.getenv("IMMICH_API_KEY", ""))
-        time_window = ImmichClient.extract_exif_time(image_bytes)
-        matched = immich.match_by_phash(date_str, image_bytes, time_window=time_window)
-        immich.close()
-
+    # ── Build record ─────────────────────────────────────────────
     if matched:
-        records = _load_date(date_str)
-        if any(r.get("asset_id") == matched["id"] for r in records):
-            return jsonify({"error": "already processed", "asset_id": matched["id"][:8]}), 409
         asset_id = matched["id"]
         thumbnail_url = matched["thumbnail_url"]
         photo_time = matched.get("photo_time", photo_time)
@@ -386,7 +411,7 @@ def api_manual_upload():
     records.append(record)
     _save_date(date_str, records)
 
-    return jsonify({"ok": True, "record": record, "matched": bool(matched), "date": date_str})
+    return jsonify({"ok": True, "record": record, "matched": bool(matched), "date": date_str, "_date_source": _source, "_date_received": request.args.get("date", "") or request.form.get("date", "")})
 
 
 @app.route("/api/local-image")

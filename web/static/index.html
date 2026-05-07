@@ -257,6 +257,30 @@
   }
   .upload-picker-cancel:hover { color: #aaa; }
 
+  /* Date picker (inside date-picker modal) */
+  .dp-input {
+    width: 100%; background: #222; border: 1px solid #444;
+    border-radius: 8px; padding: 10px 14px; font-size: 15px;
+    color: #e0e0e0; outline: none; font-family: inherit;
+    margin-top: 12px; color-scheme: dark;
+  }
+  .dp-input:focus { border-color: #2a6eff; }
+  .dp-filename { font-size: 13px; color: #666; margin-top: 4px; word-break: break-all; }
+  .dp-btns {
+    display: flex; gap: 8px; margin-top: 20px;
+  }
+  .dp-btns .upload-picker-cancel {
+    margin-top: 0; flex: 1; padding: 10px; border: 1px solid #333;
+    border-radius: 8px; font-size: 14px;
+  }
+  .dp-confirm {
+    flex: 1; background: #2a6eff; color: #fff; border: none;
+    border-radius: 8px; padding: 10px; font-size: 14px;
+    cursor: pointer; font-family: inherit;
+  }
+  .dp-confirm:hover { background: #3a7eff; }
+  .dp-confirm:active { background: #1a5aee; }
+
   /* ── Desktop layout (>=768px) ──────────────────────────────── */
   @media (min-width: 768px) {
     .app-layout {
@@ -414,6 +438,18 @@
   </div>
 </div>
 
+<div class="upload-picker" id="date-picker" style="display:none">
+  <div class="upload-picker-box" onclick="event.stopPropagation()">
+    <h2>选择上传日期</h2>
+    <div class="dp-filename" id="dp-filename"></div>
+    <input type="date" id="dp-input" class="dp-input">
+    <div class="dp-btns">
+      <button class="upload-picker-cancel" onclick="closeDatePicker()">取消</button>
+      <button class="dp-confirm" onclick="confirmDatePicker()">确认</button>
+    </div>
+  </div>
+</div>
+
 <div class="lightbox" id="lightbox" style="display:none" onclick="closeLightbox()">
   <div class="lightbox-close" onclick="closeLightbox()">✕</div>
   <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
@@ -491,6 +527,77 @@ function displayDate(ds) {
 function hktNow() {
   const now = new Date();
   return new Date(now.toLocaleString('en-US', {timeZone:'Asia/Hong_Kong'}));
+}
+
+// ── EXIF date reader ──────────────────────────────────────────
+
+function readExifDate(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const buffer = e.target.result;
+        const dv = new DataView(buffer);
+        if (dv.getUint16(0) !== 0xFFD8) { resolve(null); return; }
+
+        // Scan for APP1 marker (FFE1) in the first 64KB
+        const maxScan = Math.min(dv.byteLength, 65536);
+        for (let i = 2; i < maxScan - 4; i++) {
+          if (dv.getUint16(i) !== 0xFFE1) continue;
+
+          const segLen = dv.getUint16(i + 2);
+          const tiffStart = i + 10;
+
+          // Verify Exif header
+          const sig = String.fromCharCode(
+            dv.getUint8(i+4), dv.getUint8(i+5), dv.getUint8(i+6),
+            dv.getUint8(i+7), dv.getUint8(i+8), dv.getUint8(i+9)
+          );
+          if (sig !== 'Exif\0\0') continue;
+
+          // Parse TIFF header
+          const le = dv.getUint16(tiffStart) === 0x4949;  // II = little-endian
+          if (dv.getUint16(tiffStart + 2, le) !== 0x002A) continue;
+
+          const ifd0Off = dv.getUint32(tiffStart + 4, le);
+          const numEntries = dv.getUint16(tiffStart + ifd0Off, le);
+
+          for (let j = 0; j < numEntries; j++) {
+            const entryOff = tiffStart + ifd0Off + 2 + j * 12;
+            if (entryOff + 12 > dv.byteLength) break;
+
+            const tag = dv.getUint16(entryOff, le);
+            if (tag !== 0x9003) continue;  // DateTimeOriginal
+
+            const type = dv.getUint16(entryOff + 2, le);
+            const count = dv.getUint32(entryOff + 4, le);
+            if (type !== 2) continue;  // Must be ASCII
+
+            let dateBytes;
+            if (count <= 4) {
+              dateBytes = new Uint8Array(buffer, entryOff + 8, count);
+            } else {
+              const valueOff = dv.getUint32(entryOff + 8, le);
+              dateBytes = new Uint8Array(buffer, tiffStart + valueOff, count);
+            }
+
+            const raw = new TextDecoder('ascii').decode(dateBytes).replace(/\0/g, '').trim();
+            if (raw.length >= 10) {
+              resolve(raw.slice(0, 10).replace(/:/g, '-'));
+              return;
+            }
+          }
+          resolve(null);
+          return;
+        }
+        resolve(null);
+      } catch {
+        resolve(null);
+      }
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 // ── Calendar ──────────────────────────────────────────────────
@@ -738,7 +845,7 @@ function mealCard(r) {
       cardSrc = lightboxSrc = `${API}/api/local-image?path=${encodeURIComponent(r.replacement_image)}`;
     } else if (r.thumbnail_url) {
       lightboxSrc = `${API}/api/image?url=${encodeURIComponent(r.thumbnail_url)}`;
-      cardSrc = `${API}/api/image?url=${encodeURIComponent(r.thumbnail_url.replace('size=preview', 'size=thumbnail'))}`;
+      cardSrc = `${API}/api/image?url=${encodeURIComponent(r.thumbnail_url.replace('/original', '/thumbnail?size=thumbnail'))}`;
     }
     if (cardSrc) {
       thumb = `<img class="card-thumb" src="${cardSrc}" onclick="event.stopPropagation();openLightboxForRecord('${esc(r.asset_id)}')" loading="lazy" onerror="retryImg(this)">`;
@@ -920,7 +1027,36 @@ function pickFromFile() {
 
 let _pendingLightboxAsset = '';
 
-function processUpload(file) {
+async function processUpload(file) {
+  // Try to read EXIF date first (client-side)
+  const exifDate = await readExifDate(file);
+  if (exifDate) {
+    // EXIF has date — proceed directly
+    startUpload(file, '');
+    return;
+  }
+
+  // No EXIF date — show date picker
+  window._pendingUploadFile = file;
+  document.getElementById('dp-filename').textContent = file.name || '剪贴板图片';
+  const now = hktNow();
+  document.getElementById('dp-input').value = fmtDate(now);
+  document.getElementById('date-picker').style.display = 'flex';
+}
+
+function closeDatePicker() {
+  document.getElementById('date-picker').style.display = 'none';
+  window._pendingUploadFile = null;
+}
+
+function confirmDatePicker() {
+  const file = window._pendingUploadFile;
+  const date = document.getElementById('dp-input').value;
+  closeDatePicker();
+  if (file && date) startUpload(file, date);
+}
+
+function startUpload(file, dateStr) {
   const overlay = document.getElementById('upload-overlay');
   const detail = document.getElementById('upload-detail');
   const btn = document.getElementById('upload-btn');
@@ -932,6 +1068,12 @@ function processUpload(file) {
   const form = new FormData();
   form.append('image', file);
 
+  let uploadUrl = `${API}/api/manual-upload`;
+  if (dateStr) {
+    form.append('date', dateStr);
+    uploadUrl += `?date=${encodeURIComponent(dateStr)}`;
+  }
+
   if (_abortController) _abortController.abort();
   _abortController = new AbortController();
   const uploadId = ++_fetchId;
@@ -939,7 +1081,7 @@ function processUpload(file) {
   function _doUpload(signal) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => signal.abort(), 60000);
-      fetch(`${API}/api/manual-upload`, { method: 'POST', body: form, signal })
+      fetch(uploadUrl, { method: 'POST', body: form, signal })
         .then(r => { clearTimeout(timer); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
         .then(resolve)
         .catch(err => { clearTimeout(timer); reject(err); });
