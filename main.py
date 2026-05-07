@@ -150,7 +150,12 @@ def cmd_run(args):
 
         logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
         thumbnail_url = immich.get_thumbnail_url(aid)
-        result = analyzer.analyze(thumb)
+        try:
+            original = immich.download_original(aid)
+        except Exception as e:
+            logger.error("  下载原图失败: %s", e)
+            continue
+        result = analyzer.analyze(original)
 
         # Gemini may reject non-real-food images (screenshots, menus, etc.)
         if result.get("meal") in ("not real food", "unknown"):

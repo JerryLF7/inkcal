@@ -72,9 +72,19 @@ class ImmichClient:
         """Get the URL to download a thumbnail for an asset."""
         return f"{self.base_url}/api/assets/{asset_id}/thumbnail?size=preview"
 
+    def get_original_url(self, asset_id: str) -> str:
+        """Get the URL to download the original image for an asset."""
+        return f"{self.base_url}/api/assets/{asset_id}/original"
+
     def download_thumbnail(self, asset_id: str) -> bytes:
         """Download thumbnail image bytes for an asset."""
         r = self._client.get(f"/api/assets/{asset_id}/thumbnail?size=preview")
+        r.raise_for_status()
+        return r.content
+
+    def download_original(self, asset_id: str) -> bytes:
+        """Download original image bytes for an asset."""
+        r = self._client.get(f"/api/assets/{asset_id}/original")
         r.raise_for_status()
         return r.content
 
@@ -115,7 +125,7 @@ class ImmichClient:
                     best_dist = dist
                     best_match = {
                         "id": rid,
-                        "thumbnail_url": self.get_thumbnail_url(rid),
+                        "thumbnail_url": self.get_original_url(rid),
                         "photo_time": asset.get("exifInfo", {}).get("dateTimeOriginal", ""),
                     }
                     if dist <= 2:
