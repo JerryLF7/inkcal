@@ -48,7 +48,7 @@ Use for browser viewing, visual labels, replacing photos, and mobile UI tweaks.
 2. Start preview from project root with a tracked background process:
 
 ```bash
-INTAKE_PORT=5800 python3 web/server.py
+INTAKE_PORT=5800 venv/bin/python web/server.py
 ```
 
 3. Verify readiness:
@@ -93,19 +93,29 @@ When a photo is missed by the pipeline (e.g., beverages that SigLIP2 fails to re
    - **Click the drop zone** to open the system file picker
    - **Drag and drop** an image file onto the dashed-border area
    - **Press Ctrl+V** (or ⌘V) to paste an image from the clipboard
-3. The server extracts EXIF data for date/time, sends the photo to Gemini for calorie analysis, then searches Immich for a matching photo via perceptual hash.
-4. If matched in Immich, the record is linked to the real Immich `asset_id` and thumbnail URL — it looks and behaves like any auto-processed record.
-5. If no Immich match is found, a `manual-<timestamp>` asset_id is generated and the image is saved to `data/images/`.
-6. After analysis completes, the view automatically refreshes and opens the new record in the lightbox.
+3. The client-side EXIF parser tries to extract the date from the image (supports JPEG, PNG, WebP). If found, the date is sent with the upload. If not, the server's Pillow-based EXIF extraction runs as a fallback (supports HEIC too).
+4. **Gemini analysis runs first** — if the image is not food, the request returns 422 immediately, skipping the expensive pHash step.
+5. If Gemini confirms it's food, the server searches Immich for a matching photo via perceptual hash (±5 min window when EXIF time is available, full-day search otherwise).
+6. If matched in Immich, the record is linked to the real Immich `asset_id` and thumbnail URL — it looks and behaves like any auto-processed record.
+7. If no Immich match is found, a `manual-<timestamp>` asset_id is generated and the image is saved to `data/images/`.
+8. If the server couldn't determine the date (no EXIF at all), the record is saved to today's date and the date picker appears for post-upload correction.
+9. After analysis completes, the view automatically refreshes and opens the new record in the lightbox.
 
-### API Endpoint
+### API Endpoints
 
 `POST /api/manual-upload` (requires auth if enabled)
 
-- Body: `multipart/form-data` with `image` field (JPEG/PNG/HEIC/WebP).
-- Returns 200 `{ok: true, record: {...}, matched: bool, date: "YYYY-MM-DD"}` on success.
+- Body: `multipart/form-data` with `image` field (JPEG/PNG/HEIC/WebP). Optional `date` field (if client-side EXIF was read).
+- Returns 200 `{ok: true, record: {...}, matched: bool, date: "YYYY-MM-DD", _date_source: "exif"|"user"|"fallback"}` on success.
 - Returns 422 if Gemini determines the image is not real food.
 - Returns 409 if the photo is already recorded for that date (duplicate check by Immich `asset_id`).
+
+`POST /api/move-record` (requires auth if enabled)
+
+- Body: `application/json` with `asset_id` and `date` (new date YYYY-MM-DD).
+- Moves the record to the new date file and re-runs Immich pHash matching on the corrected date.
+- If pHash matches on the new date, the record is linked to the Immich asset and the local image file is deleted.
+- Returns 200 `{ok: true, asset_id, old_date, new_date, immich_matched: bool}`.
 
 ## Desktop Layout
 

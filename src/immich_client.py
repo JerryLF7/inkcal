@@ -89,7 +89,7 @@ class ImmichClient:
         return r.content
 
     def match_by_phash(self, date_str: str, image_bytes: bytes,
-                       time_window: str | None = None, threshold: int = 12
+                       time_window: str | None = None, threshold: int = 15
                        ) -> dict | None:
         """Find a photo in Immich whose pHash matches the given image bytes.
 
@@ -109,8 +109,13 @@ class ImmichClient:
                 size = 500
 
             assets = self.search_assets(taken_after=start, taken_before=end, size=size)
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"  [pHash] search failed: {e}", file=sys.stderr, flush=True)
             return None
+
+        import sys
+        print(f"  [pHash] date={date_str} time_window={time_window} assets_found={len(assets)}", file=sys.stderr, flush=True)
 
         target_hash = imagehash.phash(Image.open(io.BytesIO(image_bytes)).convert("RGB"))
         best_match = None
@@ -133,6 +138,7 @@ class ImmichClient:
             except Exception:
                 continue
 
+        print(f"  [pHash] best_dist={best_dist} threshold={threshold} matched={best_match is not None}", file=sys.stderr, flush=True)
         return best_match if best_match and best_dist <= threshold else None
 
     @staticmethod

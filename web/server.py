@@ -315,33 +315,50 @@ def api_manual_upload():
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 500
 
     # ── Date determination ────────────────────────────────────────
-    # Priority: user-provided > EXIF > now(HKT)
+    # Always extract EXIF time for precise Immich pHash matching.
+    # User-provided date is only used for date_str when EXIF is absent.
     from src.immich_client import ImmichClient
 
     user_date = request.args.get("date", "") or request.form.get("date", "")
     user_date = user_date if _valid_date(user_date) else None
-    exif_time = ImmichClient.extract_exif_time(image_bytes) if not user_date else None
+    exif_time = ImmichClient.extract_exif_time(image_bytes)
 
-    if user_date:
-        date_str = user_date
-        now = datetime.now(HKT)
-        photo_time = f"{date_str}T{now.strftime('%H:%M:%S')}+08:00"
-        _source = "user"
-    elif exif_time:
+    if exif_time:
         dt = datetime.fromisoformat(exif_time)
         date_str = dt.strftime("%Y-%m-%d")
         photo_time = exif_time
         _source = "exif"
+    elif user_date:
+        date_str = user_date
+        now = datetime.now(HKT)
+        photo_time = f"{date_str}T{now.strftime('%H:%M:%S')}+08:00"
+        _source = "user"
     else:
         now = datetime.now(HKT)
         date_str = now.strftime("%Y-%m-%d")
         photo_time = now.isoformat()
         _source = "fallback"
 
-    # ── Immich pHash match (before Gemini) ───────────────────────
+    import sys
+    print(f"  [upload] user_date={user_date} exif_time={exif_time} _source={_source} date_str={date_str}", file=sys.stderr, flush=True)
+
+    # ── Gemini analysis (first — skip pHash if not food) ──────────
+    from src.calorie_analyzer import CalorieAnalyzer
+
+    analyzer = CalorieAnalyzer(
+        gemini_key,
+        base_url=os.getenv("GEMINI_BASE_URL"),
+        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
+    )
+    result = analyzer.analyze(image_bytes)
+    analyzer.close()
+
+    if result.get("meal") in ("not real food", "unknown"):
+        return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
+
+    # ── Immich pHash match (after Gemini confirmed it's food) ─────
     immich_url = os.getenv("IMMICH_URL", "")
     matched = None
-    immich_thumb = None
 
     if immich_url:
         immich = ImmichClient(immich_url, os.getenv("IMMICH_API_KEY", ""))
@@ -353,27 +370,7 @@ def api_manual_upload():
                 immich.close()
                 return jsonify({"error": "already processed", "asset_id": matched["id"][:8]}), 409
 
-            # Download Immich thumbnail for Gemini analysis
-            try:
-                immich_thumb = immich.download_thumbnail(matched["id"])
-            except Exception:
-                pass
-
         immich.close()
-
-    # ── Gemini analysis ──────────────────────────────────────────
-    from src.calorie_analyzer import CalorieAnalyzer
-
-    analyzer = CalorieAnalyzer(
-        gemini_key,
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-    )
-    result = analyzer.analyze(immich_thumb if immich_thumb else image_bytes)
-    analyzer.close()
-
-    if result.get("meal") in ("not real food", "unknown"):
-        return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
 
     # ── Build record ─────────────────────────────────────────────
     if matched:
@@ -412,6 +409,79 @@ def api_manual_upload():
     _save_date(date_str, records)
 
     return jsonify({"ok": True, "record": record, "matched": bool(matched), "date": date_str, "_date_source": _source, "_date_received": request.args.get("date", "") or request.form.get("date", "")})
+
+
+@app.route("/api/move-record", methods=["POST"])
+def api_move_record():
+    """Move a record from its current date to a new date."""
+    data = request.get_json() or {}
+    asset_id = data.get("asset_id", "")
+    new_date = data.get("date", "")
+    if not asset_id or not _valid_date(new_date):
+        return jsonify({"error": "missing or invalid params"}), 400
+
+    # Find and remove the record from its current date
+    found = None
+    old_date = None
+    for f in sorted(DATA_DIR.glob("*.json")):
+        if not DATE_RE.fullmatch(f.stem):
+            continue
+        records = _load_date(f.stem)
+        for i, r in enumerate(records):
+            if r.get("asset_id") == asset_id:
+                found = r
+                old_date = f.stem
+                records.pop(i)
+                _save_date(f.stem, records)
+                break
+        if found:
+            break
+
+    if not found:
+        return jsonify({"error": "record not found"}), 404
+
+    # Re-try Immich pHash matching on the new date
+    immich_matched = None
+    replacement_image = found.get("replacement_image", "")
+    if replacement_image and (DATA_DIR / "images").resolve() in Path(replacement_image).resolve().parents:
+        try:
+            image_bytes = Path(replacement_image).read_bytes()
+            immich_url = os.getenv("IMMICH_URL", "")
+            if immich_url:
+                from src.immich_client import ImmichClient
+                immich = ImmichClient(immich_url, os.getenv("IMMICH_API_KEY", ""))
+                # Try with EXIF time first, then full date
+                exif_time = ImmichClient.extract_exif_time(image_bytes)
+                immich_matched = immich.match_by_phash(new_date, image_bytes, time_window=exif_time)
+                immich.close()
+        except Exception:
+            pass
+
+    # Update photo_time to match new date
+    old_dt = datetime.fromisoformat(found.get("photo_time", "")) if found.get("photo_time") else None
+    if old_dt:
+        new_dt_str = f"{new_date}T{old_dt.strftime('%H:%M:%S')}+08:00"
+        found["photo_time"] = new_dt_str
+
+    # Apply Immich match if found
+    if immich_matched:
+        found["asset_id"] = immich_matched["id"]
+        found["thumbnail_url"] = immich_matched["thumbnail_url"]
+        found["photo_time"] = immich_matched.get("photo_time", found.get("photo_time", ""))
+        found.pop("replacement_image", None)
+        # Remove local image file
+        try:
+            Path(replacement_image).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # Add to new date
+    new_records = _load_date(new_date)
+    new_records.append(found)
+    _save_date(new_date, new_records)
+
+    return jsonify({"ok": True, "asset_id": asset_id, "old_date": old_date, "new_date": new_date,
+                    "immich_matched": bool(immich_matched)})
 
 
 @app.route("/api/local-image")
