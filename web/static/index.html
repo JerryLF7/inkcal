@@ -530,65 +530,128 @@ function hktNow() {
 }
 
 // ── EXIF date reader ──────────────────────────────────────────
+// Supports JPEG (APP1/Exif), PNG (eXIf chunk), WebP (EXIF chunk).
+// HEIC falls back to server-side extraction via the date picker.
+
+function extractJpegExif(arr) {
+  // Scan for APP1 marker (0xFFE1) containing "Exif\0\0"
+  const dv = new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+  const maxScan = Math.min(arr.length, 65536);
+  for (let i = 2; i < maxScan - 10; i++) {
+    if (dv.getUint16(i) !== 0xFFE1) continue;
+    const segLen = dv.getUint16(i + 2);
+    if (i + 2 + segLen > arr.length) continue;
+    const sig = String.fromCharCode(arr[i+4], arr[i+5], arr[i+6], arr[i+7], arr[i+8], arr[i+9]);
+    if (sig !== 'Exif\0\0') continue;
+    // Return TIFF data (after "Exif\0\0" header)
+    const tiffStart = i + 10;
+    const tiffLen = segLen - 8;
+    return arr.slice(tiffStart, tiffStart + tiffLen);
+  }
+  return null;
+}
+
+function extractPngExif(arr) {
+  // PNG: 8-byte signature, then chunks: [4B len][4B type][data][4B CRC]
+  let offset = 8;
+  while (offset + 12 <= arr.length) {
+    const dv = new DataView(arr.buffer, arr.byteOffset + offset, 8);
+    const len = dv.getUint32(0);
+    const type = String.fromCharCode(arr[offset+4], arr[offset+5], arr[offset+6], arr[offset+7]);
+    if (type === 'eXIf') {
+      return arr.slice(offset + 8, offset + 8 + len);
+    }
+    if (type === 'IEND') break;
+    offset += 12 + len;
+  }
+  return null;
+}
+
+function extractWebpExif(arr) {
+  // RIFF: 'RIFF'[4B size]'WEBP', then chunks: [4B type][4B size][data]
+  if (arr.length < 20) return null;
+  const type = String.fromCharCode(arr[8], arr[9], arr[10], arr[11]);
+  if (type !== 'WEBP') return null;
+  let offset = 12;
+  while (offset + 8 <= arr.length) {
+    const dv = new DataView(arr.buffer, arr.byteOffset + offset, 8);
+    const ckType = String.fromCharCode(arr[offset], arr[offset+1], arr[offset+2], arr[offset+3]);
+    const ckSize = dv.getUint32(4, true);
+    if (ckType === 'EXIF') {
+      return arr.slice(offset + 8, offset + 8 + ckSize);
+    }
+    offset += 8 + ckSize + (ckSize & 1); // chunks are padded to even
+  }
+  return null;
+}
+
+function parseTiffDate(tiffBytes) {
+  // Parse TIFF header + IFD0 to find DateTimeOriginal (0x9003)
+  const dv = new DataView(tiffBytes.buffer, tiffBytes.byteOffset, tiffBytes.byteLength);
+  if (tiffBytes.length < 8) return null;
+
+  const le = dv.getUint16(0) === 0x4949;  // II = little-endian
+  if (dv.getUint16(2, le) !== 0x002A) return null;
+
+  const ifd0Off = dv.getUint32(4, le);
+  if (ifd0Off + 2 > tiffBytes.length) return null;
+
+  const numEntries = dv.getUint16(ifd0Off, le);
+
+  for (let j = 0; j < numEntries; j++) {
+    const entryOff = ifd0Off + 2 + j * 12;
+    if (entryOff + 12 > tiffBytes.length) break;
+
+    const tag = dv.getUint16(entryOff, le);
+    if (tag !== 0x9003) continue;  // DateTimeOriginal
+
+    const type = dv.getUint16(entryOff + 2, le);
+    const count = dv.getUint32(entryOff + 4, le);
+    if (type !== 2) continue;  // Must be ASCII
+
+    let dateBytes;
+    if (count <= 4) {
+      dateBytes = tiffBytes.slice(entryOff + 8, entryOff + 8 + count);
+    } else {
+      const valueOff = dv.getUint32(entryOff + 8, le);
+      dateBytes = tiffBytes.slice(valueOff, valueOff + count);
+    }
+
+    return new TextDecoder('ascii').decode(dateBytes).replace(/\0/g, '').trim();
+  }
+  return null;
+}
 
 function readExifDate(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = function(e) {
       try {
-        const buffer = e.target.result;
-        const dv = new DataView(buffer);
-        if (dv.getUint16(0) !== 0xFFD8) { resolve(null); return; }
+        const arr = new Uint8Array(e.target.result);
+        if (arr.length < 8) { resolve(null); return; }
 
-        // Scan for APP1 marker (FFE1) in the first 64KB
-        const maxScan = Math.min(dv.byteLength, 65536);
-        for (let i = 2; i < maxScan - 4; i++) {
-          if (dv.getUint16(i) !== 0xFFE1) continue;
+        let exifBytes = null;
 
-          const segLen = dv.getUint16(i + 2);
-          const tiffStart = i + 10;
+        // JPEG: starts with 0xFFD8
+        if (arr[0] === 0xFF && arr[1] === 0xD8) {
+          exifBytes = extractJpegExif(arr);
+        }
+        // PNG: starts with \x89PNG
+        else if (arr[0] === 0x89 && arr[1] === 0x50 && arr[2] === 0x4E && arr[3] === 0x47) {
+          exifBytes = extractPngExif(arr);
+        }
+        // WebP: RIFF container
+        else if (arr[0] === 0x52 && arr[1] === 0x49 && arr[2] === 0x46 && arr[3] === 0x46) {
+          exifBytes = extractWebpExif(arr);
+        }
+        // HEIC and others: not parsed client-side
 
-          // Verify Exif header
-          const sig = String.fromCharCode(
-            dv.getUint8(i+4), dv.getUint8(i+5), dv.getUint8(i+6),
-            dv.getUint8(i+7), dv.getUint8(i+8), dv.getUint8(i+9)
-          );
-          if (sig !== 'Exif\0\0') continue;
-
-          // Parse TIFF header
-          const le = dv.getUint16(tiffStart) === 0x4949;  // II = little-endian
-          if (dv.getUint16(tiffStart + 2, le) !== 0x002A) continue;
-
-          const ifd0Off = dv.getUint32(tiffStart + 4, le);
-          const numEntries = dv.getUint16(tiffStart + ifd0Off, le);
-
-          for (let j = 0; j < numEntries; j++) {
-            const entryOff = tiffStart + ifd0Off + 2 + j * 12;
-            if (entryOff + 12 > dv.byteLength) break;
-
-            const tag = dv.getUint16(entryOff, le);
-            if (tag !== 0x9003) continue;  // DateTimeOriginal
-
-            const type = dv.getUint16(entryOff + 2, le);
-            const count = dv.getUint32(entryOff + 4, le);
-            if (type !== 2) continue;  // Must be ASCII
-
-            let dateBytes;
-            if (count <= 4) {
-              dateBytes = new Uint8Array(buffer, entryOff + 8, count);
-            } else {
-              const valueOff = dv.getUint32(entryOff + 8, le);
-              dateBytes = new Uint8Array(buffer, tiffStart + valueOff, count);
-            }
-
-            const raw = new TextDecoder('ascii').decode(dateBytes).replace(/\0/g, '').trim();
-            if (raw.length >= 10) {
-              resolve(raw.slice(0, 10).replace(/:/g, '-'));
-              return;
-            }
+        if (exifBytes) {
+          const raw = parseTiffDate(exifBytes);
+          if (raw && raw.length >= 10) {
+            resolve(raw.slice(0, 10).replace(/:/g, '-'));
+            return;
           }
-          resolve(null);
-          return;
         }
         resolve(null);
       } catch {
@@ -596,7 +659,7 @@ function readExifDate(file) {
       }
     };
     reader.onerror = () => resolve(null);
-    reader.readAsArrayBuffer(file);
+    reader.readAsArrayBuffer(file.slice(0, 131072));  // First 128KB is enough for EXIF
   });
 }
 
@@ -1028,20 +1091,16 @@ function pickFromFile() {
 let _pendingLightboxAsset = '';
 
 async function processUpload(file) {
-  // Try to read EXIF date first (client-side)
+  // Try client-side EXIF first (instant, supports JPEG/PNG/WebP).
   const exifDate = await readExifDate(file);
   if (exifDate) {
-    // EXIF has date — proceed directly
-    startUpload(file, '');
+    startUpload(file, exifDate);
     return;
   }
 
-  // No EXIF date — show date picker
-  window._pendingUploadFile = file;
-  document.getElementById('dp-filename').textContent = file.name || '剪贴板图片';
-  const now = hktNow();
-  document.getElementById('dp-input').value = fmtDate(now);
-  document.getElementById('date-picker').style.display = 'flex';
+  // No EXIF client-side — let the server try (supports all formats via Pillow).
+  // No date picker here; handled in handleResult if server also fails.
+  startUpload(file, '');
 }
 
 function closeDatePicker() {
@@ -1051,9 +1110,36 @@ function closeDatePicker() {
 
 function confirmDatePicker() {
   const file = window._pendingUploadFile;
+  const record = window._lastUploadRecord;
   const date = document.getElementById('dp-input').value;
   closeDatePicker();
-  if (file && date) startUpload(file, date);
+  if (file && date) {
+    startUpload(file, date);
+  } else if (record && date) {
+    moveRecord(record.asset_id, date);
+  }
+}
+
+function moveRecord(assetId, newDate) {
+  const btn = document.getElementById('upload-btn');
+  btn.disabled = true;
+  fetch(`${API}/api/move-record`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ asset_id: assetId, date: newDate })
+  })
+  .then(r => r.json())
+  .then(data => {
+    btn.disabled = false;
+    if (data.ok) {
+      cacheDel('day:' + data.old_date);
+      cacheDel('day:' + data.new_date);
+      cacheDel('dates');
+      loadAvailableDates();
+      loadDay(data.new_date);
+    }
+  })
+  .catch(() => { btn.disabled = false; });
 }
 
 function startUpload(file, dateStr) {
@@ -1079,13 +1165,20 @@ function startUpload(file, dateStr) {
   const uploadId = ++_fetchId;
 
   function _doUpload(signal) {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => signal.abort(), 60000);
-      fetch(uploadUrl, { method: 'POST', body: form, signal })
-        .then(r => { clearTimeout(timer); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-        .then(resolve)
-        .catch(err => { clearTimeout(timer); reject(err); });
-    });
+    const timer = setTimeout(() => signal.abort(), 60000);
+    return fetch(uploadUrl, { method: 'POST', body: form, signal })
+      .then(r => {
+        clearTimeout(timer);
+        if (!r.ok) {
+          return r.json().then(data => {
+            throw new Error(`HTTP ${r.status}: ${data.error || 'unknown'}`);
+          }).catch(err => {
+            if (err.message && err.message.startsWith('HTTP ')) throw err;
+            throw new Error(`HTTP ${r.status}`);
+          });
+        }
+        return r.json();
+      });
   }
 
   function handleResult(data) {
@@ -1097,6 +1190,14 @@ function startUpload(file, dateStr) {
       loadAvailableDates();
       _pendingLightboxAsset = data.record.asset_id;
       loadDay(data.date);
+      if (data._date_source === 'fallback') {
+        // Server couldn't extract EXIF either — saved to today. Offer correction.
+        window._pendingUploadFile = null;
+        window._lastUploadRecord = data.record;
+        document.getElementById('dp-filename').textContent = data.record.meal || '上传记录';
+        document.getElementById('dp-input').value = data.date;
+        document.getElementById('date-picker').style.display = 'flex';
+      }
     } else if (data.error === 'not food') {
       alert('Gemini 判定此图片不是真实食物，无法记录。');
     } else if (data.error === 'already processed') {
@@ -1118,7 +1219,19 @@ function startUpload(file, dateStr) {
     }
     overlay.style.display = 'none';
     btn.disabled = false;
-    alert('上传失败，请检查网络连接。');
+    const msg = err.message || '';
+    if (msg.startsWith('HTTP ')) {
+      const parts = msg.split(': ');
+      const status = parts[0].split(' ')[1];
+      const serverMsg = parts.slice(1).join(': ');
+      if (status === '413') alert('图片文件过大（超过 16MB），请压缩后重试。');
+      else if (status === '422') alert('Gemini 判定此图片不是真实食物，无法记录。');
+      else if (status === '409') alert('此照片已在记录中。');
+      else if (status === '400') alert('上传失败: ' + (serverMsg || '参数或图片格式错误'));
+      else alert('服务器错误 (' + status + '): ' + (serverMsg || '请重试'));
+    } else {
+      alert('上传失败，请检查网络连接。');
+    }
   });
 }
 
