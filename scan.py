@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 sys.path.insert(0, "src")
-from immich_client import ImmichClient
+from immich_client import ImmichClient, format_photo_time
 from food_detector import FoodDetector
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -46,7 +46,10 @@ for d in dates:
             thumb = immich.download_thumbnail(a["id"])
             is_food = detector.is_food(thumb)
             aid = a["id"][:8]
-            photo_time = a.get("exifInfo", {}).get("dateTimeOriginal", "?")
+            exif = a.get("exifInfo", {})
+            raw_pt = exif.get("dateTimeOriginal", "")
+            exif_tz = exif.get("timeZone")
+            photo_time = format_photo_time(raw_pt, exif_tz) if raw_pt else "?"
             if is_food:
                 food_count += 1
                 logger.info("  ✅ FOOD: %s (%s)", aid, photo_time)

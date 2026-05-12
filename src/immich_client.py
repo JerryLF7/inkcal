@@ -3,12 +3,49 @@ Immich API client — fetch assets, match by perceptual hash.
 """
 
 import io
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import httpx
 import imagehash
 from PIL import Image
+
+
+HKT = timezone(timedelta(hours=8))
+
+
+def _parse_utc_offset(tz_str: str) -> timezone:
+    """Parse Immich timeZone like 'UTC+8' or 'UTC-5.5' into timezone."""
+    if tz_str.startswith("UTC"):
+        offset = tz_str[3:]  # '+8' or '-5.5'
+        sign = 1 if offset[0] == '+' else -1
+        hours = float(offset[1:])
+        total_minutes = int(hours * 60)
+        return timezone(timedelta(minutes=sign * total_minutes))
+    # Try ±HH:MM format
+    m = re.match(r"^([+-])(\d{2}):(\d{2})$", tz_str)
+    if m:
+        sign = 1 if m.group(1) == '+' else -1
+        hours, minutes = int(m.group(2)), int(m.group(3))
+        return timezone(timedelta(hours=sign * hours, minutes=sign * minutes))
+    raise ValueError(f"Unknown timezone format: {tz_str!r}")
+
+
+def format_photo_time(date_time_original: str, timezone_str: str | None) -> str:
+    """Construct photo_time ISO string from Immich exifInfo fields.
+    timezone_str: Immich-provided offset like 'UTC+8'.
+    """
+    dt = datetime.fromisoformat(date_time_original.replace("Z", "+00:00"))
+    if timezone_str:
+        try:
+            tz = _parse_utc_offset(timezone_str)
+            return dt.astimezone(tz).isoformat()
+        except ValueError:
+            pass
+    if dt.utcoffset() is None:
+        return dt.replace(tzinfo=HKT).isoformat()
+    return dt.astimezone(HKT).isoformat()
 
 
 class ImmichClient:
@@ -128,10 +165,13 @@ class ImmichClient:
                 dist = imagehash.phash(Image.open(io.BytesIO(thumb)).convert("RGB")) - target_hash
                 if dist < best_dist:
                     best_dist = dist
+                    exif = asset.get("exifInfo", {})
+                    raw_pt = exif.get("dateTimeOriginal", "")
+                    exif_tz = exif.get("timeZone")
                     best_match = {
                         "id": rid,
                         "thumbnail_url": self.get_original_url(rid),
-                        "photo_time": asset.get("exifInfo", {}).get("dateTimeOriginal", ""),
+                        "photo_time": format_photo_time(raw_pt, exif_tz),
                     }
                     if dist <= 2:
                         break
@@ -143,14 +183,22 @@ class ImmichClient:
 
     @staticmethod
     def extract_exif_time(image_bytes: bytes) -> str | None:
-        """Extract DateTimeOriginal from EXIF, return HKT ISO string or None."""
+        """Extract DateTimeOriginal + OffsetTimeOriginal from EXIF.
+        Returns ISO string with timezone if offset is present, else naive string.
+        """
         try:
             img = Image.open(io.BytesIO(image_bytes))
             exif = img._getexif() or {}
             dt_str = exif.get(36867) or exif.get(306)
             if dt_str:
                 dt = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
-                return dt.replace(tzinfo=timezone(timedelta(hours=8))).isoformat()
+                offset_str = exif.get(0x9011)  # OffsetTimeOriginal
+                if offset_str:
+                    sign = 1 if offset_str[0] == '+' else -1
+                    hours, minutes = int(offset_str[1:3]), int(offset_str[4:6])
+                    tz = timezone(timedelta(hours=sign * hours, minutes=sign * minutes))
+                    dt = dt.replace(tzinfo=tz)
+                return dt.isoformat()
         except Exception:
             pass
         return None

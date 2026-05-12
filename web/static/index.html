@@ -119,8 +119,15 @@
   .meal-card .meal-name { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
   .meal-card .meal-meta { font-size: 12px; color: #888; }
   .meal-card .meal-meta .source { color: #555; }
+  .meal-card .meal-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex-shrink: 0;
+    gap: 4px;
+  }
   .meal-card .meal-cals {
-    text-align: right; flex-shrink: 0; font-size: 18px; font-weight: 700; color: #ff6b6b;
+    text-align: right; font-size: 18px; font-weight: 700; color: #ff6b6b;
   }
   .meal-card .meal-cals small {
     font-size: 12px; font-weight: 400; color: #888;
@@ -180,12 +187,101 @@
     display: flex; gap: 8px; margin-top: 12px;
   }
   .lbl-btn {
+    display: inline-flex; align-items: center; gap: 4px;
     background: #2a2a2a; color: #888; border: 1px solid #333;
     border-radius: 6px; padding: 6px 14px; cursor: pointer;
-    font-size: 13px; font-family: inherit;
+    font-size: 13px; font-family: inherit; line-height: 1;
   }
   .lbl-btn:active { background: #3a3a3a; }
   .lbl-btn.upload { padding: 6px 10px; }
+
+  .lightbox-reanalysis {
+    margin-top: 12px;
+    width: 100%;
+    max-width: 400px;
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .lightbox-reanalysis.active {
+    display: flex;
+  }
+  .reanalysis-textarea {
+    width: 100%;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+    color: #e0e0e0;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 60px;
+    outline: none;
+  }
+  .reanalysis-textarea:focus {
+    border-color: #2a6eff;
+  }
+  .reanalysis-textarea:disabled {
+    opacity: 0.5;
+  }
+  .reanalysis-submit {
+    background: #2a6eff;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    align-self: flex-end;
+  }
+  .reanalysis-submit:disabled {
+    background: #555;
+    cursor: not-allowed;
+  }
+  .reanalysis-error {
+    color: #ff6b6b;
+    font-size: 12px;
+    text-align: center;
+  }
+  .reanalysis-hint {
+    color: #666;
+    font-size: 11px;
+    text-align: right;
+  }
+  .reanalysis-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+
+  .detail-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: transparent;
+    color: #888;
+    border: 1px solid #333;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 4px 12px;
+    margin-top: 50px;
+    font-family: inherit; line-height: 1;
+  }
+  .detail-btn:active {
+    background: #2a2a2a;
+    color: #aaa;
+  }
+  .btn-icon {
+    height: 1em; width: auto; flex: none;
+  }
 
   .meal-card.has-image { cursor: pointer; }
   .meal-card.has-image:active { background: #222; }
@@ -456,6 +552,14 @@
   <div class="lightbox-meta" id="lightbox-meta" onclick="event.stopPropagation()"></div>
   <div class="lightbox-labels" id="lightbox-labels" style="display:none" onclick="event.stopPropagation()">
     <button class="lbl-btn upload" onclick="triggerUpload(event)">换图</button>
+    <button class="lbl-btn" onclick="toggleReanalysis()"><svg height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><title>Gemini</title><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="#3186FF"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#gemini-0)"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#gemini-1)"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#gemini-2)"></path><defs><linearGradient gradientUnits="userSpaceOnUse" id="gemini-0" x1="7" x2="11" y1="15.5" y2="12"><stop stop-color="#08B962"></stop><stop offset="1" stop-color="#08B962" stop-opacity="0"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id="gemini-1" x1="8" x2="11.5" y1="5.5" y2="11"><stop stop-color="#F94543"></stop><stop offset="1" stop-color="#F94543" stop-opacity="0"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id="gemini-2" x1="3.5" x2="17.5" y1="13.5" y2="12"><stop stop-color="#FABC12"></stop><stop offset=".46" stop-color="#FABC12" stop-opacity="0"></stop></linearGradient></defs></svg>描述细节</button>
+    <button class="lbl-btn" style="color:#ff6b6b;border-color:#ff6b6b33;" onclick="deleteRecord()">删除</button>
+  </div>
+  <div class="lightbox-reanalysis" id="lightbox-reanalysis" onclick="event.stopPropagation()">
+    <textarea class="reanalysis-textarea" id="reanalysis-textarea" placeholder="补充细节，例如：这是大份约300g、还有芝士没拍到..." onkeydown="handleReanalysisKeydown(event)"></textarea>
+    <div class="reanalysis-hint">Ctrl + Enter 提交</div>
+    <button class="reanalysis-submit" id="reanalysis-submit" onclick="submitReanalysis()">重新分析</button>
+    <div class="reanalysis-error" id="reanalysis-error"></div>
   </div>
 </div>
 
@@ -889,7 +993,7 @@ function mealCard(r) {
   const conf = r.confidence || 'low';
   const src = r.asset_id && r.asset_id.startsWith('manual') ? '手动' : 'Immich';
   const isManual = src === '手动';
-  const time = r.photo_time ? r.photo_time.replace('T',' ').slice(0,16) : '';
+  const time = fmtPhotoTime(r.photo_time);
   const macros = (r.protein_g || r.carbs_g || r.fat_g) ? `
     <div class="macros">
       <span class="p">P ${r.protein_g||0}g</span>
@@ -913,7 +1017,7 @@ function mealCard(r) {
     if (cardSrc) {
       thumb = `<img class="card-thumb" src="${cardSrc}" onclick="event.stopPropagation();openLightboxForRecord('${esc(r.asset_id)}')" loading="lazy" onerror="retryImg(this)">`;
       clickClass = ' has-image';
-      clickAttr = ` onclick="openLightboxForRecord('${esc(r.asset_id)}')" data-asset-id="${esc(r.asset_id)}" data-img-src="${esc(lightboxSrc)}" data-meal="${esc(r.meal)}" data-user-label="${esc(r.user_label||'')}"`;
+      clickAttr = ` onclick="openLightboxForRecord('${esc(r.asset_id)}')" data-asset-id="${esc(r.asset_id)}" data-img-src="${esc(lightboxSrc)}" data-meal="${esc(r.meal)}" data-photo-time="${esc(r.photo_time||'')}" data-user-label="${esc(r.user_label||'')}"`;
     }
   }
 
@@ -926,9 +1030,29 @@ function mealCard(r) {
         <div class="meal-meta">${time} <span class="source">· ${src}</span></div>
         ${macros}
       </div>
-      <div class="meal-cals">${r.calories || 0}<small> kcal</small></div>
+      <div class="meal-right">
+        <div class="meal-cals">${r.calories || 0}<small> kcal</small></div>
+        <button class="detail-btn" onclick="event.stopPropagation();openReanalysisForCard('${esc(r.asset_id)}')"><img src="/icons/gemini-color.svg" alt="" class="btn-icon">描述细节</button>
+      </div>
     </div>
   `;
+}
+
+function fmtPhotoTime(isoStr) {
+  if (!isoStr) return '';
+  const s = isoStr.replace('T', ' ');
+  return s.slice(0, 16); // "YYYY-MM-DD HH:MM"
+}
+
+function fmtPhotoTimeDetail(isoStr) {
+  if (!isoStr) return '';
+  const s = isoStr.replace('T', ' ');
+  const base = s.slice(0, 16);
+  const tzMatch = isoStr.match(/([+-]\d{2}:\d{2})$/);
+  if (tzMatch) {
+    return base + ' ' + tzMatch[1];
+  }
+  return base;
 }
 
 function esc(s) {
@@ -943,9 +1067,16 @@ function openLightboxForRecord(assetId) {
 
   currentLightboxAssetId = assetId;
   document.getElementById('lightbox-img').src = card.dataset.imgSrc;
-  document.getElementById('lightbox-meta').textContent = card.dataset.meal || '';
+  const meal = esc(card.dataset.meal || '');
+  const detailTime = fmtPhotoTimeDetail(card.dataset.photoTime);
+  document.getElementById('lightbox-meta').innerHTML = meal + (detailTime ? '<br>' + detailTime : '');
 
   document.getElementById('lightbox-labels').style.display = 'flex';
+
+  // Reset reanalysis UI
+  document.getElementById('lightbox-reanalysis').classList.remove('active');
+  document.getElementById('reanalysis-textarea').value = '';
+  document.getElementById('reanalysis-error').textContent = '';
 
   document.getElementById('lightbox').style.display = 'flex';
 }
@@ -954,6 +1085,7 @@ function closeLightbox() {
   document.getElementById('lightbox').style.display = 'none';
   document.getElementById('lightbox-img').src = '';
   document.getElementById('lightbox-labels').style.display = 'none';
+  document.getElementById('lightbox-reanalysis').classList.remove('active');
   currentLightboxAssetId = '';
 }
 
@@ -961,6 +1093,121 @@ function triggerUpload(e) {
   e.stopPropagation();
   if (!currentLightboxAssetId) return;
   document.getElementById('upload-input').click();
+}
+
+function openReanalysisForCard(assetId) {
+  openLightboxForRecord(assetId);
+  toggleReanalysis();
+}
+
+function toggleReanalysis() {
+  const panel = document.getElementById('lightbox-reanalysis');
+  const isActive = panel.classList.contains('active');
+  if (isActive) {
+    panel.classList.remove('active');
+  } else {
+    panel.classList.add('active');
+    setTimeout(() => document.getElementById('reanalysis-textarea').focus(), 50);
+  }
+}
+
+function handleReanalysisKeydown(e) {
+  if (e.ctrlKey && e.key === 'Enter') {
+    e.preventDefault();
+    submitReanalysis();
+  }
+}
+
+function submitReanalysis() {
+  const notes = document.getElementById('reanalysis-textarea').value.trim();
+  const assetId = currentLightboxAssetId;
+  if (!notes || !assetId) return;
+
+  const btn = document.getElementById('reanalysis-submit');
+  const textarea = document.getElementById('reanalysis-textarea');
+  const errorEl = document.getElementById('reanalysis-error');
+
+  btn.disabled = true;
+  textarea.disabled = true;
+  errorEl.textContent = '';
+  btn.innerHTML = '<span class="reanalysis-spinner"></span>分析中...';
+
+  fetch(`${API}/api/reanalyze`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({asset_id: assetId, notes: notes})
+  })
+  .then(r => {
+    if (!r.ok) {
+      return r.json().then(data => {
+        throw new Error(data.error || `HTTP ${r.status}`);
+      });
+    }
+    return r.json();
+  })
+  .then(data => {
+    if (data.ok && data.record) {
+      // Update lightbox content
+      const rec = data.record;
+      document.getElementById('lightbox-meta').textContent = rec.meal || '';
+
+      // Refresh day view
+      const ds = data.date || currentLoadedDate;
+      cacheDel('day:' + ds);
+      return fetch(`${API}/api/records?date=${ds}`)
+        .then(r => r.json())
+        .then(dayData => {
+          cacheSet('day:' + ds, dayData);
+          renderDay(dayData);
+          // Update lightbox image source if needed
+          const updatedCard = document.querySelector(`.meal-card[data-asset-id="${assetId}"]`);
+          if (updatedCard) {
+            document.getElementById('lightbox-img').src = updatedCard.dataset.imgSrc;
+          }
+          // Hide reanalysis panel
+          document.getElementById('lightbox-reanalysis').classList.remove('active');
+        });
+    }
+  })
+  .catch(err => {
+    errorEl.textContent = '失败: ' + (err.message || '请重试');
+  })
+  .finally(() => {
+    btn.disabled = false;
+    textarea.disabled = false;
+    btn.textContent = '重新分析';
+  });
+}
+
+function deleteRecord() {
+  const assetId = currentLightboxAssetId;
+  if (!assetId) return;
+  if (!confirm('确定要删除这条记录吗？\n删除后该照片不会出现在下次同步中。')) return;
+
+  fetch(`${API}/api/record`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ asset_id: assetId })
+  })
+  .then(r => {
+    if (!r.ok) {
+      return r.json().then(data => { throw new Error(data.error || `HTTP ${r.status}`); });
+    }
+    return r.json();
+  })
+  .then(data => {
+    if (data.ok) {
+      closeLightbox();
+      const ds = data.date || currentLoadedDate;
+      cacheDel('day:' + ds);
+      cacheDel('dates');
+      loadAvailableDates();
+      loadDay(ds);
+    }
+  })
+  .catch(err => {
+    alert('删除失败: ' + (err.message || '请重试'));
+  });
 }
 
 function handleUpload(e) {
