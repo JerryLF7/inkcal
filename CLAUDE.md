@@ -12,7 +12,7 @@ Privacy-first: only photos passing the local food filter are sent to the cloud A
 intake/
 ├── main.py                    # CLI entry point (argparse, 5 subcommands)
 ├── src/
-│   ├── immich_client.py       # Immich REST API client (httpx, pHash matching, EXIF extraction)
+│   ├── immich_client.py       # Immich REST API client (httpx, pHash matching, timezone-aware photo_time formatting)
 │   ├── food_detector.py       # SigLIP2 lazy-load wrapper (auto-loads finetuned-model if present)
 │   └── calorie_analyzer.py    # Gemini-compatible vision API (OpenAI format, JSON structured output, retry)
 ├── web/
@@ -87,6 +87,7 @@ See `references/cli-workflows.md` for full workflow. Key points:
 7. **FRP / slow network**: Over tunneled connections, large thumbnail images (157KB `preview` size) can cause broken images and slow loads. The frontend now requests `size=thumbnail` (7KB) for cards. Rapid date-switching can cause out-of-order API responses — request sequencing (`_loadSeq`) and cross-request abort (`_abortController`) prevent this. All API calls go through `apiFetch()` with 10s timeout + one retry. localStorage cache-first eliminates redundant fetches for revisited dates. A manual refresh button (↻) lets users force-refresh without full browser reload.
 8. **Clipboard/PNG images lack EXIF**: When pasting from clipboard or uploading screenshots, the image is typically PNG with no EXIF metadata. Client-side EXIF parser (JPEG/PNG/WebP) and server-side Pillow both fail, falling back to today's date. The post-upload date picker then lets the user correct the date, and `/api/move-record` re-runs pHash matching on the corrected date. Always upload the original camera JPEG/HEIC when possible — the pipeline relies on EXIF for date/time and for precise ±5 min Immich pHash search windows.
 9. **Restart without venv → upload fails**: Server must start from project root using `venv/bin/python web/server.py` (not system `python`). System Python lacks `pillow-heif`, `google-genai`, and other venv-only dependencies — the server starts but image upload (Gemini analysis, HEIC decoding) silently fails with "上传失败，请检查网络连接". Always check you're in the intake project's venv before restarting.
+10. **Timezone — use Immich `exifInfo`, not thumbnail EXIF**: Immich already parses EXIF server-side into `exifInfo.timeZone` and `exifInfo.dateTimeOriginal`. Do NOT re-download thumbnails to parse EXIF tags for timezone conversion — thumbnails may have EXIF stripped during processing, causing incorrect `+00:00` timestamps. The pipeline uses `format_photo_time()` which reads `asset["exifInfo"]` directly. Note: Immich's `timeZone` format is `UTC+8` (not `+08:00`), and some photos return IANA names like `Asia/Shanghai` — the parser handles both and falls back to HKT for unknown formats.
 
 ## Related Project: food-classifier
 
