@@ -1,5 +1,7 @@
 """
 Immich API client — fetch assets, match by perceptual hash.
+Timezone handling: use Immich exifInfo for pipeline photos; extract_exif_time
+for manual uploads only (non-Immich images).
 """
 
 import io
@@ -184,6 +186,7 @@ class ImmichClient:
     @staticmethod
     def extract_exif_time(image_bytes: bytes) -> str | None:
         """Extract DateTimeOriginal + OffsetTimeOriginal from EXIF.
+        Used for manual uploads only — pipeline photos use Immich exifInfo.
         Returns ISO string with timezone if offset is present, else naive string.
         """
         try:
