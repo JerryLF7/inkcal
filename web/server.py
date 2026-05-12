@@ -2,6 +2,7 @@
 import io
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -10,6 +11,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
 from time import monotonic
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -139,6 +142,22 @@ def _summarize(records: list[dict]) -> dict:
         "carbs": sum(r.get("carbs_g", 0) for r in records),
         "fat": sum(r.get("fat_g", 0) for r in records),
     }
+
+
+IGNORED_PATH = DATA_DIR / "ignored.json"
+
+
+def _load_ignored() -> set[str]:
+    if not IGNORED_PATH.exists():
+        return set()
+    try:
+        return set(json.loads(IGNORED_PATH.read_text()))
+    except (json.JSONDecodeError, FileNotFoundError):
+        return set()
+
+
+def _save_ignored(ignored: set[str]):
+    IGNORED_PATH.write_text(json.dumps(sorted(ignored), ensure_ascii=False, indent=2))
 
 
 @app.route("/")
@@ -457,10 +476,15 @@ def api_move_record():
         except Exception:
             pass
 
-    # Update photo_time to match new date
+    # Update photo_time to match new date while preserving original timezone
     old_dt = datetime.fromisoformat(found.get("photo_time", "")) if found.get("photo_time") else None
     if old_dt:
-        new_dt_str = f"{new_date}T{old_dt.strftime('%H:%M:%S')}+08:00"
+        if old_dt.tzinfo is None:
+            new_dt_str = f"{new_date}T{old_dt.strftime('%H:%M:%S')}"
+        else:
+            tz_offset = old_dt.strftime('%z')  # e.g. +0800
+            tz_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}"
+            new_dt_str = f"{new_date}T{old_dt.strftime('%H:%M:%S')}{tz_formatted}"
         found["photo_time"] = new_dt_str
 
     # Apply Immich match if found
@@ -482,6 +506,169 @@ def api_move_record():
 
     return jsonify({"ok": True, "asset_id": asset_id, "old_date": old_date, "new_date": new_date,
                     "immich_matched": bool(immich_matched)})
+
+
+@app.route("/api/record", methods=["DELETE"])
+def api_delete_record():
+    data = request.get_json() or {}
+    asset_id = data.get("asset_id", "")
+    if not asset_id:
+        return jsonify({"error": "missing asset_id"}), 400
+
+    found = False
+    date_str = None
+    for f in sorted(DATA_DIR.glob("*.json")):
+        if not DATE_RE.fullmatch(f.stem):
+            continue
+        records = _load_date(f.stem)
+        for i, r in enumerate(records):
+            if r.get("asset_id") == asset_id:
+                date_str = f.stem
+                replacement_image = r.get("replacement_image", "")
+                records.pop(i)
+                _save_date(f.stem, records)
+                if replacement_image:
+                    try:
+                        Path(replacement_image).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                found = True
+                break
+        if found:
+            break
+
+    if not found:
+        return jsonify({"error": "record not found"}), 404
+
+    # Add Immich assets to ignore list so cron won't re-process them
+    if asset_id and not asset_id.startswith("manual-"):
+        ignored = _load_ignored()
+        ignored.add(asset_id)
+        _save_ignored(ignored)
+
+    return jsonify({"ok": True, "date": date_str})
+
+
+@app.route("/api/reanalyze", methods=["POST"])
+def api_reanalyze():
+    """Re-analyze a food photo with user-provided notes."""
+    data = request.get_json() or {}
+    asset_id = data.get("asset_id", "")
+    notes = (data.get("notes", "") or "").strip()
+
+    if not asset_id:
+        return jsonify({"error": "missing asset_id"}), 400
+    if not notes:
+        return jsonify({"error": "missing notes"}), 400
+
+    # Find record across all date files
+    found = None
+    date_str = None
+    for f in sorted(DATA_DIR.glob("*.json")):
+        if not DATE_RE.fullmatch(f.stem):
+            continue
+        records = _load_date(f.stem)
+        for r in records:
+            if r.get("asset_id") == asset_id:
+                found = r
+                date_str = f.stem
+                break
+        if found:
+            break
+
+    if not found:
+        return jsonify({"error": "record not found"}), 404
+
+    # Retrieve image bytes
+    image_bytes = None
+    replacement_image = found.get("replacement_image", "")
+
+    if replacement_image and Path(replacement_image).is_file():
+        try:
+            image_bytes = Path(replacement_image).read_bytes()
+        except Exception as e:
+            logger.error("Failed to read replacement image: %s", e)
+
+    if image_bytes is None and found.get("thumbnail_url"):
+        immich_url = os.getenv("IMMICH_URL", "").rstrip("/")
+        thumbnail_url = found["thumbnail_url"]
+        if immich_url and thumbnail_url.startswith(immich_url + "/"):
+            try:
+                r = httpx.get(thumbnail_url, headers=_immich_headers(), timeout=15)
+                if r.status_code == 200:
+                    image_bytes = r.content
+                else:
+                    logger.error("Immich returned %d for asset %s", r.status_code, asset_id)
+            except Exception as e:
+                logger.error("Failed to fetch from Immich: %s", e)
+
+    if image_bytes is None:
+        return jsonify({"error": "image unavailable"}), 502
+
+    # Verify image validity
+    try:
+        Image.open(io.BytesIO(image_bytes)).verify()
+    except Exception:
+        return jsonify({"error": "invalid image data"}), 502
+
+    # Call Gemini reanalysis
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
+    if not gemini_key:
+        return jsonify({"error": "GEMINI_API_KEY not configured"}), 500
+
+    from src.calorie_analyzer import CalorieAnalyzer
+
+    analyzer = CalorieAnalyzer(
+        gemini_key,
+        base_url=os.getenv("GEMINI_BASE_URL"),
+        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
+    )
+
+    current_result = {
+        "meal": found.get("meal", "unknown"),
+        "calories": found.get("calories", 0),
+        "protein_g": found.get("protein_g", 0),
+        "carbs_g": found.get("carbs_g", 0),
+        "fat_g": found.get("fat_g", 0),
+        "confidence": found.get("confidence", "low"),
+    }
+
+    result = analyzer.reanalyze(image_bytes, current_result, notes)
+    analyzer.close()
+
+    # Preserve current values in history before overwriting
+    history_entry = {
+        "meal": found.get("meal"),
+        "calories": found.get("calories"),
+        "protein_g": found.get("protein_g"),
+        "carbs_g": found.get("carbs_g"),
+        "fat_g": found.get("fat_g"),
+        "confidence": found.get("confidence"),
+        "notes": notes,
+        "reanalyzed_at": datetime.now(HKT).isoformat(),
+    }
+
+    if "reanalysis_history" not in found:
+        found["reanalysis_history"] = []
+    found["reanalysis_history"].append(history_entry)
+
+    # Update record with new values
+    found["meal"] = result.get("meal", found["meal"])
+    found["calories"] = result.get("calories", found["calories"])
+    found["protein_g"] = result.get("protein_g", found["protein_g"])
+    found["carbs_g"] = result.get("carbs_g", found["carbs_g"])
+    found["fat_g"] = result.get("fat_g", found["fat_g"])
+    found["confidence"] = result.get("confidence", found["confidence"])
+    found["reanalysis_notes"] = notes
+    found["reanalyzed_at"] = datetime.now(HKT).isoformat()
+
+    _save_date(date_str, records)
+
+    return jsonify({
+        "ok": True,
+        "record": found,
+        "date": date_str,
+    })
 
 
 @app.route("/api/local-image")

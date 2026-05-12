@@ -56,6 +56,18 @@ def already_processed(date_str: str) -> set[str]:
         return set()
 
 
+IGNORED_PATH = DATA_DIR / "ignored.json"
+
+
+def load_ignored() -> set[str]:
+    if not IGNORED_PATH.exists():
+        return set()
+    try:
+        return set(json.loads(IGNORED_PATH.read_text()))
+    except (json.JSONDecodeError, FileNotFoundError):
+        return set()
+
+
 def append_log(date_str: str, asset_id: str, photo_time: str,
                thumbnail_url: str, result: dict):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -93,7 +105,7 @@ def load_records(date_str: str) -> list[dict]:
 # ── subcommand: run ──────────────────────────────────────────────────
 
 def cmd_run(args):
-    from src.immich_client import ImmichClient
+    from src.immich_client import ImmichClient, format_photo_time
     from src.food_detector import FoodDetector
     from src.calorie_analyzer import CalorieAnalyzer
 
@@ -129,20 +141,25 @@ def cmd_run(args):
     logger.info("%s 共 %d 张照片", date_str, len(assets))
 
     processed = already_processed(date_str)
-    new_assets = [a for a in assets if a["id"] not in processed]
-    logger.info("未处理: %d 张", len(new_assets))
+    ignored = load_ignored()
+    new_assets = [a for a in assets if a["id"] not in processed and a["id"] not in ignored]
+    skipped_ignored = len([a for a in assets if a["id"] in ignored])
+    logger.info("未处理: %d 张 (忽略 %d 张)", len(new_assets), skipped_ignored)
 
     food_records = []
     for asset in new_assets:
         aid = asset["id"]
-        photo_time = asset.get("exifInfo", {}).get("dateTimeOriginal", "unknown")
-        logger.info("  🔍 检测 [%s...] (拍摄于 %s)", aid[:8], photo_time)
+        exif = asset.get("exifInfo", {})
+        raw_photo_time = exif.get("dateTimeOriginal", "")
+        exif_tz = exif.get("timeZone")
+        photo_time = format_photo_time(raw_photo_time, exif_tz)
 
         try:
             thumb = immich.download_thumbnail(aid)
         except Exception as e:
             logger.error("  下载缩略图失败: %s", e)
             continue
+        logger.info("  🔍 检测 [%s...] (拍摄于 %s)", aid[:8], photo_time)
 
         if not detector.is_food(thumb):
             logger.info("  ❌ 不是食物，跳过")
@@ -222,8 +239,18 @@ def cmd_view(args):
     rows = []
     daily_totals = {}
     for r in all_records:
-        time_str = r.get("photo_time", "").replace("T", " ")[:16]
-        if not time_str:
+        pt = r.get("photo_time", "")
+        if pt:
+            time_str = pt.replace("T", " ")
+            if len(time_str) > 16 and time_str[16] == ':':
+                time_str = time_str[:19]  # include seconds
+                # append timezone if present
+                tz_idx = pt.rfind('+') if '+' in pt else pt.rfind('-')
+                if tz_idx > 10:
+                    time_str += ' ' + pt[tz_idx:]
+            else:
+                time_str = time_str[:16]
+        else:
             time_str = r.get("analyzed_at", "")[:16]
         rows.append([
             r.get("meal", "?")[:20],
