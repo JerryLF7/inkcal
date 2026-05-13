@@ -1,4 +1,4 @@
-"""intake Web — mobile-friendly meal records viewer."""
+"""inkcal Web — mobile-friendly meal records viewer."""
 import io
 import ipaddress
 import json
@@ -23,12 +23,14 @@ from flask import Flask, jsonify, request, send_from_directory, Response, sessio
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+from src import db
+
 app = Flask(__name__, static_folder="static", static_url_path="")
-app.secret_key = os.getenv("INTAKE_SECRET", secrets.token_hex(32))
+app.secret_key = os.getenv("INKCAL_SECRET", secrets.token_hex(32))
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.getenv("INTAKE_HTTPS", "0") == "1",
+    SESSION_COOKIE_SECURE=os.getenv("INKCAL_HTTPS", "0") == "1",
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
     MAX_CONTENT_LENGTH=16 * 1024 * 1024,
 )
@@ -36,15 +38,18 @@ app.config.update(
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 HKT = timezone(timedelta(hours=8))
 
-INTAKE_USER = os.getenv("INTAKE_USER", "")
-INTAKE_PASS = os.getenv("INTAKE_PASS", "")
+# Initialize database on startup
+db.init_db(DATA_DIR / "inkcal.db")
 
-if bool(INTAKE_USER) != bool(INTAKE_PASS):
+INKCAL_USER = os.getenv("INKCAL_USER", "")
+INKCAL_PASS = os.getenv("INKCAL_PASS", "")
+
+if bool(INKCAL_USER) != bool(INKCAL_PASS):
     raise RuntimeError(
-        "INTAKE_USER and INTAKE_PASS must be set together, or both left empty to disable auth."
+        "INKCAL_USER and INKCAL_PASS must be set together, or both left empty to disable auth."
     )
 
-AUTH_REQUIRED = bool(INTAKE_USER)
+AUTH_REQUIRED = bool(INKCAL_USER)
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ALLOWED_IMAGE_MIME = {"image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"}
 
@@ -104,60 +109,24 @@ def _immich_headers() -> dict:
 
 
 def _load_date(date_str: str) -> list[dict]:
-    path = DATA_DIR / f"{date_str}.json"
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, FileNotFoundError):
-        return []
-
-
-def _save_date(date_str: str, records: list[dict]):
-    path = DATA_DIR / f"{date_str}.json"
-    path.write_text(json.dumps(records, ensure_ascii=False, indent=2))
+    return db.get_records_by_date(date_str)
 
 
 def _available_dates() -> list[str]:
-    if not DATA_DIR.exists():
-        return []
-    dates = []
-    for f in DATA_DIR.glob("*.json"):
-        if f.stem.count("-") != 2:
-            continue
-        try:
-            records = json.loads(f.read_text())
-            if records:  # only count dates with actual records
-                dates.append(f.stem)
-        except (json.JSONDecodeError, FileNotFoundError):
-            pass
-    return sorted(dates, reverse=True)
+    return db.get_available_dates()
 
 
 def _summarize(records: list[dict]) -> dict:
-    return {
-        "meals": len(records),
-        "calories": sum(r.get("calories", 0) for r in records),
-        "protein": sum(r.get("protein_g", 0) for r in records),
-        "carbs": sum(r.get("carbs_g", 0) for r in records),
-        "fat": sum(r.get("fat_g", 0) for r in records),
-    }
-
-
-IGNORED_PATH = DATA_DIR / "ignored.json"
+    return db.summarize_records(records)
 
 
 def _load_ignored() -> set[str]:
-    if not IGNORED_PATH.exists():
-        return set()
-    try:
-        return set(json.loads(IGNORED_PATH.read_text()))
-    except (json.JSONDecodeError, FileNotFoundError):
-        return set()
+    return db.get_ignored_assets()
 
 
 def _save_ignored(ignored: set[str]):
-    IGNORED_PATH.write_text(json.dumps(sorted(ignored), ensure_ascii=False, indent=2))
+    for asset_id in ignored:
+        db.add_ignored_asset(asset_id)
 
 
 @app.route("/")
@@ -246,18 +215,28 @@ def api_week():
 @app.route("/api/image")
 def api_image():
     url = request.args.get("url", "")
-    immich_url = os.getenv("IMMICH_URL", "").rstrip("/")
     if not url:
         return "missing url", 400
-    if not immich_url:
-        return "immich not configured", 500
-    if not url.startswith(immich_url + "/"):
-        return "forbidden", 403
-    try:
-        r = httpx.get(url, headers=_immich_headers(), timeout=15)
-        return Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
-    except Exception:
-        return "image fetch failed", 502
+
+    immich_url = os.getenv("IMMICH_URL", "").rstrip("/")
+    photoprism_url = os.getenv("PHOTOPRISM_URL", "").rstrip("/")
+
+    if immich_url and url.startswith(immich_url + "/"):
+        try:
+            r = httpx.get(url, headers=_immich_headers(), timeout=15)
+            return Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
+        except Exception:
+            return "image fetch failed", 502
+
+    if photoprism_url and url.startswith(photoprism_url + "/"):
+        # PhotoPrism thumbnails are cookie-free; token is already in the URL
+        try:
+            r = httpx.get(url, timeout=15)
+            return Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
+        except Exception:
+            return "image fetch failed", 502
+
+    return "forbidden", 403
 
 
 
@@ -287,16 +266,16 @@ def api_upload_image():
         immich.close()
 
         if matched:
-            records = _load_date(date_str)
-            for r in records:
-                if r.get("asset_id") == asset_id:
-                    r["thumbnail_url"] = matched["thumbnail_url"]
-                    r["asset_id"] = matched["id"]
-                    r["photo_time"] = matched.get("photo_time", r.get("photo_time", ""))
-                    r.pop("replacement_image", None)
-                    _save_date(date_str, records)
-                    return jsonify({"ok": True, "matched": True, "asset_id": matched["id"],
-                                    "thumbnail_url": matched["thumbnail_url"]})
+            record = db.get_record_by_asset_id(asset_id)
+            if record:
+                db.update_record(asset_id, {
+                    "thumbnail_url": matched["thumbnail_url"],
+                    "asset_id": matched["id"],
+                    "photo_time": matched.get("photo_time", record.get("photo_time", "")),
+                    "replacement_image": None,
+                })
+                return jsonify({"ok": True, "matched": True, "asset_id": matched["id"],
+                                "thumbnail_url": matched["thumbnail_url"]})
 
     img_dir = DATA_DIR / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
@@ -305,12 +284,10 @@ def api_upload_image():
     filepath = img_dir / filename
     filepath.write_bytes(image_bytes)
 
-    records = _load_date(date_str)
-    for r in records:
-        if r.get("asset_id") == asset_id:
-            r["replacement_image"] = str(filepath)
-            _save_date(date_str, records)
-            return jsonify({"ok": True, "matched": False, "replacement_image": str(filepath)})
+    record = db.get_record_by_asset_id(asset_id)
+    if record:
+        db.update_record(asset_id, {"replacement_image": str(filepath)})
+        return jsonify({"ok": True, "matched": False, "replacement_image": str(filepath)})
     return jsonify({"error": "record not found"}), 404
 
 
@@ -423,11 +400,192 @@ def api_manual_upload():
     if image_path:
         record["replacement_image"] = image_path
 
-    records = _load_date(date_str)
-    records.append(record)
-    _save_date(date_str, records)
+    db.insert_record(record)
 
     return jsonify({"ok": True, "record": record, "matched": bool(matched), "date": date_str, "_date_source": _source, "_date_received": request.args.get("date", "") or request.form.get("date", "")})
+
+
+def _resolve_sources() -> list[str]:
+    """Return list of enabled photo sources from the SOURCE env var."""
+    source_str = os.getenv("SOURCE", "").strip().lower()
+    if source_str:
+        return [s.strip() for s in source_str.split(",") if s.strip()]
+    # Backwards-compat: auto-enable Immich if key exists
+    if os.getenv("IMMICH_API_KEY"):
+        return ["immich"]
+    return []
+
+
+@app.route("/api/album-photos")
+def api_album_photos():
+    """Return unprocessed album photos grouped by date, paginated.
+
+    Query params:
+      cursor -- YYYY-MM-DD start date (default: today)
+      days   -- how many days to look back (default: 7)
+    """
+    cursor_str = request.args.get("cursor", "")
+    days_str = request.args.get("days", "7")
+
+    if cursor_str and not _valid_date(cursor_str):
+        return jsonify({"error": "invalid cursor"}), 400
+    try:
+        days = int(days_str)
+        if days < 1 or days > 30:
+            days = 7
+    except ValueError:
+        days = 7
+
+    cursor = datetime.strptime(cursor_str or datetime.now(HKT).strftime("%Y-%m-%d"), "%Y-%m-%d")
+    sources = _resolve_sources()
+    ignored = _load_ignored()
+
+    dates_result = []
+    for i in range(days):
+        date_obj = cursor - timedelta(days=i)
+        date_str = date_obj.strftime("%Y-%m-%d")
+        target_date = date_obj.replace(tzinfo=HKT)
+        processed = db.get_processed_asset_ids(date_str)
+
+        day_photos = []
+        for source in sources:
+            if source == "immich":
+                immich_url = os.getenv("IMMICH_URL", "")
+                immich_key = os.getenv("IMMICH_API_KEY", "")
+                if not (immich_url and immich_key):
+                    continue
+                try:
+                    from src.immich_client import ImmichClient, format_photo_time
+                    client = ImmichClient(immich_url, immich_key)
+                    assets = client.get_date_assets(target_date)
+                    for a in assets:
+                        if a["id"] in processed or a["id"] in ignored:
+                            continue
+                        exif = a.get("exifInfo", {})
+                        raw_photo_time = exif.get("dateTimeOriginal", "")
+                        exif_tz = exif.get("timeZone")
+                        photo_time = format_photo_time(raw_photo_time, exif_tz)
+                        day_photos.append({
+                            "asset_id": a["id"],
+                            "thumbnail_url": client.get_thumbnail_url(a["id"]),
+                            "photo_time": photo_time,
+                            "source": "immich",
+                        })
+                    client.close()
+                except Exception as e:
+                    logger.error("Album photos [immich] failed: %s", e)
+            elif source == "photoprism":
+                photoprism_url = os.getenv("PHOTOPRISM_URL", "")
+                photoprism_key = os.getenv("PHOTOPRISM_API_KEY", "")
+                if not (photoprism_url and photoprism_key):
+                    continue
+                try:
+                    from src.photoprism_client import PhotoPrismClient
+                    client = PhotoPrismClient(photoprism_url, photoprism_key)
+                    assets = client.get_date_assets(target_date)
+                    for a in assets:
+                        if a["id"] in processed or a["id"] in ignored:
+                            continue
+                        day_photos.append({
+                            "asset_id": a["id"],
+                            "thumbnail_url": client.get_thumbnail_url(a["hash"], size="tile_500"),
+                            "photo_time": a["photo_time"],
+                            "source": "photoprism",
+                        })
+                    client.close()
+                except Exception as e:
+                    logger.error("Album photos [photoprism] failed: %s", e)
+
+        if day_photos:
+            dates_result.append({"date": date_str, "photos": day_photos})
+
+    next_cursor = (cursor - timedelta(days=days)).strftime("%Y-%m-%d")
+    return jsonify({"dates": dates_result, "next_cursor": next_cursor})
+
+
+@app.route("/api/analyze-album-photo", methods=["POST"])
+def api_analyze_album_photo():
+    """Download album original, run Gemini (skip food detection), save record."""
+    data = request.get_json() or {}
+    asset_id = data.get("asset_id", "")
+    source = data.get("source", "")
+    date_str = data.get("date", "")
+    thumbnail_url = data.get("thumbnail_url", "")
+    photo_time = data.get("photo_time", "")
+
+    if not asset_id or not source or not _valid_date(date_str):
+        return jsonify({"error": "missing or invalid params"}), 400
+
+    # Race-condition guard
+    if db.get_record_by_asset_id(asset_id):
+        return jsonify({"error": "already processed"}), 409
+
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
+    if not gemini_key:
+        return jsonify({"error": "GEMINI_API_KEY not configured"}), 500
+
+    # Download original
+    image_bytes = None
+    if source == "immich":
+        immich_url = os.getenv("IMMICH_URL", "")
+        immich_key = os.getenv("IMMICH_API_KEY", "")
+        if not (immich_url and immich_key):
+            return jsonify({"error": "immich not configured"}), 500
+        try:
+            from src.immich_client import ImmichClient
+            client = ImmichClient(immich_url, immich_key)
+            image_bytes = client.download_original(asset_id)
+            client.close()
+        except Exception as e:
+            logger.error("Download original [immich] failed: %s", e)
+            return jsonify({"error": "download failed"}), 500
+    elif source == "photoprism":
+        photoprism_url = os.getenv("PHOTOPRISM_URL", "")
+        photoprism_key = os.getenv("PHOTOPRISM_API_KEY", "")
+        if not (photoprism_url and photoprism_key):
+            return jsonify({"error": "photoprism not configured"}), 500
+        try:
+            from src.photoprism_client import PhotoPrismClient
+            client = PhotoPrismClient(photoprism_url, photoprism_key)
+            image_bytes = client.download_original(asset_id)
+            client.close()
+        except Exception as e:
+            logger.error("Download original [photoprism] failed: %s", e)
+            return jsonify({"error": "download failed"}), 500
+    else:
+        return jsonify({"error": "unknown source"}), 400
+
+    if not image_bytes:
+        return jsonify({"error": "download failed"}), 500
+
+    # Gemini analysis (skip food detection)
+    from src.calorie_analyzer import CalorieAnalyzer
+    analyzer = CalorieAnalyzer(
+        gemini_key,
+        base_url=os.getenv("GEMINI_BASE_URL"),
+        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
+    )
+    result = analyzer.analyze(image_bytes)
+    analyzer.close()
+
+    if result.get("meal") in ("not real food", "unknown"):
+        return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
+
+    record = {
+        "asset_id": asset_id,
+        "photo_time": photo_time,
+        "thumbnail_url": thumbnail_url,
+        "meal": result.get("meal", "unknown"),
+        "calories": result.get("calories", 0),
+        "protein_g": result.get("protein_g", 0),
+        "carbs_g": result.get("carbs_g", 0),
+        "fat_g": result.get("fat_g", 0),
+        "confidence": result.get("confidence", "low"),
+        "analyzed_at": datetime.now(HKT).isoformat(),
+    }
+    db.insert_record(record)
+
+    return jsonify({"ok": True, "record": record, "date": date_str})
 
 
 @app.route("/api/move-record", methods=["POST"])
@@ -439,29 +597,18 @@ def api_move_record():
     if not asset_id or not _valid_date(new_date):
         return jsonify({"error": "missing or invalid params"}), 400
 
-    # Find and remove the record from its current date
-    found = None
-    old_date = None
-    for f in sorted(DATA_DIR.glob("*.json")):
-        if not DATE_RE.fullmatch(f.stem):
-            continue
-        records = _load_date(f.stem)
-        for i, r in enumerate(records):
-            if r.get("asset_id") == asset_id:
-                found = r
-                old_date = f.stem
-                records.pop(i)
-                _save_date(f.stem, records)
-                break
-        if found:
-            break
-
-    if not found:
+    record = db.get_record_by_asset_id(asset_id)
+    if not record:
         return jsonify({"error": "record not found"}), 404
+
+    # Get old date from database
+    conn = db._get_conn()
+    row = conn.execute("SELECT date FROM records WHERE asset_id = ?", (asset_id,)).fetchone()
+    old_date = row["date"] if row else None
 
     # Re-try Immich pHash matching on the new date
     immich_matched = None
-    replacement_image = found.get("replacement_image", "")
+    replacement_image = record.get("replacement_image", "")
     if replacement_image and (DATA_DIR / "images").resolve() in Path(replacement_image).resolve().parents:
         try:
             image_bytes = Path(replacement_image).read_bytes()
@@ -469,42 +616,28 @@ def api_move_record():
             if immich_url:
                 from src.immich_client import ImmichClient
                 immich = ImmichClient(immich_url, os.getenv("IMMICH_API_KEY", ""))
-                # Try with EXIF time first, then full date
                 exif_time = ImmichClient.extract_exif_time(image_bytes)
                 immich_matched = immich.match_by_phash(new_date, image_bytes, time_window=exif_time)
                 immich.close()
         except Exception:
             pass
 
-    # Update photo_time to match new date while preserving original timezone
-    old_dt = datetime.fromisoformat(found.get("photo_time", "")) if found.get("photo_time") else None
-    if old_dt:
-        if old_dt.tzinfo is None:
-            new_dt_str = f"{new_date}T{old_dt.strftime('%H:%M:%S')}"
-        else:
-            tz_offset = old_dt.strftime('%z')  # e.g. +0800
-            tz_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}"
-            new_dt_str = f"{new_date}T{old_dt.strftime('%H:%M:%S')}{tz_formatted}"
-        found["photo_time"] = new_dt_str
-
-    # Apply Immich match if found
+    # Build updates for move_record
+    updates = {}
     if immich_matched:
-        found["asset_id"] = immich_matched["id"]
-        found["thumbnail_url"] = immich_matched["thumbnail_url"]
-        found["photo_time"] = immich_matched.get("photo_time", found.get("photo_time", ""))
-        found.pop("replacement_image", None)
-        # Remove local image file
+        updates["asset_id"] = immich_matched["id"]
+        updates["thumbnail_url"] = immich_matched["thumbnail_url"]
+        updates["photo_time"] = immich_matched.get("photo_time", f"{new_date}T00:00:00+08:00")
+        updates["replacement_image"] = None
         try:
             Path(replacement_image).unlink(missing_ok=True)
         except Exception:
             pass
 
-    # Add to new date
-    new_records = _load_date(new_date)
-    new_records.append(found)
-    _save_date(new_date, new_records)
+    db.move_record(asset_id, new_date, updates)
 
-    return jsonify({"ok": True, "asset_id": asset_id, "old_date": old_date, "new_date": new_date,
+    return jsonify({"ok": True, "asset_id": immich_matched["id"] if immich_matched else asset_id,
+                    "old_date": old_date, "new_date": new_date,
                     "immich_matched": bool(immich_matched)})
 
 
@@ -515,38 +648,22 @@ def api_delete_record():
     if not asset_id:
         return jsonify({"error": "missing asset_id"}), 400
 
-    found = False
-    date_str = None
-    for f in sorted(DATA_DIR.glob("*.json")):
-        if not DATE_RE.fullmatch(f.stem):
-            continue
-        records = _load_date(f.stem)
-        for i, r in enumerate(records):
-            if r.get("asset_id") == asset_id:
-                date_str = f.stem
-                replacement_image = r.get("replacement_image", "")
-                records.pop(i)
-                _save_date(f.stem, records)
-                if replacement_image:
-                    try:
-                        Path(replacement_image).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                found = True
-                break
-        if found:
-            break
-
-    if not found:
+    record = db.delete_record(asset_id)
+    if record is None:
         return jsonify({"error": "record not found"}), 404
+
+    replacement_image = record.get("replacement_image", "")
+    if replacement_image:
+        try:
+            Path(replacement_image).unlink(missing_ok=True)
+        except Exception:
+            pass
 
     # Add Immich assets to ignore list so cron won't re-process them
     if asset_id and not asset_id.startswith("manual-"):
-        ignored = _load_ignored()
-        ignored.add(asset_id)
-        _save_ignored(ignored)
+        db.add_ignored_asset(asset_id)
 
-    return jsonify({"ok": True, "date": date_str})
+    return jsonify({"ok": True})
 
 
 @app.route("/api/reanalyze", methods=["POST"])
@@ -561,21 +678,7 @@ def api_reanalyze():
     if not notes:
         return jsonify({"error": "missing notes"}), 400
 
-    # Find record across all date files
-    found = None
-    date_str = None
-    for f in sorted(DATA_DIR.glob("*.json")):
-        if not DATE_RE.fullmatch(f.stem):
-            continue
-        records = _load_date(f.stem)
-        for r in records:
-            if r.get("asset_id") == asset_id:
-                found = r
-                date_str = f.stem
-                break
-        if found:
-            break
-
+    found = db.get_record_by_asset_id(asset_id)
     if not found:
         return jsonify({"error": "record not found"}), 404
 
@@ -590,8 +693,10 @@ def api_reanalyze():
             logger.error("Failed to read replacement image: %s", e)
 
     if image_bytes is None and found.get("thumbnail_url"):
-        immich_url = os.getenv("IMMICH_URL", "").rstrip("/")
         thumbnail_url = found["thumbnail_url"]
+        immich_url = os.getenv("IMMICH_URL", "").rstrip("/")
+        photoprism_url = os.getenv("PHOTOPRISM_URL", "").rstrip("/")
+
         if immich_url and thumbnail_url.startswith(immich_url + "/"):
             try:
                 r = httpx.get(thumbnail_url, headers=_immich_headers(), timeout=15)
@@ -601,6 +706,16 @@ def api_reanalyze():
                     logger.error("Immich returned %d for asset %s", r.status_code, asset_id)
             except Exception as e:
                 logger.error("Failed to fetch from Immich: %s", e)
+        elif photoprism_url and thumbnail_url.startswith(photoprism_url + "/"):
+            # PhotoPrism thumbnail URLs already contain the token in the path
+            try:
+                r = httpx.get(thumbnail_url, timeout=15)
+                if r.status_code == 200:
+                    image_bytes = r.content
+                else:
+                    logger.error("PhotoPrism returned %d for asset %s", r.status_code, asset_id)
+            except Exception as e:
+                logger.error("Failed to fetch from PhotoPrism: %s", e)
 
     if image_bytes is None:
         return jsonify({"error": "image unavailable"}), 502
@@ -647,27 +762,25 @@ def api_reanalyze():
         "notes": notes,
         "reanalyzed_at": datetime.now(HKT).isoformat(),
     }
-
-    if "reanalysis_history" not in found:
-        found["reanalysis_history"] = []
-    found["reanalysis_history"].append(history_entry)
+    db.append_reanalysis_history(asset_id, history_entry)
 
     # Update record with new values
-    found["meal"] = result.get("meal", found["meal"])
-    found["calories"] = result.get("calories", found["calories"])
-    found["protein_g"] = result.get("protein_g", found["protein_g"])
-    found["carbs_g"] = result.get("carbs_g", found["carbs_g"])
-    found["fat_g"] = result.get("fat_g", found["fat_g"])
-    found["confidence"] = result.get("confidence", found["confidence"])
-    found["reanalysis_notes"] = notes
-    found["reanalyzed_at"] = datetime.now(HKT).isoformat()
+    db.update_record(asset_id, {
+        "meal": result.get("meal", found["meal"]),
+        "calories": result.get("calories", found["calories"]),
+        "protein_g": result.get("protein_g", found["protein_g"]),
+        "carbs_g": result.get("carbs_g", found["carbs_g"]),
+        "fat_g": result.get("fat_g", found["fat_g"]),
+        "confidence": result.get("confidence", found["confidence"]),
+        "reanalysis_notes": notes,
+        "reanalyzed_at": datetime.now(HKT).isoformat(),
+    })
 
-    _save_date(date_str, records)
-
+    # Fetch updated record for response
+    updated = db.get_record_by_asset_id(asset_id)
     return jsonify({
         "ok": True,
-        "record": found,
-        "date": date_str,
+        "record": updated,
     })
 
 
@@ -709,7 +822,7 @@ def login_page():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>intake · 登录</title>
+<title>inkcal · 登录</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f0f;color:#e0e0e0;display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -725,7 +838,7 @@ button:active{background:#1a5aee}
 </head>
 <body>
 <form onsubmit="login(event)">
-<h1>intake <span>  </span></h1>
+<h1>inkcal <span>  </span></h1>
 <input type="text" id="user" placeholder="用户名" autocomplete="username" required>
 <input type="password" id="pass" placeholder="密码" autocomplete="current-password" required>
 <button type="submit">登录</button>
@@ -751,8 +864,8 @@ def api_login():
     if _login_rate_limited(ip):
         return jsonify({"error": "too many attempts, try again later"}), 429
     data = request.get_json() or {}
-    user = os.getenv("INTAKE_USER", "")
-    pwd = os.getenv("INTAKE_PASS", "")
+    user = os.getenv("INKCAL_USER", "")
+    pwd = os.getenv("INKCAL_PASS", "")
     submitted_user = data.get("user", "")
     submitted_pass = data.get("password", "")
     user_ok = secrets.compare_digest(submitted_user, user)
@@ -773,8 +886,8 @@ def api_logout():
 
 
 if __name__ == "__main__":
-    host = os.getenv("INTAKE_HOST", "127.0.0.1")
-    port = int(os.getenv("INTAKE_PORT", "5800"))
-    debug = os.getenv("INTAKE_DEBUG", "0") == "1"
-    print(f"  intake Web — http://{host}:{port}")
+    host = os.getenv("INKCAL_HOST", "127.0.0.1")
+    port = int(os.getenv("INKCAL_PORT", "5800"))
+    debug = os.getenv("INKCAL_DEBUG", "0") == "1"
+    print(f"  inkcal Web — http://{host}:{port}")
     app.run(host=host, port=port, debug=debug)

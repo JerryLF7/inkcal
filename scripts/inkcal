@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# inkcal CLI — thin wrapper around ~/Coding/inkcal/main.py
+set -euo pipefail
+cd "$HOME/Coding/inkcal" && exec "$HOME/Coding/inkcal/venv/bin/python" main.py "$@"

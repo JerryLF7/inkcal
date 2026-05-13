@@ -2,27 +2,27 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-INTAKE_BIN="$HOME/.local/bin/intake"
-CRON_LINE="*/20 * * * * $INTAKE_BIN run"
+INKCAL_BIN="$HOME/.local/bin/inkcal"
+CRON_LINE="*/20 * * * * $INKCAL_BIN run"
 
-# Ensure intake wrapper script exists (uses venv python so cron works)
+# Ensure inkcal wrapper script exists (uses venv python so cron works)
 # If an old symlink exists, replace it with a proper wrapper.
-if [ -L "$INTAKE_BIN" ] || [ ! -x "$INTAKE_BIN" ]; then
+if [ -L "$INKCAL_BIN" ] || [ ! -x "$INKCAL_BIN" ]; then
     mkdir -p "$HOME/.local/bin"
-    rm -f "$INTAKE_BIN"
-    cat > "$INTAKE_BIN" <<EOF
+    rm -f "$INKCAL_BIN"
+    cat > "$INKCAL_BIN" <<EOF
 #!/usr/bin/env bash
-# intake CLI wrapper — activates venv so dependencies are available
+# inkcal CLI wrapper — activates venv so dependencies are available
 set -euo pipefail
 cd "$SCRIPT_DIR"
 exec "$SCRIPT_DIR/venv/bin/python" "$SCRIPT_DIR/main.py" "\$@"
 EOF
-    chmod +x "$INTAKE_BIN"
-    echo "✅ 创建 wrapper: $INTAKE_BIN"
+    chmod +x "$INKCAL_BIN"
+    echo "✅ 创建 wrapper: $INKCAL_BIN"
 fi
 
 # Check if cron entry already exists
-if crontab -l 2>/dev/null | grep -qF "$INTAKE_BIN run"; then
+if crontab -l 2>/dev/null | grep -qF "$INKCAL_BIN run"; then
     echo "✅ cron 任务已存在，跳过"
 else
     (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
@@ -30,5 +30,5 @@ else
 fi
 
 echo ""
-echo "当前 crontab 中 intake 相关的任务:"
-crontab -l 2>/dev/null | grep -F "intake" || echo "  (无)"
+echo "当前 crontab 中 inkcal 相关的任务:"
+crontab -l 2>/dev/null | grep -F "inkcal" || echo "  (无)"

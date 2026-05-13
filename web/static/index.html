@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>intake</title>
+<title>inkcal</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -377,6 +377,48 @@
   .dp-confirm:hover { background: #3a7eff; }
   .dp-confirm:active { background: #1a5aee; }
 
+  /* Photo picker modal */
+  .photo-picker-box { max-width: 520px; }
+  .album-scroll {
+    max-height: 55vh;
+    overflow-y: auto;
+    margin: 16px 0;
+    -webkit-overflow-scrolling: touch;
+  }
+  .album-date-group { margin-bottom: 16px; }
+  .album-date-label {
+    font-size: 13px; font-weight: 600; color: #aaa;
+    margin-bottom: 8px; text-align: left;
+    position: sticky; top: 0; background: #1e1e1e; padding: 4px 0;
+    z-index: 1;
+  }
+  .album-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .album-grid-empty {
+    color: #888; font-size: 14px; padding: 32px 0;
+    text-align: center;
+  }
+  .album-thumb {
+    aspect-ratio: 1; object-fit: cover; border-radius: 8px;
+    cursor: pointer; width: 100%; background: #2a2a2a;
+  }
+  .album-thumb:hover { opacity: 0.85; }
+  .album-loading-more {
+    display: flex; justify-content: center; padding: 12px 0;
+  }
+  .local-upload-btn {
+    background: #2a6eff; color: #fff; border: none;
+    border-radius: 10px; padding: 8px 14px; font-size: 14px;
+    cursor: pointer; font-family: inherit;
+  }
+  .local-upload-btn:hover { background: #3a7eff; }
+  .photo-picker-actions {
+    display: flex; gap: 8px; justify-content: center;
+  }
+
   /* ── Desktop layout (>=768px) ──────────────────────────────── */
   @media (min-width: 768px) {
     .app-layout {
@@ -471,10 +513,10 @@
 <div class="app-layout">
   <div class="app-header">
     <div>
-      <h1>intake <span>🍽️</span></h1>
+      <h1>inkcal <span>🍽️</span></h1>
       <div class="subtitle">食物热量追踪</div>
     </div>
-    <button class="upload-btn" id="upload-btn" onclick="triggerManualUpload()">📤 上传</button>
+    <button class="upload-btn" id="upload-btn" onclick="triggerPhotoPicker()">📷 选择照片</button>
   </div>
 
   <div class="quick-links">
@@ -534,6 +576,22 @@
   </div>
 </div>
 
+<div class="upload-picker" id="photo-picker" style="display:none" onclick="closePhotoPicker()">
+  <div class="upload-picker-box photo-picker-box" onclick="event.stopPropagation()">
+    <h2>选择照片</h2>
+    <div class="album-scroll" id="album-scroll">
+      <div id="album-content"><div class="spinner" style="margin:40px auto"></div></div>
+      <div class="album-loading-more" id="album-loading-more" style="display:none">
+        <div class="spinner" style="width:20px;height:20px;border-width:2px"></div>
+      </div>
+    </div>
+    <div class="photo-picker-actions">
+      <button class="local-upload-btn" onclick="openLocalUpload()">📤 从本地上传</button>
+      <button class="upload-picker-cancel" onclick="closePhotoPicker()">取消</button>
+    </div>
+  </div>
+</div>
+
 <div class="upload-picker" id="date-picker" style="display:none">
   <div class="upload-picker-box" onclick="event.stopPropagation()">
     <h2>选择上传日期</h2>
@@ -564,7 +622,7 @@
 </div>
 
 <script>
-const CACHE_PREFIX = 'intake:';
+const CACHE_PREFIX = 'inkcal:';
 
 function cacheGet(key) {
   try { const item = localStorage.getItem(CACHE_PREFIX + key); return item ? JSON.parse(item) : null; }
@@ -1271,6 +1329,162 @@ function retryImg(img) {
 function showError() {
   document.getElementById('content').innerHTML =
     '<div class="empty"><div class="icon">⚠️</div><p>加载失败</p></div>';
+}
+
+let _albumCursor = '';
+let _albumLoading = false;
+let _albumHasMore = true;
+let _albumScrollHandler = null;
+
+function triggerPhotoPicker() {
+  const picker = document.getElementById('photo-picker');
+  const content = document.getElementById('album-content');
+  picker.style.display = 'flex';
+  content.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+
+  _albumCursor = fmtDate(hktNow());
+  _albumLoading = false;
+  _albumHasMore = true;
+
+  const scrollEl = document.getElementById('album-scroll');
+  if (_albumScrollHandler) scrollEl.removeEventListener('scroll', _albumScrollHandler);
+  _albumScrollHandler = function() {
+    if (_albumLoading || !_albumHasMore) return;
+    if (scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 50) {
+      loadAlbumPage(_albumCursor, true);
+    }
+  };
+  scrollEl.addEventListener('scroll', _albumScrollHandler);
+
+  loadAlbumPage(_albumCursor, false);
+}
+
+function loadAlbumPage(cursor, append) {
+  if (_albumLoading) return;
+  _albumLoading = true;
+
+  const content = document.getElementById('album-content');
+  const loadingMore = document.getElementById('album-loading-more');
+  if (!append) {
+    content.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+  }
+  loadingMore.style.display = 'flex';
+
+  apiFetch(`/api/album-photos?cursor=${cursor}&days=7`)
+    .then(data => {
+      _albumLoading = false;
+      loadingMore.style.display = 'none';
+
+      if (!append) {
+        content.innerHTML = '';
+      }
+
+      if (!data.dates || data.dates.length === 0) {
+        if (!append) {
+          content.innerHTML = '<div class="album-grid-empty">没有未处理的照片</div>';
+        }
+        _albumHasMore = false;
+        return;
+      }
+
+      data.dates.forEach(day => {
+        const group = document.createElement('div');
+        group.className = 'album-date-group';
+
+        const label = document.createElement('div');
+        label.className = 'album-date-label';
+        label.textContent = displayDate(day.date);
+        group.appendChild(label);
+
+        const grid = document.createElement('div');
+        grid.className = 'album-grid';
+        day.photos.forEach(photo => {
+          const img = document.createElement('img');
+          img.className = 'album-thumb';
+          img.src = `${API}/api/image?url=${encodeURIComponent(photo.thumbnail_url)}`;
+          img.alt = '';
+          img.onclick = () => analyzeAlbumPhoto(photo, day.date);
+          grid.appendChild(img);
+        });
+        group.appendChild(grid);
+
+        content.appendChild(group);
+      });
+
+      _albumCursor = data.next_cursor;
+      if (data.dates.length === 0) {
+        _albumHasMore = false;
+      }
+    })
+    .catch(err => {
+      _albumLoading = false;
+      loadingMore.style.display = 'none';
+      if (!append) {
+        content.innerHTML = `<div class="album-grid-empty">加载失败: ${err.message}</div>`;
+      }
+      _albumHasMore = false;
+    });
+}
+
+function closePhotoPicker() {
+  document.getElementById('photo-picker').style.display = 'none';
+  const scrollEl = document.getElementById('album-scroll');
+  if (_albumScrollHandler) {
+    scrollEl.removeEventListener('scroll', _albumScrollHandler);
+    _albumScrollHandler = null;
+  }
+}
+
+function openLocalUpload() {
+  closePhotoPicker();
+  triggerManualUpload();
+}
+
+async function analyzeAlbumPhoto(photo, dateStr) {
+  closePhotoPicker();
+  const overlay = document.getElementById('upload-overlay');
+  const detail = document.getElementById('upload-detail');
+  const btn = document.getElementById('upload-btn');
+
+  overlay.style.display = 'flex';
+  detail.textContent = '从相册获取...';
+  btn.disabled = true;
+
+  try {
+    const response = await fetch(`${API}/api/analyze-album-photo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        asset_id: photo.asset_id,
+        source: photo.source,
+        date: dateStr,
+        thumbnail_url: photo.thumbnail_url,
+        photo_time: photo.photo_time,
+      }),
+    });
+    const data = await response.json();
+
+    overlay.style.display = 'none';
+    btn.disabled = false;
+
+    if (data.ok) {
+      cacheDel('day:' + data.date);
+      cacheDel('dates');
+      loadAvailableDates();
+      _pendingLightboxAsset = data.record.asset_id;
+      loadDay(data.date);
+    } else if (data.error === 'not food') {
+      alert('Gemini 判定此图片不是真实食物，无法记录。');
+    } else if (data.error === 'already processed') {
+      alert('此照片已在记录中。');
+    } else {
+      alert('分析失败: ' + (data.error || '未知错误'));
+    }
+  } catch (err) {
+    overlay.style.display = 'none';
+    btn.disabled = false;
+    alert('分析失败: ' + err.message);
+  }
 }
 
 let _pasteHandler = null;

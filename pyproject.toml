@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "intake"
+name = "inkcal"
 version = "0.2.0"
 description = "Automatic food calorie tracker — Immich → SigLIP2 → Gemini → log"
 requires-python = ">=3.11"
@@ -14,4 +14,4 @@ dependencies = [
 ]
 
 [project.scripts]
-intake = "main:main"
+inkcal = "main:main"
