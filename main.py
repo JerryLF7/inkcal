@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-intake — automatic food calorie tracker.
+inkcal — automatic food calorie tracker.
 
 Subcommands:
   run         Full pipeline: Immich → SigLIP2 → Gemini → log
@@ -8,13 +8,12 @@ Subcommands:
   add         Manually record a meal
 
 Usage:
-  intake run [--date YYYY-MM-DD]
-  intake view [--date YYYY-MM-DD] [--week] [--month YYYY-MM]
-  intake add --meal "红烧肉" --calories 600 [--protein 25] [--carbs 30] [--fat 20]
+  inkcal run [--date YYYY-MM-DD]
+  inkcal view [--date YYYY-MM-DD] [--week] [--month YYYY-MM]
+  inkcal add --meal "红烧肉" --calories 600 [--protein 25] [--carbs 30] [--fat 20]
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -25,9 +24,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
-logger = logging.getLogger("intake")
+logger = logging.getLogger("inkcal")
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
+
+from src import db
 
 
 # ── helpers ──────────────────────────────────────────────────────────
@@ -38,6 +39,8 @@ def load_config():
     return {
         "immich_url": os.getenv("IMMICH_URL", "http://192.168.5.7:2283"),
         "immich_key": os.getenv("IMMICH_API_KEY"),
+        "photoprism_url": os.getenv("PHOTOPRISM_URL", ""),
+        "photoprism_key": os.getenv("PHOTOPRISM_API_KEY", ""),
         "gemini_key": os.getenv("GEMINI_API_KEY"),
         "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
@@ -45,34 +48,15 @@ def load_config():
 
 
 def already_processed(date_str: str) -> set[str]:
-    log_file = DATA_DIR / f"{date_str}.json"
-    if not log_file.exists():
-        return set()
-    try:
-        with open(log_file) as f:
-            records = json.load(f)
-        return {r["asset_id"] for r in records if r.get("asset_id")}
-    except (json.JSONDecodeError, FileNotFoundError):
-        return set()
-
-
-IGNORED_PATH = DATA_DIR / "ignored.json"
+    return db.get_processed_asset_ids(date_str)
 
 
 def load_ignored() -> set[str]:
-    if not IGNORED_PATH.exists():
-        return set()
-    try:
-        return set(json.loads(IGNORED_PATH.read_text()))
-    except (json.JSONDecodeError, FileNotFoundError):
-        return set()
+    return db.get_ignored_assets()
 
 
 def append_log(date_str: str, asset_id: str, photo_time: str,
                thumbnail_url: str, result: dict):
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = DATA_DIR / f"{date_str}.json"
-
     record = {
         "asset_id": asset_id,
         "photo_time": photo_time,
@@ -85,34 +69,144 @@ def append_log(date_str: str, asset_id: str, photo_time: str,
         "confidence": result.get("confidence", "low"),
         "analyzed_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
     }
-
-    records = json.loads(log_file.read_text()) if log_file.exists() else []
-    records.append(record)
-    log_file.write_text(json.dumps(records, indent=2, ensure_ascii=False))
-    return record
+    return db.insert_record(record)
 
 
 def load_records(date_str: str) -> list[dict]:
-    log_file = DATA_DIR / f"{date_str}.json"
-    if not log_file.exists():
-        return []
-    try:
-        return json.loads(log_file.read_text())
-    except json.JSONDecodeError:
-        return []
+    return db.get_records_by_date(date_str)
+
+
+# ── multi-source pipeline helper ─────────────────────────────────────
+
+def _resolve_sources(config: dict) -> list[str]:
+    """Return list of enabled photo sources from the SOURCE env var.
+
+    Format: comma-separated list, e.g. "immich", "photoprism",
+    "immich,photoprism".
+
+    Backwards-compat: if SOURCE is not set but IMMICH_API_KEY is present,
+    Immich is enabled automatically (old behaviour).
+    """
+    source_str = os.getenv("SOURCE", "").strip().lower()
+    if source_str:
+        return [s.strip() for s in source_str.split(",") if s.strip()]
+
+    # Backwards-compat: old behaviour — auto-enable Immich if key exists
+    if config["immich_key"]:
+        return ["immich"]
+    return []
+
+
+def _run_source(
+    source: str,
+    date_str: str,
+    target_date: datetime,
+    detector,
+    analyzer,
+    config: dict,
+):
+    """Run the full pipeline for a single photo source."""
+    if source == "immich":
+        from src.immich_client import ImmichClient, format_photo_time
+
+        client = ImmichClient(config["immich_url"], config["immich_key"])
+        logger.info("📸 [%s] Fetching photos for %s...", source, date_str)
+        assets = client.get_date_assets(target_date)
+    elif source == "photoprism":
+        from src.photoprism_client import PhotoPrismClient
+
+        client = PhotoPrismClient(config["photoprism_url"], config["photoprism_key"])
+        logger.info("📸 [%s] Fetching photos for %s...", source, date_str)
+        assets = client.get_date_assets(target_date)
+    else:
+        logger.error("未知来源: %s", source)
+        return
+
+    if not assets:
+        logger.info("%s [%s] 没有照片。", date_str, source)
+        client.close()
+        return
+
+    logger.info("%s [%s] 共 %d 张照片", date_str, source, len(assets))
+
+    processed = already_processed(date_str)
+    ignored = load_ignored()
+    new_assets = [a for a in assets if a["id"] not in processed and a["id"] not in ignored]
+    skipped_ignored = len([a for a in assets if a["id"] in ignored])
+    logger.info("未处理: %d 张 (忽略 %d 张)", len(new_assets), skipped_ignored)
+
+    for asset in new_assets:
+        aid = asset["id"]
+
+        if source == "immich":
+            from src.immich_client import format_photo_time
+
+            exif = asset.get("exifInfo", {})
+            raw_photo_time = exif.get("dateTimeOriginal", "")
+            exif_tz = exif.get("timeZone")
+            photo_time = format_photo_time(raw_photo_time, exif_tz)
+            try:
+                thumb = client.download_thumbnail(aid)
+            except Exception as e:
+                logger.error("  下载缩略图失败: %s", e)
+                continue
+            thumbnail_url = client.get_thumbnail_url(aid)
+            try:
+                original = client.download_original(aid)
+            except Exception as e:
+                logger.error("  下载原图失败: %s", e)
+                continue
+        else:  # photoprism
+            photo_time = asset["photo_time"]
+            file_hash = asset["hash"]
+            if not file_hash:
+                logger.warning("  [%s] 跳过无 hash 的照片: %s", source, aid[:8])
+                continue
+            try:
+                thumb = client.download_thumbnail(file_hash)
+            except Exception as e:
+                logger.error("  下载缩略图失败: %s", e)
+                continue
+            thumbnail_url = client.get_thumbnail_url(file_hash)
+            try:
+                original = client.download_original(aid)
+            except Exception as e:
+                logger.error("  下载原图失败: %s", e)
+                continue
+
+        logger.info("  🔍 检测 [%s...] (拍摄于 %s)", aid[:8], photo_time)
+
+        if not detector.is_food(thumb):
+            logger.info("  ❌ 不是食物，跳过")
+            continue
+
+        logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
+        result = analyzer.analyze(original)
+
+        # Gemini may reject non-real-food images (screenshots, menus, etc.)
+        if result.get("meal") in ("not real food", "unknown"):
+            logger.info("  ❌ Gemini 判定非真实食物，跳过")
+            continue
+
+        append_log(date_str, aid, photo_time, thumbnail_url, result)
+        logger.info("  ✅ %s ~%skcal", result.get("meal", "?"), result.get("calories", 0))
+
+    client.close()
 
 
 # ── subcommand: run ──────────────────────────────────────────────────
 
 def cmd_run(args):
-    from src.immich_client import ImmichClient, format_photo_time
+    db.init_db()
+
     from src.food_detector import FoodDetector
     from src.calorie_analyzer import CalorieAnalyzer
 
     config = load_config()
+    sources = _resolve_sources(config)
 
-    if not config["immich_key"]:
-        logger.error("IMMICH_API_KEY not set in .env")
+    if not sources:
+        logger.error("没有启用的照片源。请在 .env 中设置 SOURCE_IMMICH=1 或 SOURCE_PHOTOPRISM=1")
         sys.exit(1)
 
     if args.date:
@@ -123,7 +217,6 @@ def cmd_run(args):
         target_date = datetime.now(timezone(timedelta(hours=8)))
         date_str = target_date.strftime("%Y-%m-%d")
 
-    immich = ImmichClient(config["immich_url"], config["immich_key"])
     detector = FoodDetector()
     analyzer = CalorieAnalyzer(
         config["gemini_key"],
@@ -131,59 +224,14 @@ def cmd_run(args):
         model=config["gemini_model"],
     )
 
-    logger.info("📸 Fetching photos for %s from Immich...", date_str)
-    assets = immich.get_date_assets(target_date)
-    if not assets:
-        logger.info("%s 没有照片。", date_str)
-        immich.close(); detector.close(); analyzer.close()
-        return
-
-    logger.info("%s 共 %d 张照片", date_str, len(assets))
-
-    processed = already_processed(date_str)
-    ignored = load_ignored()
-    new_assets = [a for a in assets if a["id"] not in processed and a["id"] not in ignored]
-    skipped_ignored = len([a for a in assets if a["id"] in ignored])
-    logger.info("未处理: %d 张 (忽略 %d 张)", len(new_assets), skipped_ignored)
-
-    food_records = []
-    for asset in new_assets:
-        aid = asset["id"]
-        exif = asset.get("exifInfo", {})
-        raw_photo_time = exif.get("dateTimeOriginal", "")
-        exif_tz = exif.get("timeZone")
-        photo_time = format_photo_time(raw_photo_time, exif_tz)
-
+    for source in sources:
         try:
-            thumb = immich.download_thumbnail(aid)
+            _run_source(source, date_str, target_date, detector, analyzer, config)
         except Exception as e:
-            logger.error("  下载缩略图失败: %s", e)
-            continue
-        logger.info("  🔍 检测 [%s...] (拍摄于 %s)", aid[:8], photo_time)
+            logger.error("[%s] Pipeline failed: %s", source, e)
 
-        if not detector.is_food(thumb):
-            logger.info("  ❌ 不是食物，跳过")
-            continue
-
-        logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
-        thumbnail_url = immich.get_thumbnail_url(aid)
-        try:
-            original = immich.download_original(aid)
-        except Exception as e:
-            logger.error("  下载原图失败: %s", e)
-            continue
-        result = analyzer.analyze(original)
-
-        # Gemini may reject non-real-food images (screenshots, menus, etc.)
-        if result.get("meal") in ("not real food", "unknown"):
-            logger.info("  ❌ Gemini 判定非真实食物，跳过")
-            continue
-
-        record = append_log(date_str, aid, photo_time, thumbnail_url, result)
-        food_records.append(record)
-        logger.info("  ✅ %s ~%skcal", result.get("meal", "?"), result.get("calories", 0))
-
-    immich.close(); detector.close(); analyzer.close()
+    detector.close()
+    analyzer.close()
     cmd_view(argparse.Namespace(date=date_str, week=False, month=None))
 
 
@@ -211,6 +259,8 @@ def _print_table(rows: list[list[str]], header: list[str]):
 
 
 def cmd_view(args):
+    db.init_db()
+
     if args.week:
         today = datetime.now(timezone(timedelta(hours=8)))
         # Monday of this week
@@ -286,6 +336,7 @@ def cmd_view(args):
 # ── subcommand: add ──────────────────────────────────────────────────
 
 def cmd_add(args):
+    db.init_db()
     from datetime import datetime, timezone, timedelta
 
     if args.date:
@@ -316,15 +367,15 @@ def cmd_add(args):
 # ── subcommand: label ─────────────────────────────────────────────────
 
 def cmd_label(args):
+    db.init_db()
+
     if args.status:
         labeled = []
-        for f in sorted(DATA_DIR.glob("*.json")):
-            if f.stem.count("-") != 2:
-                continue
-            for r in load_records(f.stem):
+        for date_str in db.get_available_dates():
+            for r in db.get_records_by_date(date_str):
                 if r.get("user_label"):
                     labeled.append({
-                        "date": f.stem,
+                        "date": date_str,
                         "asset_id": r.get("asset_id", ""),
                         "meal": r.get("meal", "?"),
                         "label": r["user_label"],
@@ -362,10 +413,7 @@ def cmd_label(args):
     records = load_records(date_str)
     for r in records:
         if r.get("asset_id", "").startswith(args.id):
-            r["user_label"] = label
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            (DATA_DIR / f"{date_str}.json").write_text(
-                json.dumps(records, indent=2, ensure_ascii=False))
+            db.update_record(r["asset_id"], {"user_label": label})
             aid = r["asset_id"][:8]
             print(f"✅ 已标注 [{date_str}] {aid}... {r.get('meal', '?')} → {label}")
             return
@@ -375,6 +423,7 @@ def cmd_label(args):
 # ── subcommand: replace ────────────────────────────────────────────────
 
 def cmd_replace(args):
+    db.init_db()
     from src.immich_client import ImmichClient
 
     config = load_config()
@@ -395,12 +444,12 @@ def cmd_replace(args):
     for r in records:
         if r.get("asset_id", "").startswith(args.id):
             if matched:
-                r["thumbnail_url"] = matched["thumbnail_url"]
-                r["asset_id"] = matched["id"]
-                r["photo_time"] = matched.get("photo_time", r.get("photo_time", ""))
-                r.pop("replacement_image", None)
-                (DATA_DIR / f"{date_str}.json").write_text(
-                    json.dumps(records, indent=2, ensure_ascii=False))
+                db.update_record(r["asset_id"], {
+                    "thumbnail_url": matched["thumbnail_url"],
+                    "asset_id": matched["id"],
+                    "photo_time": matched.get("photo_time", r.get("photo_time", "")),
+                    "replacement_image": None,
+                })
                 print(f"✅ 已匹配并替换: {matched['id'][:8]}...")
             else:
                 img_dir = DATA_DIR / "images"
@@ -408,12 +457,44 @@ def cmd_replace(args):
                 filename = f"{date_str}_{r['asset_id'][:8]}.jpg"
                 filepath = img_dir / filename
                 filepath.write_bytes(image_bytes)
-                r["replacement_image"] = str(filepath)
-                (DATA_DIR / f"{date_str}.json").write_text(
-                    json.dumps(records, indent=2, ensure_ascii=False))
+                db.update_record(r["asset_id"], {
+                    "replacement_image": str(filepath),
+                })
                 print(f"⚠️ 未匹配到 Immich 照片，已保存本地: {filepath}")
             return
     print(f"❌ 未找到匹配记录: {args.id}")
+
+
+# ── subcommand: migrate ────────────────────────────────────────────────
+
+def cmd_migrate(args):
+    db_path = DATA_DIR / "inkcal.db"
+    if db_path.exists() and not args.force:
+        print(f"❌ 数据库已存在: {db_path}")
+        print("   使用 --force 强制重新迁移（会清空现有数据）")
+        sys.exit(1)
+
+    db.init_db(db_path)
+    if args.force:
+        conn = db._get_conn()
+        conn.execute("DELETE FROM reanalysis_history")
+        conn.execute("DELETE FROM records")
+        conn.execute("DELETE FROM ignored_assets")
+        conn.commit()
+
+    print("🔄 开始迁移 JSON 数据到 SQLite...")
+    records, history, ignored = db.migrate_from_json(DATA_DIR)
+    print(f"✅ 迁移完成: {records} 条记录, {history} 条历史, {ignored} 条忽略")
+
+    # Backup JSON files
+    backup_dir = DATA_DIR / "migrated-json-backup"
+    backup_dir.mkdir(exist_ok=True)
+    import shutil
+    for f in DATA_DIR.glob("*.json"):
+        if f.stem.count("-") == 2 or f.name == "ignored.json":
+            dest = backup_dir / f.name
+            shutil.move(str(f), str(dest))
+    print(f"📦 原 JSON 文件已移至: {backup_dir}")
 
 
 # ── subcommand: serve ─────────────────────────────────────────────────
@@ -431,7 +512,7 @@ def cmd_serve(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="intake — automatic food calorie tracker")
+        description="inkcal — automatic food calorie tracker")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run", help="Run full pipeline (Immich → SigLIP2 → Gemini)")
@@ -465,6 +546,10 @@ def main():
     p_replace.add_argument("--id", required=True, help="Asset ID to replace (prefix match)")
     p_replace.add_argument("--image", required=True, help="Path to replacement image")
 
+    p_migrate = sub.add_parser("migrate", help="Migrate JSON files to SQLite")
+    p_migrate.add_argument("--force", action="store_true",
+                           help="Force re-migration (clears existing DB)")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -477,6 +562,8 @@ def main():
         cmd_label(args)
     elif args.command == "replace":
         cmd_replace(args)
+    elif args.command == "migrate":
+        cmd_migrate(args)
 
 
 if __name__ == "__main__":
