@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INKCAL_BIN="$HOME/.local/bin/inkcal"
-CRON_LINE="*/20 * * * * $INKCAL_BIN run"
+CRON_LINE="*/10 * * * * $INKCAL_BIN run"
 
 # Ensure inkcal wrapper script exists (uses venv python so cron works)
 # If an old symlink exists, replace it with a proper wrapper.

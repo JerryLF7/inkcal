@@ -44,7 +44,7 @@ pip install -r requirements.txt
 ## 自动化
 
 ```bash
-./setup.sh   # 创建 ~/.local/bin/inkcal + 配置 cron（每 20 分钟自动运行）
+./setup.sh   # 创建 ~/.local/bin/inkcal + 配置 cron（每 10 分钟自动运行）
 ```
 
 流水线幂等，重复运行不会产生重复记录。手动管理 cron：`crontab -e`。

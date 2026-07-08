@@ -25,6 +25,7 @@
 | 05-12 | JSON → SQLite 迁移：解决数据量增长后的查询效率和并发写入问题 |
 | 05-13 | PhotoPrism 多源支持：通过 `SOURCE=immich,photoprism` 同时拉取多个相册 |
 | 05-13 | 「选择照片」弹窗：从相册挑选被 SigLIP2 漏检的照片，跳过食物检测直接送 Gemini；按日期分组 + 滚动分页加载 |
+| 05-13 | 项目改名：intake → inkcal（统一项目名、CLI、数据库、GitHub 仓库、本地目录）|
 
 ## 架构
 
@@ -184,7 +185,7 @@ inkcal migrate --force # 强制重新迁移（会清空现有 DB）
 6 个子命令，全部通过 argparse 注册。核心设计：
 
 - **多源 pipeline**：`cmd_run()` 创建 detector + analyzer 各一次，遍历所有启用的 source（Immich/PhotoPrism），每个 source 独立跑 `_run_source()`。错误隔离：一个 source 失败不影响其他 source。
-- **幂等性**：`already_processed()` 从 SQLite 查询当日已有 `asset_id`，流水线只处理新照片。cron 每 20 分钟跑一次不会重复。
+- **幂等性**：`already_processed()` 从 SQLite 查询当日已有 `asset_id`，流水线只处理新照片。cron 每 10 分钟跑一次不会重复。
 - **时区**：全部 Asia/Hong_Kong (UTC+8)，日期边界按 HKT 计算。
 - **手动记录**：生成 `manual-时间戳` 作为 asset_id，与 Immich/PhotoPrism 记录同 schema 存储。
 
@@ -245,10 +246,10 @@ inkcal migrate --force # 强制重新迁移（会清空现有 DB）
 - **网络韧性**：`apiFetch()` 封装 AbortController 10s 超时 + 1 次自动重试。跨请求 abort（`_abortController`）取消旧导航的进行中请求。`_fetchId` 去重防止重试污染新视图
 - **手动刷新**：日期标签旁的 ↻ 按钮清除当前日缓存后强制重新拉取，请求期间旋转动画
 
-### setup.sh — 一键部署（27行）
+### setup.sh — 一键部署
 
-- 创建 `~/.local/bin/inkcal` 符号链接
-- 配置 crontab 每 20 分钟运行
+- 创建 `~/.local/bin/inkcal` bash wrapper 脚本（调用 venv Python）
+- 配置 crontab 每 10 分钟运行
 - 幂等：重复执行不会重复添加
 
 ## 设计原则
