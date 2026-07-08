@@ -352,21 +352,36 @@ def api_manual_upload():
     if result.get("meal") in ("not real food", "unknown"):
         return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
 
-    # ── Immich pHash match (after Gemini confirmed it's food) ─────
-    immich_url = os.getenv("IMMICH_URL", "")
+    # ── Multi-source pHash match (after Gemini confirmed it's food) ─────
+    sources = _resolve_sources()
     matched = None
+    matched_source = None
 
-    if immich_url:
-        immich = ImmichClient(immich_url, os.getenv("IMMICH_API_KEY", ""))
-        matched = immich.match_by_phash(date_str, image_bytes, time_window=exif_time)
+    for source in sources:
+        if source == "immich":
+            immich_url = os.getenv("IMMICH_URL", "")
+            immich_key = os.getenv("IMMICH_API_KEY", "")
+            if not (immich_url and immich_key):
+                continue
+            try:
+                from src.immich_client import ImmichClient
+                client = ImmichClient(immich_url, immich_key)
+                matched = client.match_by_phash(date_str, image_bytes, time_window=exif_time)
+                client.close()
+                if matched:
+                    matched_source = "immich"
+                    break
+            except Exception as e:
+                logger.error("pHash match [immich] failed: %s", e)
+        elif source == "photoprism":
+            # TODO: implement pHash matching for PhotoPrism
+            # PhotoPrismClient currently lacks match_by_phash()
+            pass
 
-        if matched:
-            records = _load_date(date_str)
-            if any(r.get("asset_id") == matched["id"] for r in records):
-                immich.close()
-                return jsonify({"error": "already processed", "asset_id": matched["id"][:8]}), 409
-
-        immich.close()
+    if matched:
+        records = _load_date(date_str)
+        if any(r.get("asset_id") == matched["id"] for r in records):
+            return jsonify({"error": "already processed", "asset_id": matched["id"][:8]}), 409
 
     # ── Build record ─────────────────────────────────────────────
     if matched:
@@ -387,6 +402,8 @@ def api_manual_upload():
 
     record = {
         "asset_id": asset_id,
+        "source_type": matched_source or "manual",
+        "source_id": asset_id,
         "photo_time": photo_time,
         "thumbnail_url": thumbnail_url,
         "meal": result.get("meal", "unknown"),
@@ -438,13 +455,13 @@ def api_album_photos():
 
     cursor = datetime.strptime(cursor_str or datetime.now(HKT).strftime("%Y-%m-%d"), "%Y-%m-%d")
     sources = _resolve_sources()
-    ignored = _load_ignored()
+    ignored = db.get_ignored_assets()
+    classified_non_food = db.get_classified_non_food()
 
     dates_result = []
     for i in range(days):
-        date_obj = cursor - timedelta(days=i)
-        date_str = date_obj.strftime("%Y-%m-%d")
-        target_date = date_obj.replace(tzinfo=HKT)
+        target_date = cursor - timedelta(days=i)
+        date_str = target_date.strftime("%Y-%m-%d")
         processed = db.get_processed_asset_ids(date_str)
 
         day_photos = []
@@ -459,17 +476,19 @@ def api_album_photos():
                     client = ImmichClient(immich_url, immich_key)
                     assets = client.get_date_assets(target_date)
                     for a in assets:
-                        if a["id"] in processed or a["id"] in ignored:
+                        aid = a["id"]
+                        if aid in processed or aid in ignored:
                             continue
                         exif = a.get("exifInfo", {})
                         raw_photo_time = exif.get("dateTimeOriginal", "")
                         exif_tz = exif.get("timeZone")
                         photo_time = format_photo_time(raw_photo_time, exif_tz)
                         day_photos.append({
-                            "asset_id": a["id"],
-                            "thumbnail_url": client.get_thumbnail_url(a["id"]),
+                            "asset_id": aid,
+                            "thumbnail_url": client.get_thumbnail_url(aid),
                             "photo_time": photo_time,
                             "source": "immich",
+                            "classified_non_food": aid in classified_non_food,
                         })
                     client.close()
                 except Exception as e:
@@ -484,13 +503,15 @@ def api_album_photos():
                     client = PhotoPrismClient(photoprism_url, photoprism_key)
                     assets = client.get_date_assets(target_date)
                     for a in assets:
-                        if a["id"] in processed or a["id"] in ignored:
+                        aid = a["id"]
+                        if aid in processed or aid in ignored:
                             continue
                         day_photos.append({
-                            "asset_id": a["id"],
+                            "asset_id": aid,
                             "thumbnail_url": client.get_thumbnail_url(a["hash"], size="tile_500"),
                             "photo_time": a["photo_time"],
                             "source": "photoprism",
+                            "classified_non_food": aid in classified_non_food,
                         })
                     client.close()
                 except Exception as e:
@@ -573,6 +594,8 @@ def api_analyze_album_photo():
 
     record = {
         "asset_id": asset_id,
+        "source_type": source,
+        "source_id": asset_id,
         "photo_time": photo_time,
         "thumbnail_url": thumbnail_url,
         "meal": result.get("meal", "unknown"),
@@ -584,6 +607,10 @@ def api_analyze_album_photo():
         "analyzed_at": datetime.now(HKT).isoformat(),
     }
     db.insert_record(record)
+
+    # If this photo was previously classified as non-food by the local classifier,
+    # remove it from that set so it can be re-analyzed in the future if needed.
+    db.remove_classified_non_food(asset_id)
 
     return jsonify({"ok": True, "record": record, "date": date_str})
 
