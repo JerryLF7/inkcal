@@ -58,36 +58,38 @@ def _create_schema(conn: sqlite3.Connection):
         CREATE TABLE IF NOT EXISTS records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             asset_id TEXT NOT NULL UNIQUE,
+            source_type TEXT NOT NULL DEFAULT 'immich',
+            source_id TEXT,
             photo_time TEXT NOT NULL,
-            date TEXT NOT NULL,
             thumbnail_url TEXT,
+            original_url TEXT,
             meal TEXT NOT NULL,
-            calories INTEGER NOT NULL DEFAULT 0,
-            protein_g INTEGER NOT NULL DEFAULT 0,
-            carbs_g INTEGER NOT NULL DEFAULT 0,
-            fat_g INTEGER NOT NULL DEFAULT 0,
+            calories REAL NOT NULL DEFAULT 0,
+            protein_g REAL NOT NULL DEFAULT 0,
+            carbs_g REAL NOT NULL DEFAULT 0,
+            fat_g REAL NOT NULL DEFAULT 0,
             confidence TEXT NOT NULL DEFAULT 'low'
                 CHECK(confidence IN ('high', 'medium', 'low')),
             analyzed_at TEXT NOT NULL,
+            model_used TEXT,
             user_label TEXT CHECK(user_label IN ('correct', 'wrong')),
             replacement_image TEXT,
-            reanalyzed_at TEXT,
-            reanalysis_notes TEXT,
-            is_manual INTEGER NOT NULL DEFAULT 0
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
-        CREATE INDEX IF NOT EXISTS idx_records_date ON records(date);
+        CREATE INDEX IF NOT EXISTS idx_records_date ON records(date(photo_time));
         CREATE INDEX IF NOT EXISTS idx_records_photo_time ON records(photo_time);
-        CREATE INDEX IF NOT EXISTS idx_records_is_manual ON records(is_manual);
+        CREATE INDEX IF NOT EXISTS idx_records_source ON records(source_type, source_id);
 
         CREATE TABLE IF NOT EXISTS reanalysis_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
             meal TEXT NOT NULL,
-            calories INTEGER NOT NULL DEFAULT 0,
-            protein_g INTEGER NOT NULL DEFAULT 0,
-            carbs_g INTEGER NOT NULL DEFAULT 0,
-            fat_g INTEGER NOT NULL DEFAULT 0,
+            calories REAL NOT NULL DEFAULT 0,
+            protein_g REAL NOT NULL DEFAULT 0,
+            carbs_g REAL NOT NULL DEFAULT 0,
+            fat_g REAL NOT NULL DEFAULT 0,
             confidence TEXT NOT NULL DEFAULT 'low',
             notes TEXT,
             reanalyzed_at TEXT NOT NULL,
@@ -100,6 +102,14 @@ def _create_schema(conn: sqlite3.Connection):
         CREATE TABLE IF NOT EXISTS ignored_assets (
             asset_id TEXT PRIMARY KEY
         );
+
+        CREATE TABLE IF NOT EXISTS classified_non_food (
+            asset_id TEXT PRIMARY KEY,
+            classified_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_classified_non_food_asset_id
+            ON classified_non_food(asset_id);
         """
     )
     conn.commit()
@@ -128,8 +138,11 @@ def _record_from_row(row: sqlite3.Row, history: list[dict] | None = None) -> dic
     """Build a record dict matching the existing JSON format."""
     record = {
         "asset_id": row["asset_id"],
+        "source_type": row["source_type"],
+        "source_id": row["source_id"] or "",
         "photo_time": row["photo_time"],
         "thumbnail_url": row["thumbnail_url"] or "",
+        "original_url": row["original_url"] or "",
         "meal": row["meal"],
         "calories": row["calories"],
         "protein_g": row["protein_g"],
@@ -138,14 +151,12 @@ def _record_from_row(row: sqlite3.Row, history: list[dict] | None = None) -> dic
         "confidence": row["confidence"],
         "analyzed_at": row["analyzed_at"],
     }
+    if row["model_used"]:
+        record["model_used"] = row["model_used"]
     if row["user_label"]:
         record["user_label"] = row["user_label"]
     if row["replacement_image"]:
         record["replacement_image"] = row["replacement_image"]
-    if row["reanalyzed_at"]:
-        record["reanalyzed_at"] = row["reanalyzed_at"]
-    if row["reanalysis_notes"]:
-        record["reanalysis_notes"] = row["reanalysis_notes"]
     if history:
         record["reanalysis_history"] = history
     return record
@@ -158,23 +169,22 @@ def insert_record(record: dict) -> dict:
     conn = _get_conn()
     asset_id = record["asset_id"]
     photo_time = record["photo_time"]
-    date_str = _extract_date(photo_time)
-    is_manual = _is_manual(asset_id)
 
     conn.execute(
         """
         INSERT INTO records (
-            asset_id, photo_time, date, thumbnail_url, meal,
-            calories, protein_g, carbs_g, fat_g, confidence,
-            analyzed_at, user_label, replacement_image,
-            reanalyzed_at, reanalysis_notes, is_manual
+            asset_id, source_type, source_id, photo_time, thumbnail_url,
+            original_url, meal, calories, protein_g, carbs_g, fat_g,
+            confidence, analyzed_at, model_used, user_label, replacement_image
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             asset_id,
+            record.get("source_type", "immich"),
+            record.get("source_id", asset_id),
             photo_time,
-            date_str,
             record.get("thumbnail_url", ""),
+            record.get("original_url", ""),
             record.get("meal", "unknown"),
             record.get("calories", 0),
             record.get("protein_g", 0),
@@ -182,11 +192,9 @@ def insert_record(record: dict) -> dict:
             record.get("fat_g", 0),
             record.get("confidence", "low"),
             record.get("analyzed_at", datetime.now(HKT).isoformat()),
+            record.get("model_used"),
             record.get("user_label"),
             record.get("replacement_image"),
-            record.get("reanalyzed_at"),
-            record.get("reanalysis_notes"),
-            is_manual,
         ),
     )
     conn.commit()
@@ -215,7 +223,7 @@ def find_records_by_asset_id_prefix(prefix: str, date_str: str | None = None) ->
     conn = _get_conn()
     if date_str:
         rows = conn.execute(
-            "SELECT * FROM records WHERE asset_id LIKE ? AND date = ?",
+            "SELECT * FROM records WHERE asset_id LIKE ? AND date(photo_time) = ?",
             (prefix + "%", date_str),
         ).fetchall()
     else:
@@ -229,7 +237,7 @@ def get_records_by_date(date_str: str) -> list[dict]:
     """Get all records for a specific date. Includes reanalysis_history."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT * FROM records WHERE date = ? ORDER BY photo_time",
+        "SELECT * FROM records WHERE date(photo_time) = ? ORDER BY photo_time",
         (date_str,),
     ).fetchall()
 
@@ -270,7 +278,7 @@ def get_records_by_date_range(start: str, end: str) -> list[dict]:
     """Get all records in a date range [start, end]."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT * FROM records WHERE date >= ? AND date <= ? ORDER BY photo_time",
+        "SELECT * FROM records WHERE date(photo_time) >= ? AND date(photo_time) <= ? ORDER BY photo_time",
         (start, end),
     ).fetchall()
     return [_record_from_row(r) for r in rows]
@@ -283,8 +291,9 @@ def update_record(asset_id: str, updates: dict) -> bool:
     # Map JSON field names to DB columns
     field_map = {
         "thumbnail_url": "thumbnail_url",
-        "asset_id": "asset_id",  # special: may change asset_id itself
+        "asset_id": "asset_id",
         "photo_time": "photo_time",
+        "original_url": "original_url",
         "meal": "meal",
         "calories": "calories",
         "protein_g": "protein_g",
@@ -292,10 +301,9 @@ def update_record(asset_id: str, updates: dict) -> bool:
         "fat_g": "fat_g",
         "confidence": "confidence",
         "analyzed_at": "analyzed_at",
+        "model_used": "model_used",
         "user_label": "user_label",
         "replacement_image": "replacement_image",
-        "reanalyzed_at": "reanalyzed_at",
-        "reanalysis_notes": "reanalysis_notes",
     }
 
     set_clauses = []
@@ -306,24 +314,16 @@ def update_record(asset_id: str, updates: dict) -> bool:
         if json_key in updates:
             if json_key == "asset_id":
                 continue  # handled separately
-            if json_key == "photo_time":
-                set_clauses.append(f"{db_col} = ?")
-                set_clauses.append("date = ?")
-                values.append(updates[json_key])
-                values.append(_extract_date(updates[json_key]))
-            else:
-                set_clauses.append(f"{db_col} = ?")
-                values.append(updates[json_key])
+            set_clauses.append(f"{db_col} = ?")
+            values.append(updates[json_key])
 
     if not set_clauses and new_asset_id == asset_id:
         return False
 
-    # If asset_id is changing, update is_manual too
+    # If asset_id is changing, update it
     if new_asset_id != asset_id:
         set_clauses.append("asset_id = ?")
-        set_clauses.append("is_manual = ?")
         values.append(new_asset_id)
-        values.append(_is_manual(new_asset_id))
 
     values.append(asset_id)
     query = f"UPDATE records SET {', '.join(set_clauses)} WHERE asset_id = ?"
@@ -370,14 +370,15 @@ def move_record(asset_id: str, new_date: str, updates: dict | None = None) -> bo
     else:
         new_photo_time = f"{new_date}T00:00:00+08:00"
 
-    set_clauses = ["date = ?", "photo_time = ?"]
-    values = [new_date, new_photo_time]
+    set_clauses = ["photo_time = ?"]
+    values = [new_photo_time]
 
     if updates:
         field_map = {
             "thumbnail_url": "thumbnail_url",
             "asset_id": "asset_id",
             "photo_time": "photo_time",
+            "original_url": "original_url",
             "meal": "meal",
             "calories": "calories",
             "protein_g": "protein_g",
@@ -390,14 +391,10 @@ def move_record(asset_id: str, new_date: str, updates: dict | None = None) -> bo
             if json_key in updates:
                 if json_key == "asset_id":
                     set_clauses.append("asset_id = ?")
-                    set_clauses.append("is_manual = ?")
                     values.append(updates[json_key])
-                    values.append(_is_manual(updates[json_key]))
                 elif json_key == "photo_time":
                     set_clauses.append(f"{db_col} = ?")
-                    set_clauses.append("date = ?")
                     values.append(updates[json_key])
-                    values.append(_extract_date(updates[json_key]))
                 else:
                     set_clauses.append(f"{db_col} = ?")
                     values.append(updates[json_key])
@@ -488,6 +485,30 @@ def get_ignored_assets() -> set[str]:
     return {r["asset_id"] for r in rows}
 
 
+def get_classified_non_food() -> set[str]:
+    conn = _get_conn()
+    rows = conn.execute("SELECT asset_id FROM classified_non_food").fetchall()
+    return {r["asset_id"] for r in rows}
+
+
+def add_classified_non_food(asset_id: str):
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO classified_non_food (asset_id) VALUES (?)",
+        (asset_id,),
+    )
+    conn.commit()
+
+
+def remove_classified_non_food(asset_id: str):
+    conn = _get_conn()
+    conn.execute(
+        "DELETE FROM classified_non_food WHERE asset_id = ?",
+        (asset_id,),
+    )
+    conn.commit()
+
+
 def add_ignored_asset(asset_id: str):
     conn = _get_conn()
     conn.execute(
@@ -503,9 +524,9 @@ def get_available_dates() -> list[str]:
     """Return dates that have at least one record, newest first."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT DISTINCT date FROM records ORDER BY date DESC"
+        "SELECT DISTINCT date(photo_time) as d FROM records ORDER BY d DESC"
     ).fetchall()
-    return [r["date"] for r in rows]
+    return [r["d"] for r in rows]
 
 
 def summarize_records(records: list[dict]) -> dict:
@@ -522,6 +543,11 @@ def summarize_records(records: list[dict]) -> dict:
 def get_processed_asset_ids(date_str: str) -> set[str]:
     """Return set of asset_ids already recorded for a given date."""
     return {r["asset_id"] for r in get_records_by_date(date_str) if r.get("asset_id")}
+
+
+def get_non_food_asset_ids() -> set[str]:
+    """Return set of asset_ids classified as non-food by the local classifier."""
+    return get_classified_non_food()
 
 
 # ── migration ────────────────────────────────────────────────────────
@@ -551,25 +577,24 @@ def migrate_from_json(data_dir: Path) -> tuple[int, int, int]:
                 continue
 
             photo_time = record.get("photo_time", "")
-            date_str = _extract_date(photo_time)
-            is_manual = _is_manual(asset_id)
 
             # Insert record
             try:
                 conn.execute(
                     """
                     INSERT INTO records (
-                        asset_id, photo_time, date, thumbnail_url, meal,
-                        calories, protein_g, carbs_g, fat_g, confidence,
-                        analyzed_at, user_label, replacement_image,
-                        reanalyzed_at, reanalysis_notes, is_manual
+                        asset_id, source_type, source_id, photo_time, thumbnail_url,
+                        original_url, meal, calories, protein_g, carbs_g, fat_g,
+                        confidence, analyzed_at, model_used, user_label, replacement_image
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         asset_id,
+                        "immich",
+                        asset_id,
                         photo_time,
-                        date_str,
                         record.get("thumbnail_url", ""),
+                        "",
                         record.get("meal", "unknown"),
                         record.get("calories", 0),
                         record.get("protein_g", 0),
@@ -577,11 +602,9 @@ def migrate_from_json(data_dir: Path) -> tuple[int, int, int]:
                         record.get("fat_g", 0),
                         record.get("confidence", "low"),
                         record.get("analyzed_at", datetime.now(HKT).isoformat()),
+                        None,
                         record.get("user_label"),
                         record.get("replacement_image"),
-                        record.get("reanalyzed_at"),
-                        record.get("reanalysis_notes"),
-                        is_manual,
                     ),
                 )
                 records_migrated += 1

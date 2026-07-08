@@ -52,13 +52,15 @@ def already_processed(date_str: str) -> set[str]:
 
 
 def load_ignored() -> set[str]:
-    return db.get_ignored_assets()
+    return db.get_ignored_assets() | db.get_classified_non_food()
 
 
 def append_log(date_str: str, asset_id: str, photo_time: str,
-               thumbnail_url: str, result: dict):
+               thumbnail_url: str, result: dict, source_type: str = "immich"):
     record = {
         "asset_id": asset_id,
+        "source_type": source_type,
+        "source_id": asset_id,
         "photo_time": photo_time,
         "thumbnail_url": thumbnail_url,
         "meal": result.get("meal", "unknown"),
@@ -178,6 +180,7 @@ def _run_source(
 
         if not detector.is_food(thumb):
             logger.info("  ❌ 不是食物，跳过")
+            db.add_classified_non_food(aid)
             continue
 
         logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
@@ -188,7 +191,7 @@ def _run_source(
             logger.info("  ❌ Gemini 判定非真实食物，跳过")
             continue
 
-        append_log(date_str, aid, photo_time, thumbnail_url, result)
+        append_log(date_str, aid, photo_time, thumbnail_url, result, source_type=source)
         logger.info("  ✅ %s ~%skcal", result.get("meal", "?"), result.get("calories", 0))
 
     client.close()
@@ -359,7 +362,7 @@ def cmd_add(args):
     }
 
     asset_id = f"manual-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-    record = append_log(date_str, asset_id, photo_time, "", result)
+    record = append_log(date_str, asset_id, photo_time, "", result, source_type="manual")
     logger.info("✅ 已记录: %s  %skcal (%s)", date_str, result["calories"], result["meal"])
     return record
 
