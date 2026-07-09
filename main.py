@@ -189,6 +189,7 @@ def _run_source(
         # Gemini may reject non-real-food images (screenshots, menus, etc.)
         if result.get("meal") in ("not real food", "unknown"):
             logger.info("  ❌ Gemini 判定非真实食物，跳过")
+            db.add_ignored_asset(aid)
             continue
 
         append_log(date_str, aid, photo_time, thumbnail_url, result, source_type=source)
