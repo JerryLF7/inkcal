@@ -122,18 +122,53 @@ class CalorieAnalyzer:
     def _parse_response(self, r: Any) -> dict[str, Any]:
         if isinstance(r, str):
             text = r
-        elif hasattr(r, "choices"):
+        elif hasattr(r, "choices") and r.choices:
             text = r.choices[0].message.content or "{}"
-        elif isinstance(r, dict) and "choices" in r:
+        elif isinstance(r, dict) and "choices" in r and r["choices"]:
             text = r["choices"][0]["message"]["content"] or "{}"
         else:
             text = str(r)
 
-        if not text or text.strip() == "":
-            logger.warning("Gemini returned empty content, raw response: %s", repr(r)[:500])
+        text = (text or "").strip()
+        if not text:
+            logger.warning("API returned empty content, raw response: %s", repr(r)[:500])
             text = "{}"
 
-        result = json.loads(text)
+        # Strip markdown code fences if present
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError as e:
+            # Try to fix common truncation: missing closing brace
+            if not text.endswith("}"):
+                try:
+                    result = json.loads(text + "}")
+                    logger.warning("Fixed truncated JSON by appending '}'")
+                except json.JSONDecodeError:
+                    logger.error("JSON parse failed: %s | text: %s", e, text[:200])
+                    result = self._empty_result()
+            elif text.count("{") != text.count("}"):
+                # Extra closing brace(s); trim from the end until balanced
+                trimmed = text.rstrip("}")
+                while trimmed and trimmed.count("{") < trimmed.count("}"):
+                    trimmed = trimmed[:-1].rstrip("}")
+                try:
+                    result = json.loads(trimmed)
+                    logger.warning("Fixed unbalanced JSON by trimming extra '}'")
+                except json.JSONDecodeError:
+                    logger.error("JSON parse failed: %s | text: %s", e, text[:200])
+                    result = self._empty_result()
+            else:
+                logger.error("JSON parse failed: %s | text: %s", e, text[:200])
+                result = self._empty_result()
+
         logger.info("Gemini analysis: %s", result)
         return result
 

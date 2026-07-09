@@ -63,7 +63,7 @@ Critical ones: `IMMICH_URL`, `IMMICH_API_KEY`, `GEMINI_API_KEY`, `INKCAL_SECRET`
 - **FRP optimization**: Card thumbnails use Immich `size=thumbnail` (7KB, not 157KB `preview`) for faster loading over tunneled connections. Request sequencing prevents stale responses from overwriting the current view. Images auto-retry on load failure. `apiFetch()` wraps all API calls with 10s timeout via AbortController and one automatic retry on timeout. Cross-request abort (`_abortController`) cancels in-flight requests when the user navigates to a new date. `_fetchId` dedup prevents stale retries from contaminating newer views.
 - **localStorage cache-first**: All date/day views use cache-first strategy — render from cache instantly, background fetch for updates. Week view cached by Monday-based key. Dates list cached with 5-minute TTL. Cache invalidated on manual upload and image replacement. Private browsing degrades gracefully (try/catch on all localStorage calls).
 - **Refresh button**: ↻ button next to the date label clears the current day's cache and re-fetches from the server. Spins during the request. Only affects the currently loaded date.
-- **Start with**: `INKCAL_PORT=5800 venv/bin/python web/server.py` from project root. Must use venv Python (not system) — `imagehash` and `pillow-heif` live there. Use `fuser -k 5800/tcp` to stop.
+- **Start with**: `INKCAL_PORT=5800 venv/bin/python web/server.py` from project root, or `inkcal run --command serve`. Must use venv Python (not system) — `imagehash` and `pillow-heif` live there. Use `fuser -k 5800/tcp` to stop.
 - **Login page**: Hardcoded inline HTML in server.py (not served from static/).
 
 ## CLI (`main.py`)
@@ -95,6 +95,7 @@ See `references/cli-workflows.md` for full workflow. Key points:
 10. **Timezone — use Immich `exifInfo`, not thumbnail EXIF**: Immich already parses EXIF server-side into `exifInfo.timeZone` and `exifInfo.dateTimeOriginal`. Do NOT re-download thumbnails to parse EXIF tags for timezone conversion — thumbnails may have EXIF stripped during processing, causing incorrect `+00:00` timestamps. The pipeline uses `format_photo_time()` which reads `asset["exifInfo"]` directly. Note: Immich's `timeZone` format is `UTC+8` (not `+08:00`), and some photos return IANA names like `Asia/Shanghai` — the parser handles both and falls back to HKT for unknown formats.
 11. **SQLite WAL mode concurrency**: `src/db.py` enables WAL (`PRAGMA journal_mode=WAL`) and opens connections with `check_same_thread=False` so Flask's multi-threaded server can share a single connection. CLI commands call `init_db()` at entry and do not need explicit close for read-only operations. The `.db-wal` and `.db-shm` files are normal — do not delete them while the server is running.
 12. **Migration idempotency**: `inkcal migrate` refuses to run if `data/inkcal.db` already exists. Use `--force` only if you intend to wipe and re-migrate from JSON backups. After migration, original JSON files are moved to `data/migrated-json-backup/`.
+13. **Project rename — intake → inkcal**: If you encounter old references to `intake` in external scripts or configs, update them. The `.env` env vars are `INKCAL_*`; the CLI command is `inkcal`; the database is `data/inkcal.db`.
 
 ## Related Project: food-classifier
 

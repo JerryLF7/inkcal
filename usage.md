@@ -14,20 +14,28 @@ inkcal view --date 2026-04-28        # specific day
 inkcal view --week                   # this week
 inkcal view --month 2026-04          # monthly
 
-# Run pipeline (Immich → SigLIP2 → Gemini)
+# Run pipeline (Immich/PhotoPrism → SigLIP2 → Gemini)
 inkcal run                           # today
 inkcal run --date 2026-04-28         # specific date
 
-# Fine-tune classifier on labeled data
-inkcal finetune                      # train (needs ≥4 labeled samples)
-inkcal finetune --export             # export images for review only
+# Label records (correct/wrong) for classifier training
+inkcal label --list                  # list unlabeled records
+inkcal label --id xxxxx --label correct
+inkcal label --status                # global labeling progress
+
+# Replace a record's image via pHash matching
+inkcal replace --id xxxxx --image ~/path/to/image.jpg
+
+# Migrate legacy JSON files to SQLite
+inkcal migrate
 ```
 
 ## Web Viewer
 
 ```bash
 cd ~/Coding/inkcal
-python3 web/server.py                # http://localhost:5800
+venv/bin/python web/server.py        # http://localhost:5800
+# or: inkcal run --command serve
 ```
 
 ### Auth
@@ -39,14 +47,13 @@ Set `INKCAL_USER` and `INKCAL_PASS` in `.env` to enable login. Leave empty to sk
 1. Tap a meal card → lightbox with full image
 2. Tap "正确" or "有误" to label
 3. "换图" to upload a replacement (auto-matched to Immich via pHash)
-4. Check progress via "训练进度" button
 
-### Fine-tuning flow
+### Reanalysis flow
 
-1. Label records in Web UI (correct/wrong)
-2. Run `inkcal finetune --export` to inspect training data
-3. Run `inkcal finetune` to train
-4. Model saved to `data/finetuned-model/`, auto-loaded on next run
+1. Tap "描述细节" in lightbox
+2. Add details (portion size, missed ingredients, etc.)
+3. Ctrl+Enter to submit → Gemini re-analyzes with context
+4. History is preserved; latest result becomes current
 
 ## Workflows
 
@@ -79,7 +86,7 @@ user: 看看周一吃了什么
 
 ## Data Storage
 
-- Records: `~/Coding/inkcal/data/YYYY-MM-DD.json`
-- Training exports: `data/training/food/`, `data/training/not-food/`
-- Fine-tuned model: `data/finetuned-model/`
+- Records: `~/Coding/inkcal/data/inkcal.db` (SQLite)
+- Fine-tuned model (optional): `data/finetuned-model/`
 - Replacement images: `data/images/` (only for unmatched uploads)
+- Migrated JSON backups: `data/migrated-json-backup/`
