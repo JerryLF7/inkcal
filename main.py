@@ -186,10 +186,12 @@ def _run_source(
         logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
         result = analyzer.analyze(original)
 
-        # Gemini may reject non-real-food images (screenshots, menus, etc.)
+        # Gemini may reject non-real-food images (screenshots, menus, etc.).
+        # Treat this as an automatic (not user-initiated) non-food decision so
+        # the photo remains visible in the album picker for manual correction.
         if result.get("meal") in ("not real food", "unknown"):
-            logger.info("  ❌ Gemini 判定非真实食物，跳过")
-            db.add_ignored_asset(aid)
+            logger.info("  ❌ Gemini 判定非真实食物，加入自动非食物缓存")
+            db.add_classified_non_food(aid)
             continue
 
         append_log(date_str, aid, photo_time, thumbnail_url, result, source_type=source)
