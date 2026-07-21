@@ -6,11 +6,13 @@ Subcommands:
   run         Full pipeline: Immich → SigLIP2 → Gemini → log
   view        View recorded meals in formatted table
   add         Manually record a meal
+  search      Search meal descriptions by keyword (FTS5)
 
 Usage:
   inkcal run [--date YYYY-MM-DD]
   inkcal view [--date YYYY-MM-DD] [--week] [--month YYYY-MM]
   inkcal add --meal "红烧肉" --calories 600 [--protein 25] [--carbs 30] [--fat 20]
+  inkcal search KEYWORD [--from YYYY-MM-DD] [--to YYYY-MM-DD]
 """
 
 import argparse
@@ -370,6 +372,50 @@ def cmd_add(args):
     return record
 
 
+# ── subcommand: search ─────────────────────────────────────────────────
+
+def cmd_search(args):
+    db.init_db()
+
+    records = db.search_records(
+        keyword=args.keyword,
+        start_date=args.from_date,
+        end_date=args.to_date,
+        limit=args.limit,
+    )
+
+    if not records:
+        print(f"🍽️  未找到匹配 “{args.keyword}” 的记录")
+        return
+
+    header = ["餐食", "热量", "蛋白", "碳水", "脂肪", "时间"]
+    rows = []
+    for r in records:
+        pt = r.get("photo_time", "")
+        if pt:
+            time_str = pt.replace("T", " ")
+            if len(time_str) > 16 and time_str[16] == ':':
+                time_str = time_str[:19]
+                tz_idx = pt.rfind('+') if '+' in pt else pt.rfind('-')
+                if tz_idx > 10:
+                    time_str += ' ' + pt[tz_idx:]
+            else:
+                time_str = time_str[:16]
+        else:
+            time_str = r.get("analyzed_at", "")[:16]
+        rows.append([
+            r.get("meal", "?")[:20],
+            f"{r.get('calories', 0)}kcal",
+            f"{r.get('protein_g', 0)}g",
+            f"{r.get('carbs_g', 0)}g",
+            f"{r.get('fat_g', 0)}g",
+            time_str,
+        ])
+
+    _print_table(rows, header)
+    print(f"\n🔍 找到 {len(records)} 条匹配 “{args.keyword}” 的记录")
+
+
 # ── subcommand: label ─────────────────────────────────────────────────
 
 def cmd_label(args):
@@ -540,6 +586,12 @@ def main():
     p_add.add_argument("--confidence", default="medium",
                        choices=["high", "medium", "low"])
 
+    p_search = sub.add_parser("search", help="Search meal descriptions by keyword (FTS5)")
+    p_search.add_argument("keyword", help="Search keyword, e.g. 汤咖喱 or 咖喱")
+    p_search.add_argument("--from", dest="from_date", help="Start date (YYYY-MM-DD)")
+    p_search.add_argument("--to", dest="to_date", help="End date (YYYY-MM-DD)")
+    p_search.add_argument("--limit", type=int, default=50, help="Max results (default 50)")
+
     p_label = sub.add_parser("label", help="Label records")
     p_label.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
     p_label.add_argument("--id", help="Asset ID (prefix match)")
@@ -564,6 +616,8 @@ def main():
         cmd_view(args)
     elif args.command == "add":
         cmd_add(args)
+    elif args.command == "search":
+        cmd_search(args)
     elif args.command == "label":
         cmd_label(args)
     elif args.command == "replace":

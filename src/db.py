@@ -110,8 +110,46 @@ def _create_schema(conn: sqlite3.Connection):
 
         CREATE INDEX IF NOT EXISTS idx_classified_non_food_asset_id
             ON classified_non_food(asset_id);
+
+        -- Full-text search over meal descriptions for quick retrieval
+        CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
+            meal,
+            content='records',
+            content_rowid='id'
+        );
+
+        -- Triggers keep the FTS index in sync with records writes
+        CREATE TRIGGER IF NOT EXISTS records_fts_insert AFTER INSERT ON records BEGIN
+            INSERT INTO records_fts(rowid, meal) VALUES (new.id, new.meal);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS records_fts_delete AFTER DELETE ON records BEGIN
+            INSERT INTO records_fts(records_fts, rowid, meal) VALUES ('delete', old.id, old.meal);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS records_fts_update AFTER UPDATE OF meal ON records BEGIN
+            INSERT INTO records_fts(records_fts, rowid, meal) VALUES ('delete', old.id, old.meal);
+            INSERT INTO records_fts(rowid, meal) VALUES (new.id, new.meal);
+        END;
         """
     )
+    conn.commit()
+
+    # Ensure existing records are indexed (idempotent for new DBs)
+    _backfill_fts(conn)
+
+
+def _backfill_fts(conn: sqlite3.Connection):
+    """Backfill FTS index for records created before FTS5 table existed."""
+    indexed = conn.execute(
+        "SELECT COUNT(*) FROM records_fts"
+    ).fetchone()[0]
+    total = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+    if indexed >= total:
+        return
+    logger.info("Backfilling FTS index for %d records...", total - indexed)
+    conn.execute("DELETE FROM records_fts")
+    conn.execute("INSERT INTO records_fts(rowid, meal) SELECT id, meal FROM records")
     conn.commit()
 
 
@@ -282,6 +320,90 @@ def get_records_by_date_range(start: str, end: str) -> list[dict]:
         (start, end),
     ).fetchall()
     return [_record_from_row(r) for r in rows]
+
+
+def search_records(
+    keyword: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Search meal descriptions using FTS5.
+
+    The keyword is passed through a simple tokenizer helper so callers can
+    enter Chinese phrases like "汤咖喱" and still get substring-style hits
+    even though FTS5 defaults to token-based matching. We also fall back
+    to a LIKE query if FTS5 returns nothing, so partial matches are still shown.
+    """
+    conn = _get_conn()
+
+    # Build date filter once
+    date_filter = ""
+    params: list = []
+    if start_date and end_date:
+        date_filter = " AND date(photo_time) BETWEEN ? AND ?"
+        params = [start_date, end_date]
+    elif start_date:
+        date_filter = " AND date(photo_time) >= ?"
+        params = [start_date]
+    elif end_date:
+        date_filter = " AND date(photo_time) <= ?"
+        params = [end_date]
+
+    # Split CJK phrases into individual characters to maximize recall for
+    # short/ambiguous queries like "汤咖喱".
+    tokens = _tokenize_keyword(keyword)
+    fts_query = " ".join(tokens)
+
+    rows = conn.execute(
+        f"""
+        SELECT r.* FROM records_fts f
+        JOIN records r ON r.id = f.rowid
+        WHERE f.records_fts MATCH ? {date_filter}
+        ORDER BY date(photo_time) DESC, photo_time DESC
+        LIMIT ?
+        """,
+        (fts_query, *params, limit),
+    ).fetchall()
+
+    if not rows:
+        # Fallback: broad substring search so users still see candidates
+        like_pattern = f"%{keyword}%"
+        rows = conn.execute(
+            f"""
+            SELECT * FROM records
+            WHERE meal LIKE ? {date_filter}
+            ORDER BY photo_time DESC
+            LIMIT ?
+            """,
+            (like_pattern, *params, limit),
+        ).fetchall()
+
+    return [_record_from_row(r) for r in rows]
+
+
+def _tokenize_keyword(keyword: str) -> list[str]:
+    """Prepare a keyword for FTS5 MATCH.
+
+    For ASCII words, keep them as tokens. For CJK characters (common in
+    meal descriptions), split into individual characters so a query like
+    "汤咖喱" matches rows containing any of those characters. This is a
+    pragmatic compromise before adding a full CJK tokenizer.
+    """
+    tokens = []
+    for char in keyword.strip():
+        if char.isspace():
+            continue
+        # CJK ranges: Unified Ideographs and Extensions A/B/C/D/E/F
+        o = ord(char)
+        if (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF) or (
+            0x20000 <= o <= 0x2A6DF) or (0x2A700 <= o <= 0x2B73F) or (
+            0x2B740 <= o <= 0x2B81F) or (0x2B820 <= o <= 0x2CEAF) or (
+            0x2CEB0 <= o <= 0x2EBEF) or (0xF900 <= o <= 0xFAFF):
+            tokens.append(char)
+        else:
+            tokens.append(char)
+    return tokens if tokens else [keyword.strip()]
 
 
 def update_record(asset_id: str, updates: dict) -> bool:
