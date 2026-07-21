@@ -1,7 +1,7 @@
 ---
 name: inkcal
 slug: inkcal
-version: 1.7.0
+version: 1.7.1
 description: Log meals, analyze food photos, track calories and macros, and label results.
 category: productivity
 ---
@@ -41,12 +41,11 @@ Use this skill for Jerry's inkcal food tracker:
 5. Default confidence is `medium`; use `high` for exact numbers, `low` for rough estimates.
 6. After mutations, verify with `inkcal view`, `inkcal label --status`, or the web UI.
 7. For code changes, inspect files first, preserve existing user changes, verify, then commit.
-8. **API JSON parsing**: Gemini-compatible endpoints may return truncated JSON (missing `}`) or JSON with extra trailing `}`. Both are handled in `src/calorie_analyzer.py` `_parse_response()`. See `references/api-truncation-fix.md`.
-9. **Cron false-positive cache pitfall**: The crontab runs `inkcal run` every 10 minutes (or whatever was last set). There are two paths that must be cached to avoid repeated Gemini calls:
+8. **Cron false-positive cache pitfall**: The crontab runs `inkcal run` every 10 minutes (or whatever was last set). There are two paths that must be cached to avoid repeated Gemini calls:
    - **Local classifier false positive**: persist the negative decision to `classified_non_food`; never to `ignored_assets`.
    - **Gemini rejects as non-food**: persist the `asset_id` to `ignored_assets` when Gemini returns `meal` of `not real food` or `unknown`.
    If Jerry reports "Gemini is called constantly", check both caches and the cron frequency. See the Cron False-Positive Cache Pitfall section below.
-10. **Web server lifecycle**: Before starting, always check if already running on port 5800. If user says "开一下" and it's already running, just report status. See `references/pipeline-web.md` for full workflow.
+9. **Web server lifecycle**: Before starting, always check if already running on port 5800. If user says "开一下" and it's already running, just report status. See `references/pipeline-web.md` for full workflow.
 
 ## Quick Reference
 
@@ -54,8 +53,8 @@ Use this skill for Jerry's inkcal food tracker:
 |------|------|
 | CLI commands, meal logging, queries, estimation | `references/cli-workflows.md` |
 | Photo pipeline, env vars, web UI, labeling, server lifecycle | `references/pipeline-web.md` |
-| API truncation / extra-brace fixes and provider quirks | `references/api-truncation-fix.md` |
 | Cron false positives and repeated Gemini calls | Cron False-Positive Cache Pitfall section below |
+| API JSON parsing quirks | API Response Parsing section below |
 | User-facing docs and architecture | `README.md`, `usage.md` |
 
 ## Cron False-Positive Cache Pitfall
@@ -142,3 +141,47 @@ If the symptom recurs, check these in order:
 3. **Run output**: `inkcal run` should print "未处理: 0 张 (忽略 N 张)" when all non-food photos are cached.
 4. **Records vs. Gemini calls**: records count per day should be far lower than cron-tick count.
 5. **Classifier accuracy**: review `inkcal label --status` for false positives and consider improving the fine-tuned model or raising a confidence threshold.
+
+## API Response Parsing
+
+Gemini-compatible endpoints (called via OpenAI SDK with `response_format={"type": "json_object"}`) can return malformed JSON. Two shapes have been seen in practice:
+
+### Truncated JSON (missing closing `}`)
+
+Example: `{"meal": "红烧肉", "calories": 600, ...`
+
+### Extra closing brace
+
+```json
+{
+  "meal": "not real food",
+  "calories": 0,
+  "protein_g": 0,
+  "carbs_g": 0,
+  "fat_g": 0,
+  "confidence": "low"
+}
+}
+```
+
+This produces `json.JSONDecodeError: Extra data: line 9 column 1 (char 118)`.
+
+### Repair logic in `src/calorie_analyzer.py`
+
+Inside `CalorieAnalyzer._parse_response()`:
+
+1. Strip markdown code fences if present.
+2. Return `_empty_result()` for empty content.
+3. Try `json.loads(text)`.
+4. On failure:
+   - If text does not end with `}`, append `}` and retry (truncation fix).
+   - If `{` and `}` counts are unbalanced, trim trailing `}` characters until balanced, then retry (extra-brace fix).
+5. Still failing → return `_empty_result()`.
+
+### Verification
+
+Run `inkcal run` and look for:
+
+- Normal responses: `Gemini analysis: { ... }`
+- Fixed responses: `Fixed truncated JSON by appending '}'` or `Fixed unbalanced JSON by trimming extra '}'`
+- Bad failures should not silently fall back to `unknown`; inspect the logs for `JSON parse failed` if they do.
