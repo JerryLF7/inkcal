@@ -524,6 +524,75 @@ def cmd_edit(args):
     return new
 
 
+# ── subcommand: analyze ──────────────────────────────────────────────
+
+def cmd_analyze(args):
+    """Force-analyze an asset with Gemini, skipping the food-detection step."""
+    db.init_db()
+    config = load_config()
+
+    if not args.id:
+        fail("invalid_args", "analyze 需要 --id（照片的 asset_id）")
+    if not config.get("gemini_key"):
+        fail("external_error", "GEMINI_API_KEY 未配置，请检查 .env")
+
+    sources = _resolve_sources(config)
+    if not sources:
+        fail("external_error", "没有启用的照片源")
+
+    # Try to figure out the source; default to first enabled
+    source = args.source or sources[0]
+    if source not in ("immich", "photoprism"):
+        fail("invalid_args", f"未知来源: {source}，应为 immich 或 photoprism")
+
+    from src.pipeline_ops import analyze_asset
+    record, error = analyze_asset(args.id, source, config)
+
+    if error == "already_processed":
+        fail("invalid_args", f"照片 {args.id[:8]} 已经分析过了")
+    if error == "download_failed":
+        fail("external_error", f"下载原图失败 [{source}]，请检查照片源是否在线")
+    if error == "not_food":
+        fail("not_food", f"Gemini 判定 {args.id[:8]} 非真实食物，不记录")
+    if error:
+        fail("external_error", f"分析失败: {error}")
+    if not record:
+        fail("external_error", "分析失败，原因未知")
+
+    if _emit({"ok": True, "command": "analyze", "record": record}):
+        return
+    print(f"✅ 已分析并记录: {record.get('meal', '?')} ~{record.get('calories', 0)}kcal")
+
+
+# ── subcommand: reanalyze ────────────────────────────────────────────
+
+def cmd_reanalyze(args):
+    """Re-analyze a previously recorded meal with user-provided notes."""
+    db.init_db()
+    config = load_config()
+
+    if not config.get("gemini_key"):
+        fail("external_error", "GEMINI_API_KEY 未配置，请检查 .env")
+
+    try:
+        record = resolve_one(asset_prefix=args.id, ref=args.ref,
+                             last=args.last, meal=args.meal, date=args.date)
+    except ResolverError as e:
+        fail(e.code, e.message, candidates=e.candidates)
+
+    if not args.notes:
+        fail("invalid_args", "reanalyze 需要 --notes 补充说明（如份量、遗漏食材）")
+
+    from src.pipeline_ops import reanalyze_record
+    updated = reanalyze_record(record["asset_id"], args.notes, config)
+    if updated is None:
+        fail("external_error", "无法获取照片进行重新分析")
+
+    if _emit({"ok": True, "command": "reanalyze", "record": updated}):
+        return
+    print(f"🔄 已重新分析: {updated.get('meal', '?')} ~{updated.get('calories', 0)}kcal")
+
+
 # ── subcommand: delete ───────────────────────────────────────────────
 
 def cmd_delete(args):
@@ -1095,6 +1164,18 @@ def main():
     p_explain.add_argument("--date", help="List pipeline status of all photos on a date")
     add_json_flag(p_explain)
 
+    p_analyze = sub.add_parser("analyze", help="Force-analyze an asset with Gemini (skip food detection)")
+    p_analyze.add_argument("--id", required=True, help="Asset ID of the photo to analyze")
+    p_analyze.add_argument("--source", choices=["immich", "photoprism"],
+                           help="Photo source (default: first enabled)")
+    add_json_flag(p_analyze)
+
+    p_reanalyze = sub.add_parser("reanalyze", help="Re-analyze a record with additional notes")
+    add_locator_args(p_reanalyze)
+    p_reanalyze.add_argument("--notes", required=True, help="Additional context for reanalysis")
+    p_reanalyze.add_argument("--date", help="Date filter for --meal locator")
+    add_json_flag(p_reanalyze)
+
     args = parser.parse_args()
 
     global _JSON_MODE
@@ -1122,6 +1203,10 @@ def main():
         cmd_delete(args)
     elif args.command == "stats":
         cmd_stats(args)
+    elif args.command == "analyze":
+        cmd_analyze(args)
+    elif args.command == "reanalyze":
+        cmd_reanalyze(args)
 
 
 if __name__ == "__main__":

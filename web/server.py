@@ -537,80 +537,31 @@ def api_analyze_album_photo():
     if not asset_id or not source or not _valid_date(date_str):
         return jsonify({"error": "missing or invalid params"}), 400
 
-    # Race-condition guard
-    if db.get_record_by_asset_id(asset_id):
-        return jsonify({"error": "already processed"}), 409
-
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     if not gemini_key:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 500
 
-    # Download original
-    image_bytes = None
-    if source == "immich":
-        immich_url = os.getenv("IMMICH_URL", "")
-        immich_key = os.getenv("IMMICH_API_KEY", "")
-        if not (immich_url and immich_key):
-            return jsonify({"error": "immich not configured"}), 500
-        try:
-            from src.immich_client import ImmichClient
-            client = ImmichClient(immich_url, immich_key)
-            image_bytes = client.download_original(asset_id)
-            client.close()
-        except Exception as e:
-            logger.error("Download original [immich] failed: %s", e)
-            return jsonify({"error": "download failed"}), 500
-    elif source == "photoprism":
-        photoprism_url = os.getenv("PHOTOPRISM_URL", "")
-        photoprism_key = os.getenv("PHOTOPRISM_API_KEY", "")
-        if not (photoprism_url and photoprism_key):
-            return jsonify({"error": "photoprism not configured"}), 500
-        try:
-            from src.photoprism_client import PhotoPrismClient
-            client = PhotoPrismClient(photoprism_url, photoprism_key)
-            image_bytes = client.download_original(asset_id)
-            client.close()
-        except Exception as e:
-            logger.error("Download original [photoprism] failed: %s", e)
-            return jsonify({"error": "download failed"}), 500
-    else:
-        return jsonify({"error": "unknown source"}), 400
+    from src.pipeline_ops import analyze_asset
 
-    if not image_bytes:
-        return jsonify({"error": "download failed"}), 500
-
-    # Gemini analysis (skip food detection)
-    from src.calorie_analyzer import CalorieAnalyzer
-    analyzer = CalorieAnalyzer(
-        gemini_key,
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-    )
-    result = analyzer.analyze(image_bytes)
-    analyzer.close()
-
-    if result.get("meal") in ("not real food", "unknown"):
-        return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
-
-    record = {
-        "asset_id": asset_id,
-        "source_type": source,
-        "source_id": asset_id,
-        "photo_time": photo_time,
-        "thumbnail_url": thumbnail_url,
-        "meal": result.get("meal", "unknown"),
-        "calories": result.get("calories", 0),
-        "protein_g": result.get("protein_g", 0),
-        "carbs_g": result.get("carbs_g", 0),
-        "fat_g": result.get("fat_g", 0),
-        "confidence": result.get("confidence", "low"),
-        "analyzed_at": datetime.now(HKT).isoformat(),
+    config = {
+        "immich_url": os.getenv("IMMICH_URL", ""),
+        "immich_key": os.getenv("IMMICH_API_KEY", ""),
+        "photoprism_url": os.getenv("PHOTOPRISM_URL", ""),
+        "photoprism_key": os.getenv("PHOTOPRISM_API_KEY", ""),
+        "gemini_key": gemini_key,
+        "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
     }
-    db.insert_record(record)
 
-    # If this photo was previously classified as non-food by the local classifier,
-    # remove it from that set so it can be re-analyzed in the future if needed.
-    db.remove_classified_non_food(asset_id)
+    record, error = analyze_asset(asset_id, source, config,
+                                  photo_time=photo_time,
+                                  thumbnail_url=thumbnail_url)
+    if error == "already_processed":
+        return jsonify({"error": "already processed"}), 409
+    if error == "not_food":
+        return jsonify({"error": "not food"}), 422
+    if error is not None:
+        return jsonify({"error": error}), 500
 
     return jsonify({"ok": True, "record": record, "date": date_str})
 
@@ -709,106 +660,28 @@ def api_reanalyze():
     if not found:
         return jsonify({"error": "record not found"}), 404
 
-    # Retrieve image bytes
-    image_bytes = None
-    replacement_image = found.get("replacement_image", "")
-
-    if replacement_image and Path(replacement_image).is_file():
-        try:
-            image_bytes = Path(replacement_image).read_bytes()
-        except Exception as e:
-            logger.error("Failed to read replacement image: %s", e)
-
-    if image_bytes is None and found.get("thumbnail_url"):
-        thumbnail_url = found["thumbnail_url"]
-        immich_url = os.getenv("IMMICH_URL", "").rstrip("/")
-        photoprism_url = os.getenv("PHOTOPRISM_URL", "").rstrip("/")
-
-        if immich_url and thumbnail_url.startswith(immich_url + "/"):
-            try:
-                r = httpx.get(thumbnail_url, headers=_immich_headers(), timeout=15)
-                if r.status_code == 200:
-                    image_bytes = r.content
-                else:
-                    logger.error("Immich returned %d for asset %s", r.status_code, asset_id)
-            except Exception as e:
-                logger.error("Failed to fetch from Immich: %s", e)
-        elif photoprism_url and thumbnail_url.startswith(photoprism_url + "/"):
-            # PhotoPrism thumbnail URLs already contain the token in the path
-            try:
-                r = httpx.get(thumbnail_url, timeout=15)
-                if r.status_code == 200:
-                    image_bytes = r.content
-                else:
-                    logger.error("PhotoPrism returned %d for asset %s", r.status_code, asset_id)
-            except Exception as e:
-                logger.error("Failed to fetch from PhotoPrism: %s", e)
-
-    if image_bytes is None:
-        return jsonify({"error": "image unavailable"}), 502
-
-    # Verify image validity
-    try:
-        Image.open(io.BytesIO(image_bytes)).verify()
-    except Exception:
-        return jsonify({"error": "invalid image data"}), 502
-
-    # Call Gemini reanalysis
+    # Delegate to shared pipeline_ops logic
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     if not gemini_key:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 500
 
-    from src.calorie_analyzer import CalorieAnalyzer
+    from src.pipeline_ops import reanalyze_record
 
-    analyzer = CalorieAnalyzer(
-        gemini_key,
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-    )
-
-    current_result = {
-        "meal": found.get("meal", "unknown"),
-        "calories": found.get("calories", 0),
-        "protein_g": found.get("protein_g", 0),
-        "carbs_g": found.get("carbs_g", 0),
-        "fat_g": found.get("fat_g", 0),
-        "confidence": found.get("confidence", "low"),
+    config = {
+        "immich_url": os.getenv("IMMICH_URL", ""),
+        "immich_key": os.getenv("IMMICH_API_KEY", ""),
+        "photoprism_url": os.getenv("PHOTOPRISM_URL", ""),
+        "photoprism_key": os.getenv("PHOTOPRISM_API_KEY", ""),
+        "gemini_key": gemini_key,
+        "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
     }
 
-    result = analyzer.reanalyze(image_bytes, current_result, notes)
-    analyzer.close()
+    updated = reanalyze_record(asset_id, notes, config)
+    if updated is None:
+        return jsonify({"error": "image unavailable"}), 502
 
-    # Preserve current values in history before overwriting
-    history_entry = {
-        "meal": found.get("meal"),
-        "calories": found.get("calories"),
-        "protein_g": found.get("protein_g"),
-        "carbs_g": found.get("carbs_g"),
-        "fat_g": found.get("fat_g"),
-        "confidence": found.get("confidence"),
-        "notes": notes,
-        "reanalyzed_at": datetime.now(HKT).isoformat(),
-    }
-    db.append_reanalysis_history(asset_id, history_entry)
-
-    # Update record with new values
-    db.update_record(asset_id, {
-        "meal": result.get("meal", found["meal"]),
-        "calories": result.get("calories", found["calories"]),
-        "protein_g": result.get("protein_g", found["protein_g"]),
-        "carbs_g": result.get("carbs_g", found["carbs_g"]),
-        "fat_g": result.get("fat_g", found["fat_g"]),
-        "confidence": result.get("confidence", found["confidence"]),
-        "reanalysis_notes": notes,
-        "reanalyzed_at": datetime.now(HKT).isoformat(),
-    })
-
-    # Fetch updated record for response
-    updated = db.get_record_by_asset_id(asset_id)
-    return jsonify({
-        "ok": True,
-        "record": updated,
-    })
+    return jsonify({"ok": True, "record": updated})
 
 
 @app.route("/api/local-image")
