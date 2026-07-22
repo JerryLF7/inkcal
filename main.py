@@ -449,6 +449,70 @@ def cmd_add(args):
     return record
 
 
+# ── subcommand: edit ─────────────────────────────────────────────────
+
+def cmd_edit(args):
+    db.init_db()
+
+    record = _resolve_one(args.id)
+    aid = record["asset_id"]
+
+    updates = {k: v for k, v in {
+        "meal": args.meal,
+        "calories": args.calories,
+        "protein_g": args.protein,
+        "carbs_g": args.carbs,
+        "fat_g": args.fat,
+    }.items() if v is not None}
+
+    # Date/time change: rebuild photo_time, preserving untouched components
+    if args.date or args.time:
+        old_pt = record.get("photo_time", "")
+        try:
+            old_dt = datetime.fromisoformat(old_pt) if old_pt else None
+        except ValueError:
+            old_dt = None
+        date_part = args.date or (old_pt[:10] if old_pt else
+            datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d"))
+        if args.time:
+            time_part = f"{args.time}:00"
+        elif old_dt:
+            time_part = old_dt.strftime("%H:%M:%S")
+        else:
+            time_part = "00:00:00"
+        tz_raw = old_dt.strftime("%z") if old_dt and old_dt.tzinfo else "+0800"
+        tz_part = f"{tz_raw[:3]}:{tz_raw[3:]}" if tz_raw else "+08:00"
+        updates["photo_time"] = f"{date_part}T{time_part}{tz_part}"
+
+    if args.confidence:
+        updates["confidence"] = args.confidence
+    elif updates:
+        updates["confidence"] = "high"  # human correction > model estimate
+
+    if not updates:
+        fail("invalid_args",
+             "没有要修改的字段（--meal/--calories/--protein/--carbs/--fat/"
+             "--date/--time/--confidence）")
+
+    # Preserve old values for traceability/rollback before mutating
+    db.append_reanalysis_history(aid, {
+        **{k: record.get(k) for k in
+           ("meal", "calories", "protein_g", "carbs_g", "fat_g", "confidence")},
+        "notes": args.note or "manual edit",
+    })
+    db.update_record(aid, updates)
+    new = db.get_record_by_asset_id(aid)
+
+    if _emit({"ok": True, "command": "edit", "record": new}):
+        return new
+
+    print(f"✅ 已修改 {aid[:8]}... ({new.get('meal', '?')})")
+    for k, v in updates.items():
+        if record.get(k) != v:
+            print(f"   {k}: {record.get(k)} → {v}")
+    return new
+
+
 # ── subcommand: search ─────────────────────────────────────────────────
 
 def cmd_search(args):
@@ -689,6 +753,20 @@ def main():
                        choices=["high", "medium", "low"])
     add_json_flag(p_add)
 
+    p_edit = sub.add_parser("edit", help="Edit a record's meal/macros/date directly")
+    p_edit.add_argument("--id", required=True, help="Asset ID (prefix match)")
+    p_edit.add_argument("--meal", help="New meal description")
+    p_edit.add_argument("--calories", type=int, help="New calories (kcal)")
+    p_edit.add_argument("--protein", type=int, help="New protein (g)")
+    p_edit.add_argument("--carbs", type=int, help="New carbs (g)")
+    p_edit.add_argument("--fat", type=int, help="New fat (g)")
+    p_edit.add_argument("--confidence", choices=["high", "medium", "low"],
+                        help="New confidence (defaults to high on edit)")
+    p_edit.add_argument("--date", help="Move record to this date (YYYY-MM-DD)")
+    p_edit.add_argument("--time", help="New time (HH:MM)")
+    p_edit.add_argument("--note", help="Note saved to reanalysis history")
+    add_json_flag(p_edit)
+
     p_search = sub.add_parser("search", help="Search meal descriptions by keyword (FTS5)")
     p_search.add_argument("keyword", help="Search keyword, e.g. 汤咖喱 or 咖喱")
     p_search.add_argument("--from", dest="from_date", help="Start date (YYYY-MM-DD)")
@@ -724,6 +802,8 @@ def main():
         cmd_view(args)
     elif args.command == "add":
         cmd_add(args)
+    elif args.command == "edit":
+        cmd_edit(args)
     elif args.command == "search":
         cmd_search(args)
     elif args.command == "label":
