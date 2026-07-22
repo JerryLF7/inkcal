@@ -66,17 +66,47 @@ inkcal view                          # 今天
 inkcal view --date 2026-05-13        # 指定日期
 inkcal view --week                   # 本周
 inkcal view --month 2026-05          # 整月
+inkcal view --from 2026-07-01 --to 2026-07-14  # 日期范围
+
+# 聚合统计
+inkcal stats --last 7d               # 最近一周
+inkcal stats --from 2026-07-01 --to 2026-07-14 --group-by day
+
+# 搜索记录（全文搜索）
+inkcal search 咖喱
+
+# 直接修改记录（旧值自动留痕）
+inkcal edit --ref 42 --calories 300 --note "两人份减半"
+inkcal edit --meal 红烧肉 --date 2026-07-21 --protein 30
+
+# 删除记录（自动加入忽略列表）
+inkcal delete --last
 
 # 标注正误（用于分类器训练）
 inkcal label --list                  # 列出未标注记录
-inkcal label --id xxxxx --label correct
+inkcal label --ref 42 --label correct
 
 # 替换图片（pHash 匹配 Immich 原图）
-inkcal replace --id xxxxx --image ~/path/to/image.jpg
+inkcal replace --ref 42 --image ~/path/to/image.jpg
+
+# 照片去向追溯
+inkcal explain --id <asset前缀>       # 单张照片的决策路径
+inkcal explain --date 2026-07-21      # 当日全量对账
+
+# 强制分析（分类器漏判的照片）
+inkcal analyze --id <asset-id> --source immich
+
+# 补充细节重新估算
+inkcal reanalyze --ref 42 --notes "少算了一份米饭"
+
+# 拉取流水线事件
+inkcal events
 
 # JSON → SQLite 迁移（首次使用）
 inkcal migrate
 ```
+
+所有读命令支持 `--json` 输出结构化数据。写命令支持四种定位方式：`--ref <id>`（记录 ID）、`--id <前缀>`（asset ID）、`--last`（最近一条）、`--meal <关键词> --date <日期>`。
 
 ## Web 查看器
 
@@ -103,11 +133,14 @@ inkcal run --command serve           # 或直接用 python web/server.py
 
 ## 数据存储
 
-SQLite（`data/inkcal.db`），三张表：
+SQLite（`data/inkcal.db`），六张表：
 
 - `records` — 主记录（餐食、热量、宏量、时间、标注、替换图片路径）
 - `reanalysis_history` — 重新分析历史，外键级联删除
 - `ignored_assets` — 已删除/忽略的资产 ID，cron 跳过
+- `classified_non_food` — 分类器/Gemini 判定非食物的资产 ID，Web 相册可见
+- `pipeline_events` — 流水线事件（agent 主动通知用）
+- `records_fts` — 全文搜索索引（FTS5）
 
 WAL 模式支持并发读写，Flask 多线程共享连接。
 
