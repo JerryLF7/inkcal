@@ -36,6 +36,7 @@ logger = logging.getLogger("inkcal")
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
 from src import db
+from src.resolver import resolve, resolve_one, ResolverError
 
 
 # ── output helpers (--json / structured errors) ─────────────────────
@@ -458,11 +459,15 @@ def cmd_add(args):
 def cmd_edit(args):
     db.init_db()
 
-    record = _resolve_one(args.id)
+    try:
+        record = resolve_one(asset_prefix=args.id, ref=args.ref,
+                             last=args.last, meal=args.meal, date=args.date)
+    except ResolverError as e:
+        fail(e.code, e.message, candidates=e.candidates)
     aid = record["asset_id"]
 
     updates = {k: v for k, v in {
-        "meal": args.meal,
+        "meal": args.new_meal,
         "calories": args.calories,
         "protein_g": args.protein,
         "carbs_g": args.carbs,
@@ -493,18 +498,20 @@ def cmd_edit(args):
     elif updates:
         updates["confidence"] = "high"  # human correction > model estimate
 
-    if not updates:
+    if not updates and not args.note:
         fail("invalid_args",
-             "没有要修改的字段（--meal/--calories/--protein/--carbs/--fat/"
-             "--date/--time/--confidence）")
+             "没有要修改的字段（--new-meal/--calories/--protein/--carbs/--fat/"
+             "--date/--time/--confidence/--note）")
 
     # Preserve old values for traceability/rollback before mutating
+    note = args.note or ("manual edit" if updates else "note only")
     db.append_reanalysis_history(aid, {
         **{k: record.get(k) for k in
            ("meal", "calories", "protein_g", "carbs_g", "fat_g", "confidence")},
-        "notes": args.note or "manual edit",
+        "notes": note,
     })
-    db.update_record(aid, updates)
+    if updates:
+        db.update_record(aid, updates)
     new = db.get_record_by_asset_id(aid)
 
     if _emit({"ok": True, "command": "edit", "record": new}):
@@ -515,6 +522,129 @@ def cmd_edit(args):
         if record.get(k) != v:
             print(f"   {k}: {record.get(k)} → {v}")
     return new
+
+
+# ── subcommand: delete ───────────────────────────────────────────────
+
+def cmd_delete(args):
+    db.init_db()
+
+    try:
+        record = resolve_one(asset_prefix=args.id, ref=args.ref,
+                             last=args.last, meal=args.meal, date=args.date)
+    except ResolverError as e:
+        fail(e.code, e.message, candidates=e.candidates)
+
+    aid = record["asset_id"]
+    replacement_image = record.get("replacement_image", "")
+
+    deleted = db.delete_record(aid)
+    if deleted is None:
+        fail("not_found", f"删除失败: {aid}")
+
+    # Clean up local replacement image
+    if replacement_image:
+        try:
+            Path(replacement_image).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # Add to ignore list so cron won't re-process
+    if aid and not aid.startswith("manual-"):
+        db.add_ignored_asset(aid)
+
+    if _emit({"ok": True, "command": "delete", "asset_id": aid,
+              "record": deleted}):
+        return
+    print(f"🗑️  已删除 {aid[:8]}... ({record.get('meal', '?')})")
+
+
+# ── subcommand: stats ────────────────────────────────────────────────
+
+def _parse_last(s: str) -> tuple[str, str]:
+    """Parse '--last 7d' / '2w' / '1m' into (from_date, to_date)."""
+    import re
+    m = re.match(r"^(\d+)\s*([dwm])$", s)
+    if not m:
+        fail("invalid_args", f"无法识别的时长: {s}，格式如 7d / 2w / 1m")
+    n = int(m.group(1))
+    unit = m.group(2)
+    today = datetime.now(timezone(timedelta(hours=8)))
+    if unit == "m":
+        # Approximate: subtract n months
+        year, month = today.year, today.month
+        month -= n
+        while month <= 0:
+            year -= 1
+            month += 12
+        import calendar as cal
+        last_day = cal.monthrange(year, month)[1]
+        start = today.replace(year=year, month=month, day=min(today.day, last_day))
+    else:
+        days = n * (7 if unit == "w" else 1)
+        start = today - timedelta(days=days)
+    return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+
+
+def cmd_stats(args):
+    db.init_db()
+
+    if args.last:
+        start, end = _parse_last(args.last)
+    else:
+        start = args.from_date or "1970-01-01"
+        end = args.to_date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+
+    records = db.get_records_by_date_range(start, end)
+    summary = db.summarize_records(records)
+    days = len({r["photo_time"][:10] for r in records if r.get("photo_time")})
+    days = days or 1
+
+    averages = {
+        "calories": round(summary["calories"] / days, 1),
+        "protein": round(summary["protein"] / days, 1),
+        "carbs": round(summary["carbs"] / days, 1),
+        "fat": round(summary["fat"] / days, 1),
+    }
+
+    payload = {
+        "ok": True,
+        "command": "stats",
+        "range": {"from": start, "to": end},
+        "totals": {
+            "meals": summary["meals"],
+            "calories": summary["calories"],
+            "protein": summary["protein"],
+            "carbs": summary["carbs"],
+            "fat": summary["fat"],
+        },
+        "daily_averages": averages,
+        "days_with_records": days,
+    }
+
+    if getattr(args, "group_by", None) == "day":
+        by_day: dict[str, dict] = {}
+        for r in records:
+            dk = r.get("photo_time", "")[:10]
+            if dk not in by_day:
+                by_day[dk] = {"meals": 0, "calories": 0, "protein": 0,
+                              "carbs": 0, "fat": 0}
+            t = by_day[dk]
+            t["meals"] += 1
+            t["calories"] += r.get("calories", 0)
+            t["protein"] += r.get("protein_g", 0)
+            t["carbs"] += r.get("carbs_g", 0)
+            t["fat"] += r.get("fat_g", 0)
+        payload["by_day"] = [{"date": d, **v} for d, v in sorted(by_day.items())]
+
+    if _emit(payload):
+        return
+
+    t = payload["totals"]
+    print(f"{start} → {end}  共 {days} 天  {t['meals']} 餐")
+    print(f"  总计: {t['calories']}kcal  蛋白 {t['protein']}g  碳水 {t['carbs']}g  脂肪 {t['fat']}g")
+    a = averages
+    print(f"  日均: {a['calories']}kcal  蛋白 {a['protein']}g  碳水 {a['carbs']}g  脂肪 {a['fat']}g")
 
 
 # ── subcommand: search ─────────────────────────────────────────────────
@@ -621,12 +751,16 @@ def cmd_label(args):
         return
 
     # Label a specific record
-    if not args.id or not args.label:
-        fail("invalid_args", "label 需要 --id 和 --label 参数")
+    if not args.label:
+        fail("invalid_args", "label 需要 --label 参数（结合 --id/--ref/--last/--meal 定位记录）")
     date_str = args.date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
     label = args.label
 
-    record = _resolve_one(args.id, date_str)
+    try:
+        record = resolve_one(asset_prefix=args.id, ref=args.ref,
+                             last=args.last, meal=args.meal, date=date_str)
+    except ResolverError as e:
+        fail(e.code, e.message, candidates=e.candidates)
     db.update_record(record["asset_id"], {"user_label": label})
     updated = db.get_record_by_asset_id(record["asset_id"])
     if _emit({"ok": True, "command": "label", "record": updated}):
@@ -787,8 +921,7 @@ def cmd_replace(args):
 
     image_path = Path(args.image).expanduser()
     if not image_path.exists():
-        print(f"❌ 图片不存在: {image_path}")
-        sys.exit(1)
+        fail("invalid_args", f"图片不存在: {image_path}")
     image_bytes = image_path.read_bytes()
 
     immich = ImmichClient(config["immich_url"], config["immich_key"])
@@ -796,29 +929,30 @@ def cmd_replace(args):
     matched = immich.match_by_phash(date_str, image_bytes, time_window=time_window)
     immich.close()
 
-    records = load_records(date_str)
-    for r in records:
-        if r.get("asset_id", "").startswith(args.id):
-            if matched:
-                db.update_record(r["asset_id"], {
-                    "thumbnail_url": matched["thumbnail_url"],
-                    "asset_id": matched["id"],
-                    "photo_time": matched.get("photo_time", r.get("photo_time", "")),
-                    "replacement_image": None,
-                })
-                print(f"✅ 已匹配并替换: {matched['id'][:8]}...")
-            else:
-                img_dir = DATA_DIR / "images"
-                img_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"{date_str}_{r['asset_id'][:8]}.jpg"
-                filepath = img_dir / filename
-                filepath.write_bytes(image_bytes)
-                db.update_record(r["asset_id"], {
-                    "replacement_image": str(filepath),
-                })
-                print(f"⚠️ 未匹配到 Immich 照片，已保存本地: {filepath}")
-            return
-    fail("not_found", f"未找到匹配记录: {args.id}")
+    try:
+        record = resolve_one(asset_prefix=args.id, ref=args.ref,
+                             last=args.last, meal=args.meal, date=date_str)
+    except ResolverError as e:
+        fail(e.code, e.message, candidates=e.candidates)
+
+    if matched:
+        db.update_record(record["asset_id"], {
+            "thumbnail_url": matched["thumbnail_url"],
+            "asset_id": matched["id"],
+            "photo_time": matched.get("photo_time", record.get("photo_time", "")),
+            "replacement_image": None,
+        })
+        print(f"✅ 已匹配并替换: {matched['id'][:8]}...")
+    else:
+        img_dir = DATA_DIR / "images"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{date_str}_{record['asset_id'][:8]}.jpg"
+        filepath = img_dir / filename
+        filepath.write_bytes(image_bytes)
+        db.update_record(record["asset_id"], {
+            "replacement_image": str(filepath),
+        })
+        print(f"⚠️ 未匹配到 Immich 照片，已保存本地: {filepath}")
 
 
 # ── subcommand: migrate ────────────────────────────────────────────────
@@ -875,6 +1009,14 @@ def main():
         p.add_argument("--json", action="store_true",
                        help="Machine-readable JSON output")
 
+    def add_locator_args(p):
+        """Add --id/--ref/--last/--meal resolver arguments to a subparser."""
+        p.add_argument("--id", help="Asset ID (prefix match)")
+        p.add_argument("--ref", type=int, help="Record ID (integer, from --json output)")
+        p.add_argument("--last", action="store_true",
+                       help="Most recent record")
+        p.add_argument("--meal", help="Keyword to search meal description")
+
     p_run = sub.add_parser("run", help="Run full pipeline (Immich → SigLIP2 → Gemini)")
     p_run.add_argument("--date", help="Date to process (YYYY-MM-DD), defaults to today")
 
@@ -899,8 +1041,8 @@ def main():
     add_json_flag(p_add)
 
     p_edit = sub.add_parser("edit", help="Edit a record's meal/macros/date directly")
-    p_edit.add_argument("--id", required=True, help="Asset ID (prefix match)")
-    p_edit.add_argument("--meal", help="New meal description")
+    add_locator_args(p_edit)
+    p_edit.add_argument("--new-meal", help="New meal description")
     p_edit.add_argument("--calories", type=int, help="New calories (kcal)")
     p_edit.add_argument("--protein", type=int, help="New protein (g)")
     p_edit.add_argument("--carbs", type=int, help="New carbs (g)")
@@ -921,7 +1063,7 @@ def main():
 
     p_label = sub.add_parser("label", help="Label records")
     p_label.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
-    p_label.add_argument("--id", help="Asset ID (prefix match)")
+    add_locator_args(p_label)
     p_label.add_argument("--label", choices=["correct", "wrong"], help="Label to apply")
     p_label.add_argument("--list", action="store_true", help="List unlabeled records for a date")
     p_label.add_argument("--status", action="store_true", help="Show global labeling progress")
@@ -929,8 +1071,20 @@ def main():
 
     p_replace = sub.add_parser("replace", help="Replace a record's image via pHash matching")
     p_replace.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
-    p_replace.add_argument("--id", required=True, help="Asset ID to replace (prefix match)")
+    add_locator_args(p_replace)
     p_replace.add_argument("--image", required=True, help="Path to replacement image")
+
+    p_delete = sub.add_parser("delete", help="Delete a record and ignore the asset")
+    p_delete.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
+    add_locator_args(p_delete)
+    add_json_flag(p_delete)
+
+    p_stats = sub.add_parser("stats", help="Aggregate stats over a date range")
+    p_stats.add_argument("--from", dest="from_date", help="Range start (YYYY-MM-DD)")
+    p_stats.add_argument("--to", dest="to_date", help="Range end (YYYY-MM-DD)")
+    p_stats.add_argument("--last", help="Shortcut: 7d / 2w / 1m")
+    p_stats.add_argument("--group-by", choices=["day"], help="Break down by day")
+    add_json_flag(p_stats)
 
     p_migrate = sub.add_parser("migrate", help="Migrate JSON files to SQLite")
     p_migrate.add_argument("--force", action="store_true",
@@ -964,6 +1118,10 @@ def main():
         cmd_migrate(args)
     elif args.command == "explain":
         cmd_explain(args)
+    elif args.command == "delete":
+        cmd_delete(args)
+    elif args.command == "stats":
+        cmd_stats(args)
 
 
 if __name__ == "__main__":

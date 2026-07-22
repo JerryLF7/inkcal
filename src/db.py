@@ -273,6 +273,18 @@ def get_record_by_asset_id(asset_id: str) -> dict | None:
     return _record_from_row(row, history if history else None)
 
 
+def get_record_by_id(record_id: int) -> dict | None:
+    """Get a single record by its integer primary key. Includes reanalysis_history."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM records WHERE id = ?", (record_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    history = get_reanalysis_history(row["asset_id"])
+    return _record_from_row(row, history if history else None)
+
+
 def find_records_by_asset_id_prefix(prefix: str, date_str: str | None = None) -> list[dict]:
     """Find records where asset_id starts with prefix. Optionally filter by date."""
     conn = _get_conn()
