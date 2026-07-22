@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -31,6 +32,60 @@ logger = logging.getLogger("inkcal")
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
 from src import db
+
+
+# ── output helpers (--json / structured errors) ─────────────────────
+
+_JSON_MODE = False
+
+EXIT = {
+    "not_found": 2,
+    "ambiguous": 3,
+    "not_food": 4,
+    "invalid_args": 64,
+    "external_error": 69,
+}
+
+
+def _emit(payload: dict) -> bool:
+    """Print payload as JSON when --json is on. Returns True if handled."""
+    if _JSON_MODE:
+        print(json.dumps(payload, ensure_ascii=False, default=str))
+        return True
+    return False
+
+
+def fail(code: str, message: str, **extra):
+    """Structured error exit: machine reads `error`, humans read `message`."""
+    if _JSON_MODE:
+        print(json.dumps(
+            {"ok": False, "error": code, "message": message, **extra},
+            ensure_ascii=False, default=str))
+    else:
+        print(f"❌ {message}")
+    sys.exit(EXIT.get(code, 1))
+
+
+def _brief(record: dict) -> dict:
+    """Compact record shape for candidate lists in ambiguous errors."""
+    return {
+        "id": record.get("id"),
+        "asset_id": record.get("asset_id"),
+        "meal": record.get("meal"),
+        "photo_time": record.get("photo_time"),
+        "calories": record.get("calories"),
+    }
+
+
+def _resolve_one(prefix: str, date_str: str | None = None) -> dict:
+    """Locate a single record by asset_id prefix, or fail with a structured error."""
+    hits = db.find_records_by_asset_id_prefix(prefix, date_str)
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        fail("not_found", f"未找到匹配记录: {prefix}")
+    fail("ambiguous", f"“{prefix}” 匹配到 {len(hits)} 条记录，请提供更长的前缀",
+         candidates=[_brief(h) for h in hits])
 
 
 # ── helpers ──────────────────────────────────────────────────────────
@@ -182,7 +237,7 @@ def _run_source(
 
         if not detector.is_food(thumb):
             logger.info("  ❌ 不是食物，跳过")
-            db.add_classified_non_food(aid)
+            db.add_classified_non_food(aid, decided_by="siglip2")
             continue
 
         logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
@@ -193,7 +248,7 @@ def _run_source(
         # the photo remains visible in the album picker for manual correction.
         if result.get("meal") in ("not real food", "unknown"):
             logger.info("  ❌ Gemini 判定非真实食物，加入自动非食物缓存")
-            db.add_classified_non_food(aid)
+            db.add_classified_non_food(aid, decided_by="gemini")
             continue
 
         append_log(date_str, aid, photo_time, thumbnail_url, result, source_type=source)
@@ -240,7 +295,8 @@ def cmd_run(args):
 
     detector.close()
     analyzer.close()
-    cmd_view(argparse.Namespace(date=date_str, week=False, month=None))
+    cmd_view(argparse.Namespace(
+        date=date_str, week=False, month=None, from_date=None, to_date=None))
 
 
 # ── subcommand: view ─────────────────────────────────────────────────
@@ -269,31 +325,49 @@ def _print_table(rows: list[list[str]], header: list[str]):
 def cmd_view(args):
     db.init_db()
 
-    if args.week:
-        today = datetime.now(timezone(timedelta(hours=8)))
-        # Monday of this week
-        monday = today - timedelta(days=today.weekday())
-        dates = [(monday + timedelta(days=i)).strftime("%Y-%m-%d")
-                 for i in range(7)]
-    elif args.month:
-        year, month = args.month.split("-")
-        import calendar
-        last_day = calendar.monthrange(int(year), int(month))[1]
-        dates = [f"{args.month}-{d:02d}" for d in range(1, last_day + 1)]
-    elif args.date:
-        dates = [args.date]
+    if args.from_date or args.to_date:
+        start = args.from_date or "1970-01-01"
+        end = args.to_date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        all_records = db.get_records_by_date_range(start, end)
+        dates = [start, end]
     else:
-        dates = [datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")]
+        if args.week:
+            today = datetime.now(timezone(timedelta(hours=8)))
+            # Monday of this week
+            monday = today - timedelta(days=today.weekday())
+            dates = [(monday + timedelta(days=i)).strftime("%Y-%m-%d")
+                     for i in range(7)]
+        elif args.month:
+            year, month = args.month.split("-")
+            import calendar
+            last_day = calendar.monthrange(int(year), int(month))[1]
+            dates = [f"{args.month}-{d:02d}" for d in range(1, last_day + 1)]
+        elif args.date:
+            dates = [args.date]
+        else:
+            dates = [datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")]
 
-    all_records = []
-    for d in dates:
-        all_records.extend(load_records(d))
+        all_records = []
+        for d in dates:
+            all_records.extend(load_records(d))
 
     if not all_records:
+        if _emit({"ok": True, "command": "view",
+                  "range": {"from": dates[0], "to": dates[-1]},
+                  "records": [],
+                  "summary": {"meals": 0, "calories": 0, "protein": 0,
+                              "carbs": 0, "fat": 0}}):
+            return
         print("🍽️  暂无记录")
         return
 
-    header = ["餐食", "热量", "蛋白", "碳水", "脂肪", "时间"]
+    if _emit({"ok": True, "command": "view",
+              "range": {"from": dates[0], "to": dates[-1]},
+              "records": all_records,
+              "summary": db.summarize_records(all_records)}):
+        return all_records
+
+    header = ["ID", "餐食", "热量", "蛋白", "碳水", "脂肪", "时间"]
     rows = []
     daily_totals = {}
     for r in all_records:
@@ -311,6 +385,7 @@ def cmd_view(args):
         else:
             time_str = r.get("analyzed_at", "")[:16]
         rows.append([
+            r.get("asset_id", "?")[:8],
             r.get("meal", "?")[:20],
             f"{r.get('calories', 0)}kcal",
             f"{r.get('protein_g', 0)}g",
@@ -368,6 +443,8 @@ def cmd_add(args):
 
     asset_id = f"manual-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
     record = append_log(date_str, asset_id, photo_time, "", result, source_type="manual")
+    if _emit({"ok": True, "command": "add", "record": record}):
+        return record
     logger.info("✅ 已记录: %s  %skcal (%s)", date_str, result["calories"], result["meal"])
     return record
 
@@ -385,10 +462,18 @@ def cmd_search(args):
     )
 
     if not records:
+        if _emit({"ok": True, "command": "search", "keyword": args.keyword,
+                  "records": [], "count": 0}):
+            return
         print(f"🍽️  未找到匹配 “{args.keyword}” 的记录")
         return
 
-    header = ["餐食", "热量", "蛋白", "碳水", "脂肪", "时间"]
+    if _emit({"ok": True, "command": "search", "keyword": args.keyword,
+              "range": {"from": args.from_date, "to": args.to_date},
+              "records": records, "count": len(records)}):
+        return
+
+    header = ["ID", "餐食", "热量", "蛋白", "碳水", "脂肪", "时间"]
     rows = []
     for r in records:
         pt = r.get("photo_time", "")
@@ -404,6 +489,7 @@ def cmd_search(args):
         else:
             time_str = r.get("analyzed_at", "")[:16]
         rows.append([
+            r.get("asset_id", "?")[:8],
             r.get("meal", "?")[:20],
             f"{r.get('calories', 0)}kcal",
             f"{r.get('protein_g', 0)}g",
@@ -428,6 +514,7 @@ def cmd_label(args):
                 if r.get("user_label"):
                     labeled.append({
                         "date": date_str,
+                        "id": r.get("id"),
                         "asset_id": r.get("asset_id", ""),
                         "meal": r.get("meal", "?"),
                         "label": r["user_label"],
@@ -436,6 +523,10 @@ def cmd_label(args):
         correct = sum(1 for x in labeled if x["label"] == "correct")
         wrong = sum(1 for x in labeled if x["label"] == "wrong")
         total = len(labeled)
+        if _emit({"ok": True, "command": "label", "mode": "status",
+                  "total": total, "correct": correct, "wrong": wrong,
+                  "labeled": labeled}):
+            return
         print(f"标注进度: {total} 条")
         print(f"  正确: {correct}  有误: {wrong}")
         if labeled:
@@ -449,6 +540,9 @@ def cmd_label(args):
         date_str = args.date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
         records = load_records(date_str)
         unlabeled = [r for r in records if not r.get("user_label")]
+        if _emit({"ok": True, "command": "label", "mode": "list", "date": date_str,
+                  "total": len(records), "unlabeled": unlabeled}):
+            return
         if not unlabeled:
             print(f"{date_str}  所有 {len(records)} 条记录已标注")
         else:
@@ -459,17 +553,18 @@ def cmd_label(args):
         return
 
     # Label a specific record
+    if not args.id or not args.label:
+        fail("invalid_args", "label 需要 --id 和 --label 参数")
     date_str = args.date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
     label = args.label
 
-    records = load_records(date_str)
-    for r in records:
-        if r.get("asset_id", "").startswith(args.id):
-            db.update_record(r["asset_id"], {"user_label": label})
-            aid = r["asset_id"][:8]
-            print(f"✅ 已标注 [{date_str}] {aid}... {r.get('meal', '?')} → {label}")
-            return
-    print(f"❌ 未找到匹配记录: {args.id}")
+    record = _resolve_one(args.id, date_str)
+    db.update_record(record["asset_id"], {"user_label": label})
+    updated = db.get_record_by_asset_id(record["asset_id"])
+    if _emit({"ok": True, "command": "label", "record": updated}):
+        return
+    aid = record["asset_id"][:8]
+    print(f"✅ 已标注 [{date_str}] {aid}... {record.get('meal', '?')} → {label}")
 
 
 # ── subcommand: replace ────────────────────────────────────────────────
@@ -514,7 +609,7 @@ def cmd_replace(args):
                 })
                 print(f"⚠️ 未匹配到 Immich 照片，已保存本地: {filepath}")
             return
-    print(f"❌ 未找到匹配记录: {args.id}")
+    fail("not_found", f"未找到匹配记录: {args.id}")
 
 
 # ── subcommand: migrate ────────────────────────────────────────────────
@@ -567,6 +662,10 @@ def main():
         description="inkcal — automatic food calorie tracker")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    def add_json_flag(p):
+        p.add_argument("--json", action="store_true",
+                       help="Machine-readable JSON output")
+
     p_run = sub.add_parser("run", help="Run full pipeline (Immich → SigLIP2 → Gemini)")
     p_run.add_argument("--date", help="Date to process (YYYY-MM-DD), defaults to today")
 
@@ -574,6 +673,9 @@ def main():
     p_view.add_argument("--date", help="Date to view (YYYY-MM-DD)")
     p_view.add_argument("--week", action="store_true", help="View this week")
     p_view.add_argument("--month", help="View a month (YYYY-MM)")
+    p_view.add_argument("--from", dest="from_date", help="Range start (YYYY-MM-DD)")
+    p_view.add_argument("--to", dest="to_date", help="Range end (YYYY-MM-DD)")
+    add_json_flag(p_view)
 
     p_add = sub.add_parser("add", help="Manually record a meal")
     p_add.add_argument("--meal", required=True, help="Meal description")
@@ -585,12 +687,14 @@ def main():
     p_add.add_argument("--time", help="Time (HH:MM), defaults to now")
     p_add.add_argument("--confidence", default="medium",
                        choices=["high", "medium", "low"])
+    add_json_flag(p_add)
 
     p_search = sub.add_parser("search", help="Search meal descriptions by keyword (FTS5)")
     p_search.add_argument("keyword", help="Search keyword, e.g. 汤咖喱 or 咖喱")
     p_search.add_argument("--from", dest="from_date", help="Start date (YYYY-MM-DD)")
     p_search.add_argument("--to", dest="to_date", help="End date (YYYY-MM-DD)")
     p_search.add_argument("--limit", type=int, default=50, help="Max results (default 50)")
+    add_json_flag(p_search)
 
     p_label = sub.add_parser("label", help="Label records")
     p_label.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
@@ -598,6 +702,7 @@ def main():
     p_label.add_argument("--label", choices=["correct", "wrong"], help="Label to apply")
     p_label.add_argument("--list", action="store_true", help="List unlabeled records for a date")
     p_label.add_argument("--status", action="store_true", help="Show global labeling progress")
+    add_json_flag(p_label)
 
     p_replace = sub.add_parser("replace", help="Replace a record's image via pHash matching")
     p_replace.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
@@ -609,6 +714,9 @@ def main():
                            help="Force re-migration (clears existing DB)")
 
     args = parser.parse_args()
+
+    global _JSON_MODE
+    _JSON_MODE = getattr(args, "json", False)
 
     if args.command == "run":
         cmd_run(args)
