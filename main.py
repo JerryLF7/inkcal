@@ -168,6 +168,7 @@ def _run_source(
     detector,
     analyzer,
     config: dict,
+    run_id: str = "",
 ):
     """Run the full pipeline for a single photo source."""
     if source == "immich":
@@ -240,9 +241,13 @@ def _run_source(
 
         logger.info("  🔍 检测 [%s...] (拍摄于 %s)", aid[:8], photo_time)
 
-        if not detector.is_food(thumb):
+        score = detector.score(thumb)
+        if score < 0.5:
             logger.info("  ❌ 不是食物，跳过")
             db.add_classified_non_food(aid, decided_by="siglip2")
+            if score >= 0.4:  # grey zone — worth a human look
+                db.add_event(run_id, "classifier_unsure", aid,
+                             {"score": round(score, 3)})
             continue
 
         logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
@@ -254,10 +259,21 @@ def _run_source(
         if result.get("meal") in ("not real food", "unknown"):
             logger.info("  ❌ Gemini 判定非真实食物，加入自动非食物缓存")
             db.add_classified_non_food(aid, decided_by="gemini")
+            db.add_event(run_id, "gemini_rejected", aid, None)
             continue
 
-        append_log(date_str, aid, photo_time, thumbnail_url, result, source_type=source)
+        rec = append_log(date_str, aid, photo_time, thumbnail_url, result,
+                         source_type=source)
         logger.info("  ✅ %s ~%skcal", result.get("meal", "?"), result.get("calories", 0))
+
+        db.add_event(run_id, "meal_recorded", aid, {
+            "record_id": rec.get("id"),
+            "meal": rec.get("meal"),
+            "calories": rec.get("calories"),
+        })
+        if rec.get("confidence") == "low":
+            db.add_event(run_id, "low_confidence", aid,
+                         {"record_id": rec.get("id")})
 
     client.close()
 
@@ -272,6 +288,7 @@ def cmd_run(args):
 
     config = load_config()
     sources = _resolve_sources(config)
+    run_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(3).hex()
 
     if not sources:
         logger.error("没有启用的照片源。请在 .env 中设置 SOURCE_IMMICH=1 或 SOURCE_PHOTOPRISM=1")
@@ -292,14 +309,21 @@ def cmd_run(args):
         model=config["gemini_model"],
     )
 
+    stats: dict[str, int] = {}
     for source in sources:
         try:
-            _run_source(source, date_str, target_date, detector, analyzer, config)
+            _run_source(source, date_str, target_date, detector, analyzer,
+                        config, run_id=run_id)
         except Exception as e:
             logger.error("[%s] Pipeline failed: %s", source, e)
 
     detector.close()
     analyzer.close()
+
+    # Write run summary event
+    summary = db.get_run_summary(run_id)
+    db.add_event(run_id, "run_summary", None, {"date": date_str, "stats": summary})
+
     cmd_view(argparse.Namespace(
         date=date_str, week=False, month=None, from_date=None, to_date=None))
 
@@ -522,6 +546,73 @@ def cmd_edit(args):
         if record.get(k) != v:
             print(f"   {k}: {record.get(k)} → {v}")
     return new
+
+
+# ── subcommand: events ───────────────────────────────────────────────
+
+def cmd_events(args):
+    """Pull unconsumed pipeline events so the agent can act on them."""
+    db.init_db()
+
+    if not args.consumed:
+        events = db.get_unconsumed_events()
+        if _emit({"ok": True, "command": "events",
+                  "events": events, "count": len(events)}):
+            # Mark as consumed after emitting
+            if events and not args.peek:
+                db.mark_events_consumed([e["id"] for e in events])
+            return
+        if not events:
+            print("📭 没有未消费的事件")
+            return
+        run_ids = {e["run_id"] for e in events}
+        print(f"📬 {len(events)} 个未消费事件 (来自 {len(run_ids)} 次 run):")
+        for e in events:
+            emoji = {
+                "meal_recorded": "✅", "low_confidence": "⚠️",
+                "gemini_rejected": "🚫", "classifier_unsure": "🤔",
+                "run_summary": "📊",
+            }.get(e["event_type"], "📌")
+            line = f"  {emoji} {e['event_type']}"
+            p = e.get("payload") or {}
+            if e["event_type"] == "meal_recorded":
+                line += f"  {p.get('meal', '?')} ~{p.get('calories', 0)}kcal"
+            elif e["event_type"] == "low_confidence":
+                line += f"  record_id={p.get('record_id')}"
+            elif e["event_type"] == "classifier_unsure":
+                line += f"  {e.get('asset_id', '?')[:8]} score={p.get('score')}"
+            elif e["event_type"] == "run_summary":
+                line += f"  {p.get('date', '?')}  {p.get('stats', {})}"
+            elif e["event_type"] == "gemini_rejected":
+                line += f"  {e.get('asset_id', '?')[:8]}"
+            print(line)
+        if events:
+            db.mark_events_consumed([e["id"] for e in events])
+        return
+
+    # --consumed mode: show historical events (read-only)
+    all_events = []
+    conn = db._get_conn()
+    limit = args.limit or 100
+    rows = conn.execute(
+        "SELECT * FROM pipeline_events ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    import json as _json
+    for r in rows:
+        d = dict(r)
+        if d.get("payload") and isinstance(d["payload"], str):
+            try:
+                d["payload"] = _json.loads(d["payload"])
+            except _json.JSONDecodeError:
+                pass
+        all_events.append(d)
+    if _emit({"ok": True, "command": "events", "mode": "history",
+              "events": all_events, "count": len(all_events)}):
+        return
+    print(f"📋 最近 {len(all_events)} 个事件:")
+    for e in all_events:
+        print(f"  [{e['created_at']}] {e['event_type']}  "
+              f"(run {e['run_id'][:12]})")
 
 
 # ── subcommand: analyze ──────────────────────────────────────────────
@@ -1176,6 +1267,15 @@ def main():
     p_reanalyze.add_argument("--date", help="Date filter for --meal locator")
     add_json_flag(p_reanalyze)
 
+    p_events = sub.add_parser("events", help="Pull unconsumed pipeline events")
+    p_events.add_argument("--consumed", action="store_true",
+                          help="Show historical events instead of active queue")
+    p_events.add_argument("--peek", action="store_true",
+                          help="Peek without marking as consumed")
+    p_events.add_argument("--limit", type=int, default=100,
+                          help="Max events to show (--consumed mode only)")
+    add_json_flag(p_events)
+
     args = parser.parse_args()
 
     global _JSON_MODE
@@ -1207,6 +1307,8 @@ def main():
         cmd_analyze(args)
     elif args.command == "reanalyze":
         cmd_reanalyze(args)
+    elif args.command == "events":
+        cmd_events(args)
 
 
 if __name__ == "__main__":
