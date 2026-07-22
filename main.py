@@ -6,13 +6,17 @@ Subcommands:
   run         Full pipeline: Immich → SigLIP2 → Gemini → log
   view        View recorded meals in formatted table
   add         Manually record a meal
+  edit        Edit a record's meal/macros/date directly
   search      Search meal descriptions by keyword (FTS5)
+  explain     Explain where a photo ended up in the pipeline
 
 Usage:
   inkcal run [--date YYYY-MM-DD]
-  inkcal view [--date YYYY-MM-DD] [--week] [--month YYYY-MM]
+  inkcal view [--date YYYY-MM-DD] [--week] [--month YYYY-MM] [--json]
   inkcal add --meal "红烧肉" --calories 600 [--protein 25] [--carbs 30] [--fat 20]
-  inkcal search KEYWORD [--from YYYY-MM-DD] [--to YYYY-MM-DD]
+  inkcal edit --id PREFIX [--calories 300] [--date YYYY-MM-DD] [--note "..."]
+  inkcal search KEYWORD [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--json]
+  inkcal explain (--id PREFIX | --date YYYY-MM-DD) [--json]
 """
 
 import argparse
@@ -631,6 +635,147 @@ def cmd_label(args):
     print(f"✅ 已标注 [{date_str}] {aid}... {record.get('meal', '?')} → {label}")
 
 
+# ── subcommand: explain ──────────────────────────────────────────────
+
+_EXPLAIN_HINTS = {
+    "siglip2": "本地分类器判定非食物。若为漏判，可在 Web UI「选择照片」手动送 Gemini 分析",
+    "gemini": "Gemini 判定非真实食物（截图/菜单/包装等）。如是误判，可在 Web UI 选择照片重新分析",
+    "ignored": "用户删除/忽略的照片，pipeline 不再处理",
+    "unprocessed": "尚未处理，cron 下一轮会处理；若长期停留，检查照片是否在 SOURCE 配置的相册中",
+}
+
+_STATUS_EMOJI = {
+    "recorded": "✅",
+    "classified_non_food": "🚫",
+    "gemini_rejected": "🚫",
+    "ignored": "🗑️",
+    "unprocessed": "⏳",
+}
+
+
+def _explain_hit_record(r: dict) -> dict:
+    return {
+        "asset_id": r["asset_id"],
+        "status": "recorded",
+        "detail": {
+            "record_id": r.get("id"),
+            "meal": r.get("meal"),
+            "calories": r.get("calories"),
+            "photo_time": r.get("photo_time"),
+        },
+    }
+
+
+def _explain_hit_cnf(e: dict) -> dict:
+    by = e["decided_by"]
+    return {
+        "asset_id": e["asset_id"],
+        "status": "gemini_rejected" if by == "gemini" else "classified_non_food",
+        "detail": {
+            "decided_by": by,
+            "classified_at": e["classified_at"],
+            "hint": _EXPLAIN_HINTS[by],
+        },
+    }
+
+
+def cmd_explain(args):
+    db.init_db()
+
+    if args.id:
+        hits = (
+            [_explain_hit_record(r)
+             for r in db.find_records_by_asset_id_prefix(args.id)]
+            + [_explain_hit_cnf(e) for e in db.find_classified_non_food(args.id)]
+            + [{"asset_id": a, "status": "ignored",
+                "detail": {"hint": _EXPLAIN_HINTS["ignored"]}}
+               for a in db.find_ignored_assets(args.id)]
+        )
+        if not hits:
+            fail("not_found", f"{args.id} 不在任何本地表中",
+                 hint="未处理的照片不会入库，可用 inkcal explain --date 查看当日所有照片状态")
+        if len(hits) > 1:
+            fail("ambiguous", f"“{args.id}” 匹配到 {len(hits)} 个资产，请提供更长的前缀",
+                 candidates=hits)
+        hit = hits[0]
+        if _emit({"ok": True, "command": "explain", **hit}):
+            return
+        emoji = _STATUS_EMOJI[hit["status"]]
+        print(f"{emoji} {hit['asset_id']}")
+        print(f"   状态: {hit['status']}")
+        for k, v in hit["detail"].items():
+            print(f"   {k}: {v}")
+        return
+
+    if not args.date:
+        fail("invalid_args", "explain 需要 --id 或 --date 参数")
+
+    date_str = args.date
+    config = load_config()
+    sources = _resolve_sources(config)
+    if not sources:
+        fail("external_error", "没有启用的照片源，请检查 .env 的 SOURCE / IMMICH_API_KEY")
+
+    target_date = datetime.strptime(date_str, "%Y-%m-%d").replace(
+        tzinfo=timezone(timedelta(hours=8)))
+
+    records_by_asset = {r["asset_id"]: r for r in db.get_records_by_date(date_str)}
+    cnf_by_asset = {e["asset_id"]: e for e in db.find_classified_non_food()}
+    ignored = set(db.find_ignored_assets())
+
+    assets_out = []
+    for source in sources:
+        try:
+            if source == "immich":
+                from src.immich_client import ImmichClient
+                client = ImmichClient(config["immich_url"], config["immich_key"])
+            elif source == "photoprism":
+                from src.photoprism_client import PhotoPrismClient
+                client = PhotoPrismClient(config["photoprism_url"], config["photoprism_key"])
+            else:
+                logger.error("未知来源: %s", source)
+                continue
+            try:
+                assets = client.get_date_assets(target_date)
+            finally:
+                client.close()
+        except Exception as e:
+            fail("external_error", f"[{source}] 拉取 {date_str} 照片列表失败: {e}")
+
+        for a in assets:
+            aid = a["id"]
+            if aid in records_by_asset:
+                hit = _explain_hit_record(records_by_asset[aid])
+            elif aid in cnf_by_asset:
+                hit = _explain_hit_cnf(cnf_by_asset[aid])
+            elif aid in ignored:
+                hit = {"asset_id": aid, "status": "ignored",
+                       "detail": {"hint": _EXPLAIN_HINTS["ignored"]}}
+            else:
+                hit = {"asset_id": aid, "status": "unprocessed",
+                       "detail": {"hint": _EXPLAIN_HINTS["unprocessed"]}}
+            hit["source"] = source
+            assets_out.append(hit)
+
+    summary: dict[str, int] = {}
+    for h in assets_out:
+        summary[h["status"]] = summary.get(h["status"], 0) + 1
+
+    if _emit({"ok": True, "command": "explain", "date": date_str,
+              "assets": assets_out, "summary": summary}):
+        return
+
+    print(f"{date_str}  共 {len(assets_out)} 张照片: "
+          + "  ".join(f"{_STATUS_EMOJI[k]}{k}×{v}" for k, v in sorted(summary.items())))
+    for h in assets_out:
+        line = f"  {_STATUS_EMOJI[h['status']]} {h['asset_id'][:8]}  {h['status']}"
+        if h["status"] == "recorded":
+            line += f"  {h['detail'].get('meal', '?')} ~{h['detail'].get('calories', 0)}kcal"
+        elif h["status"] in ("classified_non_food", "gemini_rejected"):
+            line += f"  (by {h['detail']['decided_by']})"
+        print(line)
+
+
 # ── subcommand: replace ────────────────────────────────────────────────
 
 def cmd_replace(args):
@@ -791,6 +936,11 @@ def main():
     p_migrate.add_argument("--force", action="store_true",
                            help="Force re-migration (clears existing DB)")
 
+    p_explain = sub.add_parser("explain", help="Explain where a photo ended up in the pipeline")
+    p_explain.add_argument("--id", help="Asset ID (prefix match)")
+    p_explain.add_argument("--date", help="List pipeline status of all photos on a date")
+    add_json_flag(p_explain)
+
     args = parser.parse_args()
 
     global _JSON_MODE
@@ -812,6 +962,8 @@ def main():
         cmd_replace(args)
     elif args.command == "migrate":
         cmd_migrate(args)
+    elif args.command == "explain":
+        cmd_explain(args)
 
 
 if __name__ == "__main__":
