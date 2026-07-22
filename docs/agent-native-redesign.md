@@ -450,14 +450,17 @@ inkcal_get_events() / inkcal_label(ref, label)
 
 交付标准：第 5 节场景表前四行全部走通。✅
 
-### Milestone 2：解锁组合（P1，预计 2–3 天）
+### Milestone 2：解锁组合（P1，预计 2–3 天）✅ 已完成 2026-07-22
 
-- [ ] P1-4 `src/resolver.py` + 全部写命令接入
-- [ ] P1-5 `inkcal stats`
-- [ ] P1-6 `src/pipeline_ops.py` 抽取 + `analyze` / `reanalyze` CLI
-- [ ] `food_detector.score()` 暴露（为灰区事件铺路）
+- [x] P1-4 `src/resolver.py` + 全部写命令接入 → `27c66ac`
+- [x] P1-5 `inkcal stats` → `27c66ac`
+- [x] P1-6 `src/pipeline_ops.py` 抽取 + `analyze` / `reanalyze` CLI → `20eafda`
+- [x] `food_detector.score()` 暴露（为灰区事件铺路）→ `27c66ac`
+- [x] `inkcal delete` 命令（附带，db.delete_record 已存在）→ `27c66ac`
 
-交付标准：SKILL.md 里的两步对账全部消失；web 端回归无行为变化。
+注意：edit 的 `--meal` 参数改名为 `--new-meal`，避免与 resolver 的 `--meal`（关键词定位）冲突。这是 M1 引入的命令（未对外发布），无兼容性问题。
+
+交付标准：SKILL.md 里的两步对账全部消失；web 端回归无行为变化。✅
 
 ### Milestone 3：从"不僵硬"到"活"（P2，预计 2–3 天）
 
