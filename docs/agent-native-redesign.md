@@ -439,14 +439,16 @@ inkcal_get_events() / inkcal_label(ref, label)
 
 ## 6. 实施计划
 
-### Milestone 1：消除撞墙（P0，预计 1–2 天）
+### Milestone 1：消除撞墙（P0，预计 1–2 天）✅ 已完成 2026-07-22
 
-- [ ] P0-1 `--json`（view / search / label --list / label --status，search 输出补 asset_id 与 id）
-- [ ] P0-2 `inkcal edit`（含自动写 reanalysis_history）
-- [ ] P0-3 `inkcal explain` + `classified_non_food.decided_by` 列迁移
-- [ ] P1-7 结构化错误（提前到本阶段，与 --json 同体落地）
+- [x] P0-1 `--json`（view / search / label --list / label --status，search 输出补 asset_id 与 id）→ `c5253de`
+- [x] P0-2 `inkcal edit`（含自动写 reanalysis_history）→ `c854ac5`
+- [x] P0-3 `inkcal explain` + `classified_non_food.decided_by` 列迁移 → `15dd448`
+- [x] P1-7 结构化错误（提前到本阶段，与 --json 同体落地）→ `c5253de`
 
-交付标准：第 5 节场景表前四行全部走通。
+附带修复：`update_record`/`move_record` 刷新 `updated_at`、`label` 缺参数不再崩溃、`view --from/--to` 范围查询、`INKCAL_DB` 环境变量支持。
+
+交付标准：第 5 节场景表前四行全部走通。✅
 
 ### Milestone 2：解锁组合（P1，预计 2–3 天）
 
