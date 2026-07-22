@@ -1,5 +1,6 @@
 """SQLite database layer for inkcal — replaces JSON file storage."""
 
+import os
 import sqlite3
 import logging
 from datetime import datetime, timezone, timedelta
@@ -33,6 +34,8 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     global _db_path
     if db_path is not None:
         _db_path = db_path
+    if _db_path is None and os.environ.get("INKCAL_DB"):
+        _db_path = Path(os.environ["INKCAL_DB"])
     if _db_path is None:
         _db_path = Path(__file__).resolve().parent.parent / "data" / "inkcal.db"
     _db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,8 +138,21 @@ def _create_schema(conn: sqlite3.Connection):
     )
     conn.commit()
 
+    _migrate_schema(conn)
+
     # Ensure existing records are indexed (idempotent for new DBs)
     _backfill_fts(conn)
+
+
+def _migrate_schema(conn: sqlite3.Connection):
+    """Idempotent column additions for databases created before a column existed."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(classified_non_food)")}
+    if "decided_by" not in cols:
+        conn.execute(
+            "ALTER TABLE classified_non_food "
+            "ADD COLUMN decided_by TEXT NOT NULL DEFAULT 'siglip2'"
+        )
+        conn.commit()
 
 
 def _backfill_fts(conn: sqlite3.Connection):
@@ -175,6 +191,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
 def _record_from_row(row: sqlite3.Row, history: list[dict] | None = None) -> dict:
     """Build a record dict matching the existing JSON format."""
     record = {
+        "id": row["id"],
         "asset_id": row["asset_id"],
         "source_type": row["source_type"],
         "source_id": row["source_id"] or "",
@@ -447,6 +464,7 @@ def update_record(asset_id: str, updates: dict) -> bool:
         set_clauses.append("asset_id = ?")
         values.append(new_asset_id)
 
+    set_clauses.append("updated_at = datetime('now')")
     values.append(asset_id)
     query = f"UPDATE records SET {', '.join(set_clauses)} WHERE asset_id = ?"
     cursor = conn.execute(query, tuple(values))
@@ -521,6 +539,7 @@ def move_record(asset_id: str, new_date: str, updates: dict | None = None) -> bo
                     set_clauses.append(f"{db_col} = ?")
                     values.append(updates[json_key])
 
+    set_clauses.append("updated_at = datetime('now')")
     values.append(asset_id)
     cursor = conn.execute(
         f"UPDATE records SET {', '.join(set_clauses)} WHERE asset_id = ?",
@@ -613,13 +632,39 @@ def get_classified_non_food() -> set[str]:
     return {r["asset_id"] for r in rows}
 
 
-def add_classified_non_food(asset_id: str):
+def add_classified_non_food(asset_id: str, decided_by: str = "siglip2"):
     conn = _get_conn()
     conn.execute(
-        "INSERT OR IGNORE INTO classified_non_food (asset_id) VALUES (?)",
-        (asset_id,),
+        "INSERT OR IGNORE INTO classified_non_food (asset_id, decided_by) VALUES (?, ?)",
+        (asset_id, decided_by),
     )
     conn.commit()
+
+
+def find_classified_non_food(prefix: str | None = None) -> list[dict]:
+    """List classified_non_food entries, optionally filtered by asset_id prefix."""
+    conn = _get_conn()
+    if prefix:
+        rows = conn.execute(
+            "SELECT * FROM classified_non_food WHERE asset_id LIKE ?",
+            (prefix + "%",),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM classified_non_food").fetchall()
+    return [dict(r) for r in rows]
+
+
+def find_ignored_assets(prefix: str | None = None) -> list[str]:
+    """List ignored asset_ids, optionally filtered by prefix."""
+    conn = _get_conn()
+    if prefix:
+        rows = conn.execute(
+            "SELECT asset_id FROM ignored_assets WHERE asset_id LIKE ?",
+            (prefix + "%",),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT asset_id FROM ignored_assets").fetchall()
+    return [r["asset_id"] for r in rows]
 
 
 def remove_classified_non_food(asset_id: str):
