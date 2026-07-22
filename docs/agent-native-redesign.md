@@ -644,3 +644,5 @@ if rec["confidence"] == "low":
 ---
 
 *文档完。建议把 Milestone 1 直接开一个 GitHub issue 或交给 coding agent 执行，P0 四项彼此独立，可并行。*
+
+*实施回顾：见 [agent-native-redesign-retrospective.md](./agent-native-redesign-retrospective.md)（2026-07-22 完成）。*
