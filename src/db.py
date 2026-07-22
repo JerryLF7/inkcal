@@ -145,7 +145,7 @@ def _create_schema(conn: sqlite3.Connection):
 
 
 def _migrate_schema(conn: sqlite3.Connection):
-    """Idempotent column additions for databases created before a column existed."""
+    """Idempotent column/table additions for databases created before a certain version."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(classified_non_food)")}
     if "decided_by" not in cols:
         conn.execute(
@@ -153,6 +153,20 @@ def _migrate_schema(conn: sqlite3.Connection):
             "ADD COLUMN decided_by TEXT NOT NULL DEFAULT 'siglip2'"
         )
         conn.commit()
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS pipeline_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            run_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            asset_id TEXT,
+            payload TEXT,
+            consumed INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_consumed ON pipeline_events(consumed);
+    """)
+    conn.commit()
 
 
 def _backfill_fts(conn: sqlite3.Connection):
@@ -727,6 +741,65 @@ def get_processed_asset_ids(date_str: str) -> set[str]:
 def get_non_food_asset_ids() -> set[str]:
     """Return set of asset_ids classified as non-food by the local classifier."""
     return get_classified_non_food()
+
+
+# ── pipeline_events ──────────────────────────────────────────────────
+
+def add_event(run_id: str, event_type: str, asset_id: str | None = None,
+              payload: dict | None = None):
+    """Record a pipeline event for later consumption by the agent."""
+    import json
+    conn = _get_conn()
+    conn.execute(
+        """INSERT INTO pipeline_events (run_id, event_type, asset_id, payload)
+           VALUES (?, ?, ?, ?)""",
+        (run_id, event_type, asset_id,
+         json.dumps(payload, ensure_ascii=False) if payload else None),
+    )
+    conn.commit()
+
+
+def get_unconsumed_events() -> list[dict]:
+    """Fetch all unconsumed events, newest first."""
+    import json
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM pipeline_events WHERE consumed = 0 ORDER BY id DESC"
+    ).fetchall()
+    events = []
+    for r in rows:
+        d = dict(r)
+        if d.get("payload") and isinstance(d["payload"], str):
+            try:
+                d["payload"] = json.loads(d["payload"])
+            except json.JSONDecodeError:
+                pass
+        events.append(d)
+    return events
+
+
+def mark_events_consumed(event_ids: list[int]):
+    """Mark a batch of events as consumed."""
+    if not event_ids:
+        return
+    conn = _get_conn()
+    placeholders = ",".join("?" * len(event_ids))
+    conn.execute(
+        f"UPDATE pipeline_events SET consumed = 1 WHERE id IN ({placeholders})",
+        tuple(event_ids),
+    )
+    conn.commit()
+
+
+def get_run_summary(run_id: str) -> dict:
+    """Aggregate stats for a single run from its events."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT event_type, COUNT(*) as cnt FROM pipeline_events "
+        "WHERE run_id = ? GROUP BY event_type",
+        (run_id,),
+    ).fetchall()
+    return {r["event_type"]: r["cnt"] for r in rows}
 
 
 # ── migration ────────────────────────────────────────────────────────
