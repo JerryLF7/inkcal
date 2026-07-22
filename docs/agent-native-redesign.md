@@ -462,14 +462,16 @@ inkcal_get_events() / inkcal_label(ref, label)
 
 交付标准：SKILL.md 里的两步对账全部消失；web 端回归无行为变化。✅
 
-### Milestone 3：从"不僵硬"到"活"（P2，预计 2–3 天）
+### Milestone 3：从"不僵硬"到"活"（P2，预计 2–3 天）✅ 已完成 2026-07-22
 
-- [ ] P2-8 `pipeline_events` 表 + pipeline 写事件 + `inkcal events`
-- [ ] P2-9 SKILL.md 瘦身至一页；运维内容迁 DEVELOPMENT.md
-- [ ] （可选）`inkcal estimate --meal` 文本估算兜底
-- [ ] （远期）P2-10 MCP server 封装
+- [x] P2-8 `pipeline_events` 表 + pipeline 写事件 + `inkcal events` → `3ff18e6`
+- [x] P2-9 SKILL.md 瘦身至一页；运维内容迁 DEVELOPMENT.md → `f96291c`
+- [ ] （可选）`inkcal estimate --meal` 文本估算兜底 → 暂缓
+- [ ] （远期）P2-10 MCP server 封装 → 暂缓
 
-交付标准：hermes 会话开场能主动报告未消费事件；SKILL.md 删掉任何一条 agent 行为不漂移。
+附带：`pipeline_events` 表幂等迁移 + 5 种事件类型（meal_recorded/low_confidence/gemini_rejected/classifier_unsure/run_summary）+ 消费式读取 + `--peek` / `--consumed` 模式。
+
+交付标准：hermes 会话开场能主动报告未消费事件；SKILL.md 删掉任何一条 agent 行为不漂移。✅
 
 ### 兼容性说明
 
