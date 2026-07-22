@@ -1,187 +1,90 @@
 ---
 name: inkcal
 slug: inkcal
-version: 1.7.1
+version: 2.0.0
 description: Log meals, analyze food photos, track calories and macros, and label results.
 category: productivity
 ---
 
 ## When to Use
 
-Use this skill for Jerry's inkcal food tracker:
+Use this skill for Jerry's inkcal food tracker — any request involving meal logging, calorie/macro queries, photo pipeline, labeling, or server operations.
 
-- Meal logging: "记一下吃了", "午饭/晚饭吃了", "今天吃了", "昨晚吃了"
-- Calorie or macro queries: "热量", "卡路里", "蛋白", "碳水", "脂肪", "吃了多少"
-- Photo pipeline: Immich → SigLIP2 → Gemini → daily records
-- Web UI viewing, labeling, image replacement, or mobile UI tweaks
-- Web server start/stop/restart operations
-- Classifier accuracy tracking via labeling
-- API endpoint changes (base URL, key, model) and JSON parsing fixes
-- Cron debugging, false-positive food classification, and repeated Gemini calls
+Trigger phrases: "记一下吃了", "午饭吃了", "热量", "卡路里", "蛋白", "碳水", "脂肪", "吃了多少", "标注", "改一下", "删掉", "怎么没记上".
 
 ## Data Storage
 
-- Project path: `~/Coding/inkcal/`
-- Records: `~/Coding/inkcal/data/inkcal.db` (SQLite)
-- Fine-tuned model (optional): `~/Coding/inkcal/data/finetuned-model/`
+- Project: `~/Coding/inkcal/`
+- Database: `data/inkcal.db` (SQLite, WAL mode)
+- Fine-tuned model: `data/finetuned-model/` (auto-loaded if present)
 
-## External Endpoints
+## Command Cheat Sheet
 
-| Service | Use | Privacy note |
-|---------|-----|--------------|
-| Immich | Photo listing and thumbnails on local network | Private photos stay in LAN during filtering |
-| Gemini-compatible vision API | Calorie/macro analysis for detected food photos | Only photos passing local food filter are sent |
+All read commands support `--json` for structured output. All write commands (edit/label/replace/delete/reanalyze) support the unified locator (see below).
 
-## Core Rules
+```
+数据写入
+  inkcal add --meal M --calories N [--protein/carbs/fat/date/time/confidence] [--json]
+  inkcal edit <locator> [--new-meal/--calories/--protein/--carbs/--fat/--date/--time/--note] [--json]
+  inkcal delete <locator> [--json]
+  inkcal analyze --id ASSET_ID [--source immich|photoprism] [--json]
+  inkcal reanalyze <locator> --notes "补充说明" [--json]
 
-1. Use `inkcal` CLI for all records, labels, and replacements; avoid direct JSON edits.
-2. Parse natural language into meal, calories, macros, date, and time. Prefer Chinese meal descriptions.
-3. Manual entries require `--meal` and `--calories`; macros via `--protein`, `--carbs`, `--fat`.
-4. Default date is today in Asia/Hong_Kong. Use `--date YYYY-MM-DD` and `--time HH:MM` when implied.
-5. Default confidence is `medium`; use `high` for exact numbers, `low` for rough estimates.
-6. After mutations, verify with `inkcal view`, `inkcal label --status`, or the web UI.
-7. For code changes, inspect files first, preserve existing user changes, verify, then commit.
-8. **Cron false-positive cache pitfall**: The crontab runs `inkcal run` every 10 minutes (or whatever was last set). There are two paths that must be cached to avoid repeated Gemini calls:
-   - **Local classifier false positive**: persist the negative decision to `classified_non_food`; never to `ignored_assets`.
-   - **Gemini rejects as non-food**: persist the `asset_id` to `ignored_assets` when Gemini returns `meal` of `not real food` or `unknown`.
-   If Jerry reports "Gemini is called constantly", check both caches and the cron frequency. See the Cron False-Positive Cache Pitfall section below.
-9. **Web server lifecycle**: Before starting, always check if already running on port 5800. If user says "开一下" and it's already running, just report status. See `references/pipeline-web.md` for full workflow.
+数据读取
+  inkcal view [--date D | --week | --month YYYY-MM | --from F --to T] [--json]
+  inkcal stats [--from F --to T | --last 7d|2w|1m] [--group-by day] [--json]
+  inkcal search KEYWORD [--from F --to T] [--limit N] [--json]
 
-## Quick Reference
+标注与维护
+  inkcal label <locator> --label correct|wrong [--json]
+  inkcal label --list [--date D] [--json] / --status [--json]
+  inkcal replace <locator> --image PATH
 
-| Task | Load |
-|------|------|
-| CLI commands, meal logging, queries, estimation | `references/cli-workflows.md` |
-| Photo pipeline, env vars, web UI, labeling, server lifecycle | `references/pipeline-web.md` |
-| Cron false positives and repeated Gemini calls | Cron False-Positive Cache Pitfall section below |
-| API JSON parsing quirks | API Response Parsing section below |
-| User-facing docs and architecture | `README.md`, `usage.md` |
-
-## Cron False-Positive Cache Pitfall
-
-### Symptom
-
-Jerry notices that the Gemini-compatible vision API is being called far more often than expected, even though his Immich album does not contain that many food photos. The SQLite `records` table does not show duplicate entries, but the API usage dashboard shows repeated calls.
-
-### Two Root Causes
-
-The cron job (e.g. `*/10 * * * * /home/jerry/.local/bin/inkcal run`) fetches the day's photos, runs the local SigLIP2 food classifier, and sends positives to Gemini. Two categories of photos can be re-sent on every tick if they are not cached:
-
-1. **Local classifier false positives** — the classifier says "food" but the image is not food. The original code did not persist the classifier's negative decision at all, so every false positive was re-evaluated every tick. **Fix**: persist these to `classified_non_food` and keep them visible in the web album picker for manual correction.
-
-2. **Gemini rejects the image as non-food** — the local classifier says "food", but Gemini returns `"meal": "not real food"` or `"unknown"`. The current code path must add these `asset_id`s to `ignored_assets`; otherwise the same image will be sent to Gemini again on the next cron tick.
-
-### Fix
-
-#### 1. Local classifier false positives
-
-Add a `classified_non_food` table in `src/db.py`:
-
-```sql
-CREATE TABLE IF NOT EXISTS classified_non_food (
-    asset_id TEXT PRIMARY KEY,
-    classified_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+可观测性
+  inkcal explain (--id PREFIX | --date D) [--json]  照片去向五态追溯
+  inkcal events [--json]                             拉取未消费的 pipeline 事件
+  inkcal events --peek                                查看但不消费
+  inkcal events --consumed --limit N                  历史事件
+  inkcal run [--date D]                              完整流水线
 ```
 
-In `main.py` inside `_run_source()`:
+## Record Locator (all write commands)
 
-```python
-if not detector.is_food(thumb):
-    logger.info("  ❌ 不是食物，跳过")
-    db.add_classified_non_food(aid)
-    continue
-```
+Four modes, resolved in priority order. Ambiguous matches return `error=ambiguous` + candidates for the agent to show the user.
 
-Combine `ignored_assets` and `classified_non_food` when deciding what to skip:
+| Flag | Example | When to use |
+|---|---|---|
+| `--ref N` | `--ref 42` | Shortest — from `--json` output's `id` field |
+| `--id PREFIX` | `--id e3f47028` | Asset ID prefix (≥1 char, longer = more specific) |
+| `--last` | `--last` | Most recent record, no thinking needed |
+| `--meal K [--date D]` | `--meal 红烧肉 --date 2026-07-21` | Natural language keyword + optional date |
 
-```python
-def load_ignored() -> set[str]:
-    return db.get_ignored_assets() | db.get_classified_non_food()
-```
+## Error Codes (--json mode)
 
-In `web/server.py`, the album picker (`/api/album-photos`) should only filter `ignored_assets`, not `classified_non_food`, so misclassified non-food photos remain visible. Return a `classified_non_food` flag per photo so the UI can optionally mark them.
+| code | exit | meaning | agent action |
+|---|---|---|---|
+| `not_found` | 2 | 记录/asset 不存在 | 换指代或告知用户 |
+| `ambiguous` | 3 | 指代命中多条 | 展示 candidates 追问用户 |
+| `invalid_args` | 64 | 参数错误 | 自己修正 |
+| `external_error` | 69 | Immich/Gemini 不可达 | 告知用户服务状态 |
+| `not_food` | 4 | Gemini 判定非食物 | 询问是否强制记录 |
 
-When a user manually analyzes an album photo via `analyze-album-photo`, remove the asset from `classified_non_food` so the pipeline state stays consistent.
+## Estimation Rules
 
-#### 2. Gemini rejects as non-food
+Calorie/macro estimation requires common-sense judgement — this is the **agent's responsibility**, not the system's. Guidelines:
 
-In `main.py` inside `_run_source()`, after calling `analyzer.analyze(original)`:
+- **Exact numbers given by user** → use directly, `confidence=high`
+- **Well-known dish (宫保鸡丁, 咖喱饭, 牛肉面)** → use mid-range estimate from training knowledge, `confidence=medium`
+- **Vague description ("一些菜", "随便吃的")** → rough estimate, `confidence=low`; ask for clarification if possible
+- **User says "两人份"/"一半"/"少算了X"** → use `inkcal edit` or `inkcal reanalyze` with notes; system preserves old values in `reanalysis_history`
+- **Aggregation ("上周平均", "这个月总热量")** → use `inkcal stats`, **never** compute manually — the code is deterministic, the agent is not
 
-```python
-if result.get("meal") in ("not real food", "unknown"):
-    logger.info("  ❌ Gemini 判定非真实食物，跳过")
-    db.add_ignored_asset(aid)
-    continue
-```
+## Key Rules
 
-This prevents the same rejected photo from being sent to Gemini on every cron tick. Because `ignored_assets` is also used to hide photos from the web album picker, a Gemini rejection is treated as a strong, automatic non-food decision that the user is unlikely to want to correct. If Jerry later asks to keep rejected photos visible for manual correction, move them to `classified_non_food` instead.
-
-### Why Separate Caches?
-
-- `ignored_assets` = user-level or strong automatic ignores. Photos here are hidden from the album picker.
-- `classified_non_food` = local classifier's uncertain negative decision. Photos here remain visible in the album picker so the user can manually correct a classifier mistake.
-
-### Secondary Recommendation
-
-Even with both caches, a 10-minute cadence is usually unnecessary for a personal photo album. Consider reducing cron frequency:
-
-- Every 2 hours: `0 */2 * * * /home/jerry/.local/bin/inkcal run`
-- Every 6 hours: `0 */6 * * * /home/jerry/.local/bin/inkcal run`
-- On-demand: remove the cron entry and run `inkcal run` manually after meals.
-
-Change it with `crontab -e`.
-
-### Diagnosis
-
-If the symptom recurs, check these in order:
-
-1. **Crontab frequency**: `crontab -l | grep inkcal`
-2. **Counts**: `classified_non_food` and `ignored_assets` should grow as non-food photos are encountered.
-3. **Run output**: `inkcal run` should print "未处理: 0 张 (忽略 N 张)" when all non-food photos are cached.
-4. **Records vs. Gemini calls**: records count per day should be far lower than cron-tick count.
-5. **Classifier accuracy**: review `inkcal label --status` for false positives and consider improving the fine-tuned model or raising a confidence threshold.
-
-## API Response Parsing
-
-Gemini-compatible endpoints (called via OpenAI SDK with `response_format={"type": "json_object"}`) can return malformed JSON. Two shapes have been seen in practice:
-
-### Truncated JSON (missing closing `}`)
-
-Example: `{"meal": "红烧肉", "calories": 600, ...`
-
-### Extra closing brace
-
-```json
-{
-  "meal": "not real food",
-  "calories": 0,
-  "protein_g": 0,
-  "carbs_g": 0,
-  "fat_g": 0,
-  "confidence": "low"
-}
-}
-```
-
-This produces `json.JSONDecodeError: Extra data: line 9 column 1 (char 118)`.
-
-### Repair logic in `src/calorie_analyzer.py`
-
-Inside `CalorieAnalyzer._parse_response()`:
-
-1. Strip markdown code fences if present.
-2. Return `_empty_result()` for empty content.
-3. Try `json.loads(text)`.
-4. On failure:
-   - If text does not end with `}`, append `}` and retry (truncation fix).
-   - If `{` and `}` counts are unbalanced, trim trailing `}` characters until balanced, then retry (extra-brace fix).
-5. Still failing → return `_empty_result()`.
-
-### Verification
-
-Run `inkcal run` and look for:
-
-- Normal responses: `Gemini analysis: { ... }`
-- Fixed responses: `Fixed truncated JSON by appending '}'` or `Fixed unbalanced JSON by trimming extra '}'`
-- Bad failures should not silently fall back to `unknown`; inspect the logs for `JSON parse failed` if they do.
+1. Use `inkcal` CLI for all data operations. Never edit the database directly.
+2. Dates are Asia/Hong_Kong (UTC+8). Agent converts "昨天"/"上周三" to `YYYY-MM-DD`; the CLI only accepts `YYYY-MM-DD`.
+3. After mutations, the `--json` output already contains the updated record — no need to `inkcal view` for verification.
+4. Photo pipeline decisions are fully traceable via `inkcal explain`. If a user asks "why wasn't this recorded", use `explain` to get a definitive answer.
+5. Server lifecycle operations → see `references/pipeline-web.md`.
+6. JSON parsing quirks → see `src/calorie_analyzer.py:_parse_response()`.
+7. Cron false-positive caching → handled in code (`classified_non_food.decided_by`, `inkcal explain`, `inkcal analyze`).
