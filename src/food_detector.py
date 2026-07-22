@@ -42,19 +42,24 @@ class FoodDetector:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         return self._processor(images=img, return_tensors="pt")
 
-    def is_food(self, image_bytes: bytes) -> bool:
-        """Classify the image: True = food, False = not food."""
+    def score(self, image_bytes: bytes) -> float:
+        """Return food-class probability (0.0–1.0) from softmax over logits."""
         try:
             inputs = self._preprocess(image_bytes)
             with self._torch.no_grad():
                 outputs = self._model(**inputs)
                 # id2label: {"0": "food", "1": "not-food"}
-                pred = self._torch.argmax(outputs.logits, dim=1).item()
-            logger.debug("Food classifier: %s", "food" if pred == 0 else "not-food")
-            return pred == 0
+                probs = self._torch.softmax(outputs.logits, dim=1)
+                food_prob = probs[0, 0].item()
+            logger.debug("Food classifier score: %.3f", food_prob)
+            return food_prob
         except Exception as e:
             logger.error("Food classification failed: %s", e)
-            return False
+            return 0.0
+
+    def is_food(self, image_bytes: bytes) -> bool:
+        """Classify the image: True = food, False = not food."""
+        return self.score(image_bytes) >= 0.5
 
     def close(self):
         pass
