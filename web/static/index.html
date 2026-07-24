@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>inkcal</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -16,7 +15,7 @@
   /* Header */
   h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
   h1 span { color: #888; font-size: 14px; font-weight: 400; }
-  .subtitle { color: #666; font-size: 13px; margin-bottom: 16px; }
+  .subtitle { color: #888; font-size: 13px; margin-bottom: 16px; }
 
   /* Date nav */
   .date-nav .nav-btn {
@@ -92,17 +91,27 @@
 
   /* Summary bar */
   .summary {
-    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    background: #1a1a1a; border: 1px solid #222;
     border-radius: 12px; padding: 16px; margin-bottom: 16px;
     display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px;
   }
   .summary .stat { text-align: center; }
   .summary .stat .val { font-size: 20px; font-weight: 700; }
-  .summary .stat .val.cal { color: #ff6b6b; }
+  .summary .stat .val.cal { color: #e8e8e8; }
+  .summary .stat .val.cal.over { color: #ff6b6b; }
   .summary .stat .val.protein { color: #51cf66; }
   .summary .stat .val.carbs { color: #ffd43b; }
   .summary .stat .val.fat { color: #9775fa; }
   .summary .stat .label { font-size: 11px; color: #888; margin-top: 2px; }
+  .progress {
+    height: 4px; background: #2a2a2a; border-radius: 2px;
+    margin-top: 6px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; width: 0%; background: #2a6eff;
+    border-radius: 2px; transition: width .3s ease;
+  }
+  .progress-fill.over { background: #ff6b6b; }
 
   /* Meal cards */
   .meal-card {
@@ -117,8 +126,8 @@
   .meal-card .conf-low { background: #ff6b6b; }
   .meal-card .body { flex: 1; min-width: 0; }
   .meal-card .meal-name { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
-  .meal-card .meal-meta { font-size: 12px; color: #888; }
-  .meal-card .meal-meta .source { color: #555; }
+  .meal-card .meal-meta { font-size: 12px; color: #999; }
+  .meal-card .meal-meta .source { color: #666; }
   .meal-card .meal-right {
     display: flex;
     flex-direction: column;
@@ -127,7 +136,7 @@
     gap: 4px;
   }
   .meal-card .meal-cals {
-    text-align: right; font-size: 18px; font-weight: 700; color: #ff6b6b;
+    text-align: right; font-size: 18px; font-weight: 700; color: #e8e8e8;
   }
   .meal-card .meal-cals small {
     font-size: 12px; font-weight: 400; color: #888;
@@ -135,7 +144,7 @@
 
   /* Macros inline */
   .macros { display: flex; gap: 12px; margin-top: 6px; font-size: 12px; }
-  .macros span { color: #888; }
+  .macros span { color: #999; }
   .macros .p { color: #51cf66; }
   .macros .c { color: #ffd43b; }
   .macros .f { color: #9775fa; }
@@ -146,13 +155,20 @@
   }
   .empty .icon { font-size: 48px; margin-bottom: 12px; }
   .empty p { font-size: 14px; }
+  .empty-hint { font-size: 12px !important; color: #555; margin-top: 6px; }
+  .empty-cta {
+    margin-top: 16px; background: #2a6eff; color: #fff; border: none;
+    border-radius: 10px; padding: 8px 18px; font-size: 13px;
+    cursor: pointer; font-family: inherit;
+  }
+  .empty-cta:active { background: #1a5aee; }
 
   /* Multi-day / week view */
   .day-group { margin-bottom: 16px; }
   .day-group .day-header {
-    font-size: 13px; color: #888; margin-bottom: 8px; padding-left: 4px;
+    font-size: 13px; color: #999; margin-bottom: 8px; padding-left: 4px;
   }
-  .day-group .day-header .day-total { color: #ff6b6b; font-weight: 600; float: right; }
+  .day-group .day-header .day-total { color: #e8e8e8; font-weight: 600; float: right; }
 
   /* Loading */
   .loading { text-align: center; padding: 32px; color: #555; }
@@ -171,7 +187,7 @@
     align-items: center; justify-content: center;
   }
   .lightbox img {
-    max-width: 100%; max-height: 60vh; object-fit: contain;
+    max-width: 100%; max-height: 55vh; object-fit: contain;
     border-radius: 4px;
   }
   .lightbox-close {
@@ -180,9 +196,19 @@
     width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
   }
   .lightbox-meta {
-    margin-top: 12px; color: #aaa; font-size: 14px; text-align: center;
-    padding: 0 24px;
+    margin-top: 14px; text-align: center; padding: 0 24px;
   }
+  .lb-meal { font-size: 17px; font-weight: 600; color: #e8e8e8; }
+  .lb-stats {
+    display: flex; align-items: baseline; justify-content: center;
+    gap: 14px; margin-top: 6px; font-size: 13px;
+  }
+  .lb-cal { font-size: 20px; font-weight: 700; color: #e8e8e8; }
+  .lb-cal small { font-size: 12px; font-weight: 400; color: #888; }
+  .lb-stats .p { color: #51cf66; }
+  .lb-stats .c { color: #ffd43b; }
+  .lb-stats .f { color: #9775fa; }
+  .lb-sub { margin-top: 6px; font-size: 12px; color: #888; }
   .lightbox-labels {
     display: flex; gap: 8px; margin-top: 12px;
   }
@@ -260,27 +286,6 @@
     display: inline-block;
     vertical-align: middle;
     margin-right: 6px;
-  }
-
-  .detail-btn {
-    display: inline-flex; align-items: center; gap: 4px;
-    background: transparent;
-    color: #888;
-    border: 1px solid #333;
-    border-radius: 999px;
-    font-size: 14px;
-    font-weight: 700;
-    cursor: pointer;
-    padding: 4px 12px;
-    margin-top: 50px;
-    font-family: inherit; line-height: 1;
-  }
-  .detail-btn:active {
-    background: #2a2a2a;
-    color: #aaa;
-  }
-  .btn-icon {
-    height: 1em; width: auto; flex: none;
   }
 
   .meal-card.has-image { cursor: pointer; }
@@ -546,7 +551,11 @@
   </div>
 
   <div id="summary-bar" class="summary" style="display:none">
-    <div class="stat"><div class="val cal" id="s-cal">0</div><div class="label">kcal</div></div>
+    <div class="stat">
+      <div class="val cal" id="s-cal">0</div>
+      <div class="label">/ <span id="s-target">2500</span> kcal</div>
+      <div class="progress"><div class="progress-fill" id="s-cal-bar"></div></div>
+    </div>
     <div class="stat"><div class="val protein" id="s-protein">0</div><div class="label">蛋白(g)</div></div>
     <div class="stat"><div class="val carbs" id="s-carbs">0</div><div class="label">碳水(g)</div></div>
     <div class="stat"><div class="val fat" id="s-fat">0</div><div class="label">脂肪(g)</div></div>
@@ -560,7 +569,7 @@
 
 <div class="upload-overlay" id="upload-overlay" style="display:none">
   <div class="spinner"></div>
-  <div class="msg">Gemini 分析中...</div>
+  <div class="msg">分析中...</div>
   <div class="detail" id="upload-detail"></div>
 </div>
 
@@ -623,6 +632,7 @@
 
 <script>
 const CACHE_PREFIX = 'inkcal:';
+const DAILY_TARGET_KCAL = 2500;
 
 function cacheGet(key) {
   try { const item = localStorage.getItem(CACHE_PREFIX + key); return item ? JSON.parse(item) : null; }
@@ -690,6 +700,10 @@ function hktNow() {
   const now = new Date();
   return new Date(now.toLocaleString('en-US', {timeZone:'Asia/Hong_Kong'}));
 }
+
+const SOURCE_LABELS = { manual: '手动', immich: 'Immich', photoprism: 'PhotoPrism' };
+const CONF_LABELS = { high: '高', medium: '中', low: '低' };
+const CONF_TITLES = { high: '置信度：高', medium: '置信度：中', low: '置信度：低' };
 
 // ── EXIF date reader ──────────────────────────────────────────
 // Supports JPEG (APP1/Exif), PNG (eXIf chunk), WebP (EXIF chunk).
@@ -996,19 +1010,29 @@ function loadWeek() {
     });
 }
 
+function updateSummaryBar(summary, targetKcal) {
+  document.getElementById('summary-bar').style.display = 'grid';
+  const sCal = document.getElementById('s-cal');
+  sCal.textContent = summary.calories;
+  sCal.classList.toggle('over', summary.calories > targetKcal);
+  document.getElementById('s-target').textContent = targetKcal;
+  document.getElementById('s-protein').textContent = summary.protein;
+  document.getElementById('s-carbs').textContent = summary.carbs;
+  document.getElementById('s-fat').textContent = summary.fat;
+  const bar = document.getElementById('s-cal-bar');
+  bar.style.width = Math.min(summary.calories / targetKcal * 100, 100) + '%';
+  bar.classList.toggle('over', summary.calories > targetKcal);
+}
+
 function renderDay(data) {
   const { date: ds, records, summary } = data;
   currentLoadedDate = ds;
   document.getElementById('date-label').textContent = displayDate(ds);
-  document.getElementById('summary-bar').style.display = 'grid';
-  document.getElementById('s-cal').textContent = summary.calories;
-  document.getElementById('s-protein').textContent = summary.protein;
-  document.getElementById('s-carbs').textContent = summary.carbs;
-  document.getElementById('s-fat').textContent = summary.fat;
+  updateSummaryBar(summary, DAILY_TARGET_KCAL);
 
   const el = document.getElementById('content');
   if (!records.length) {
-    el.innerHTML = '<div class="empty"><div class="icon">🍽️</div><p>暂无记录</p></div>';
+    el.innerHTML = `<div class="empty"><div class="icon">🍽️</div><p>暂无记录</p><p class="empty-hint">拍照后会自动同步，也可以手动选择照片</p><button class="empty-cta" onclick="triggerPhotoPicker()">📷 选择照片</button></div>`;
     _pendingLightboxAsset = '';
     return;
   }
@@ -1024,11 +1048,7 @@ function renderDay(data) {
 
 function renderWeek(data) {
   document.getElementById('date-label').textContent = displayDate(fmtDate(currentDate));
-  document.getElementById('summary-bar').style.display = 'grid';
-  document.getElementById('s-cal').textContent = data.summary.calories;
-  document.getElementById('s-protein').textContent = data.summary.protein;
-  document.getElementById('s-carbs').textContent = data.summary.carbs;
-  document.getElementById('s-fat').textContent = data.summary.fat;
+  updateSummaryBar(data.summary, DAILY_TARGET_KCAL * 7);
 
   const el = document.getElementById('content');
   const days = Object.entries(data.by_day).filter(([_, d]) => d.records.length > 0);
@@ -1049,9 +1069,10 @@ function renderWeek(data) {
 
 function mealCard(r) {
   const conf = r.confidence || 'low';
-  const src = r.asset_id && r.asset_id.startsWith('manual') ? '手动' : 'Immich';
-  const isManual = src === '手动';
-  const time = fmtPhotoTime(r.photo_time);
+  const srcType = r.source_type || (r.asset_id && r.asset_id.startsWith('manual-') ? 'manual' : 'immich');
+  const srcLabel = SOURCE_LABELS[srcType] || srcType;
+  const isManual = srcType === 'manual';
+  const time = fmtTimeHM(r.photo_time);
   const macros = (r.protein_g || r.carbs_g || r.fat_g) ? `
     <div class="macros">
       <span class="p">P ${r.protein_g||0}g</span>
@@ -1075,25 +1096,29 @@ function mealCard(r) {
     if (cardSrc) {
       thumb = `<img class="card-thumb" src="${cardSrc}" onclick="event.stopPropagation();openLightboxForRecord('${esc(r.asset_id)}')" loading="lazy" onerror="retryImg(this)">`;
       clickClass = ' has-image';
-      clickAttr = ` onclick="openLightboxForRecord('${esc(r.asset_id)}')" data-asset-id="${esc(r.asset_id)}" data-img-src="${esc(lightboxSrc)}" data-meal="${esc(r.meal)}" data-photo-time="${esc(r.photo_time||'')}" data-user-label="${esc(r.user_label||'')}"`;
+      clickAttr = ` onclick="openLightboxForRecord('${esc(r.asset_id)}')" data-asset-id="${esc(r.asset_id)}" data-img-src="${esc(lightboxSrc)}" data-meal="${esc(r.meal)}" data-photo-time="${esc(r.photo_time||'')}" data-calories="${esc(String(r.calories||0))}" data-protein="${esc(String(r.protein_g||0))}" data-carbs="${esc(String(r.carbs_g||0))}" data-fat="${esc(String(r.fat_g||0))}" data-confidence="${esc(conf)}" data-source="${esc(srcType)}"`;
     }
   }
 
   return `
     <div class="meal-card${clickClass}"${clickAttr}>
-      <div class="conf-indicator conf-${conf}"></div>
+      <div class="conf-indicator conf-${conf}" title="${CONF_TITLES[conf] || ''}"></div>
       ${thumb}
       <div class="body">
         <div class="meal-name">${esc(r.meal)}</div>
-        <div class="meal-meta">${time} <span class="source">· ${src}</span></div>
+        <div class="meal-meta">${time} <span class="source">· ${srcLabel}</span></div>
         ${macros}
       </div>
       <div class="meal-right">
         <div class="meal-cals">${r.calories || 0}<small> kcal</small></div>
-        <button class="detail-btn" onclick="event.stopPropagation();openReanalysisForCard('${esc(r.asset_id)}')"><img src="/icons/gemini-color.svg" alt="" class="btn-icon">描述细节</button>
       </div>
     </div>
   `;
+}
+
+function fmtTimeHM(isoStr) {
+  if (!isoStr) return '';
+  return isoStr.slice(11, 16); // "HH:MM"
 }
 
 function fmtPhotoTime(isoStr) {
@@ -1125,9 +1150,22 @@ function openLightboxForRecord(assetId) {
 
   currentLightboxAssetId = assetId;
   document.getElementById('lightbox-img').src = card.dataset.imgSrc;
-  const meal = esc(card.dataset.meal || '');
-  const detailTime = fmtPhotoTimeDetail(card.dataset.photoTime);
-  document.getElementById('lightbox-meta').innerHTML = meal + (detailTime ? '<br>' + detailTime : '');
+
+  const d = card.dataset;
+  const detailTime = fmtPhotoTimeDetail(d.photoTime);
+  const confText = CONF_LABELS[d.confidence] || '';
+  const srcLabel = SOURCE_LABELS[d.source] || d.source || '';
+  const subParts = [detailTime, srcLabel, confText ? '置信度 ' + confText : ''].filter(Boolean);
+
+  document.getElementById('lightbox-meta').innerHTML = `
+    <div class="lb-meal">${esc(d.meal || '')}</div>
+    <div class="lb-stats">
+      <span class="lb-cal">${esc(d.calories || '0')}<small> kcal</small></span>
+      <span class="p">P ${esc(d.protein || '0')}g</span>
+      <span class="c">C ${esc(d.carbs || '0')}g</span>
+      <span class="f">F ${esc(d.fat || '0')}g</span>
+    </div>
+    <div class="lb-sub">${esc(subParts.join(' · '))}</div>`;
 
   document.getElementById('lightbox-labels').style.display = 'flex';
 
@@ -1151,11 +1189,6 @@ function triggerUpload(e) {
   e.stopPropagation();
   if (!currentLightboxAssetId) return;
   document.getElementById('upload-input').click();
-}
-
-function openReanalysisForCard(assetId) {
-  openLightboxForRecord(assetId);
-  toggleReanalysis();
 }
 
 function toggleReanalysis() {
@@ -1205,11 +1238,7 @@ function submitReanalysis() {
   })
   .then(data => {
     if (data.ok && data.record) {
-      // Update lightbox content
-      const rec = data.record;
-      document.getElementById('lightbox-meta').textContent = rec.meal || '';
-
-      // Refresh day view
+      // Refresh day view, then rebuild lightbox from updated card
       const ds = data.date || currentLoadedDate;
       cacheDel('day:' + ds);
       return fetch(`${API}/api/records?date=${ds}`)
@@ -1217,13 +1246,7 @@ function submitReanalysis() {
         .then(dayData => {
           cacheSet('day:' + ds, dayData);
           renderDay(dayData);
-          // Update lightbox image source if needed
-          const updatedCard = document.querySelector(`.meal-card[data-asset-id="${assetId}"]`);
-          if (updatedCard) {
-            document.getElementById('lightbox-img').src = updatedCard.dataset.imgSrc;
-          }
-          // Hide reanalysis panel
-          document.getElementById('lightbox-reanalysis').classList.remove('active');
+          openLightboxForRecord(assetId);
         });
     }
   })
