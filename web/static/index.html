@@ -170,6 +170,36 @@
   }
   .day-group .day-header .day-total { color: #e8e8e8; font-weight: 600; float: right; }
 
+  /* Week chart (dependency-free SVG) */
+  .week-chart {
+    background: #1a1a1a; border: 1px solid #222; border-radius: 12px;
+    padding: 14px 14px 10px; margin-bottom: 16px;
+  }
+  .week-chart .wc-title { font-size: 12px; color: #888; margin-bottom: 8px; }
+  .week-chart svg { display: block; width: 100%; height: 150px; }
+  .wc-bar { fill: #2a6eff; }
+  .wc-bar.over { fill: #ff6b6b; }
+  .wc-target { stroke: #555; stroke-width: 1; stroke-dasharray: 5 5; }
+  .wc-axis { fill: #888; font-size: 10px; text-anchor: middle; }
+  .wc-val { fill: #999; font-size: 10px; text-anchor: middle; }
+
+  /* Toast */
+  #toast {
+    position: fixed; left: 50%; bottom: 32px;
+    transform: translateX(-50%) translateY(16px);
+    background: #2a2a2a; color: #e0e0e0;
+    border: 1px solid #3a3a3a; border-radius: 10px;
+    padding: 10px 18px; font-size: 14px;
+    opacity: 0; transition: opacity .2s, transform .2s;
+    z-index: 300; pointer-events: none;
+    max-width: 82%; text-align: center;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.error { border-color: #ff6b6b55; color: #ff9b9b; }
+
+  /* Delete two-step confirm */
+  .lbl-btn.armed { background: #ff6b6b; color: #fff; border-color: #ff6b6b; }
+
   /* Loading */
   .loading { text-align: center; padding: 32px; color: #555; }
   .spinner {
@@ -501,6 +531,7 @@
     #content > .meal-card { margin-bottom: 0; }
     #content > .empty { grid-column: 1 / -1; }
     #content > .loading { grid-column: 1 / -1; }
+    #content > .week-chart { grid-column: 1 / -1; }
 
     /* Week view within desktop */
     #content > .day-group {
@@ -533,9 +564,9 @@
 
   <div class="date-nav-wrapper">
     <div class="date-nav">
-      <button class="nav-btn" onclick="prevDay()">‹</button>
-      <span class="date-label-wrap"><span class="date-label" id="date-label" onclick="toggleCalendar()"></span><button class="nav-btn refresh-btn" id="refresh-btn" onclick="refreshDay()" title="刷新">↻</button></span>
-      <button class="nav-btn" onclick="nextDay()">›</button>
+      <button class="nav-btn" onclick="prevPeriod()">‹</button>
+      <span class="date-label-wrap"><span class="date-label" id="date-label" onclick="toggleCalendar()"></span><button class="nav-btn refresh-btn" id="refresh-btn" onclick="refreshPeriod()" title="刷新">↻</button></span>
+      <button class="nav-btn" onclick="nextPeriod()">›</button>
     </div>
     <div class="calendar-dropdown" id="calendar-dropdown" style="display:none">
       <div class="cal-header">
@@ -544,7 +575,7 @@
         <button class="cal-nav" onclick="event.stopPropagation();changeMonth(1)">›</button>
       </div>
       <div class="cal-weekdays">
-        <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
       </div>
       <div class="cal-grid" id="cal-grid"></div>
     </div>
@@ -620,7 +651,7 @@
   <div class="lightbox-labels" id="lightbox-labels" style="display:none" onclick="event.stopPropagation()">
     <button class="lbl-btn upload" onclick="triggerUpload(event)">换图</button>
     <button class="lbl-btn" onclick="toggleReanalysis()"><svg height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><title>Gemini</title><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="#3186FF"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#gemini-0)"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#gemini-1)"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#gemini-2)"></path><defs><linearGradient gradientUnits="userSpaceOnUse" id="gemini-0" x1="7" x2="11" y1="15.5" y2="12"><stop stop-color="#08B962"></stop><stop offset="1" stop-color="#08B962" stop-opacity="0"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id="gemini-1" x1="8" x2="11.5" y1="5.5" y2="11"><stop stop-color="#F94543"></stop><stop offset="1" stop-color="#F94543" stop-opacity="0"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id="gemini-2" x1="3.5" x2="17.5" y1="13.5" y2="12"><stop stop-color="#FABC12"></stop><stop offset=".46" stop-color="#FABC12" stop-opacity="0"></stop></linearGradient></defs></svg>描述细节</button>
-    <button class="lbl-btn" style="color:#ff6b6b;border-color:#ff6b6b33;" onclick="deleteRecord()">删除</button>
+    <button class="lbl-btn" id="lb-delete-btn" style="color:#ff6b6b;border-color:#ff6b6b33;" onclick="deleteRecord()">删除</button>
   </div>
   <div class="lightbox-reanalysis" id="lightbox-reanalysis" onclick="event.stopPropagation()">
     <textarea class="reanalysis-textarea" id="reanalysis-textarea" placeholder="补充细节，例如：这是大份约300g、还有芝士没拍到..." onkeydown="handleReanalysisKeydown(event)"></textarea>
@@ -629,6 +660,8 @@
     <div class="reanalysis-error" id="reanalysis-error"></div>
   </div>
 </div>
+
+<div id="toast"></div>
 
 <script>
 const CACHE_PREFIX = 'inkcal:';
@@ -650,11 +683,21 @@ let currentDate = new Date();
 let currentLoadedDate = '';
 let currentLightboxAssetId = '';
 let viewMode = 'day'; // 'day' | 'week'
+let currentWeekMonday = null;
 let availableDates = new Set();
 let calendarYear, calendarMonth;
 let _loadSeq = 0;
 let _fetchId = 0;
 let _abortController = null;
+let _toastTimer = null;
+
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show' + (type === 'error' ? ' error' : '');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.className = ''; }, 2600);
+}
 
 function apiFetch(path, timeoutMs = 10000) {
   if (_abortController) _abortController.abort();
@@ -699,6 +742,12 @@ function displayDate(ds) {
 function hktNow() {
   const now = new Date();
   return new Date(now.toLocaleString('en-US', {timeZone:'Asia/Hong_Kong'}));
+}
+
+function mondayOf(d) {
+  const m = new Date(d);
+  m.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return m;
 }
 
 const SOURCE_LABELS = { manual: '手动', immich: 'Immich', photoprism: 'PhotoPrism' };
@@ -864,7 +913,7 @@ function changeMonth(delta) {
 function renderCalendar(y, m) {
   document.getElementById('cal-month').textContent = `${y}年${String(m+1).padStart(2,'0')}月`;
   const grid = document.getElementById('cal-grid');
-  const firstDay = new Date(y, m, 1).getDay();
+  const firstDay = (new Date(y, m, 1).getDay() + 6) % 7; // Monday-first
   const daysInMonth = new Date(y, m+1, 0).getDate();
   const today = fmtDate(hktNow());
   const selected = fmtDate(currentDate);
@@ -957,11 +1006,43 @@ function nextDay() {
   loadDay(fmtDate(d));
 }
 
-function refreshDay() {
-  const ds = currentLoadedDate;
-  if (!ds) return;
+function shiftWeek(delta) {
+  if (!currentWeekMonday) return;
+  const m = new Date(currentWeekMonday);
+  m.setDate(m.getDate() + delta * 7);
+  const cur = mondayOf(hktNow());
+  if (m > cur) return; // no future weeks
+  loadWeek(m);
+}
+
+function prevPeriod() {
+  if (viewMode === 'week') shiftWeek(-1); else prevDay();
+}
+
+function nextPeriod() {
+  if (viewMode === 'week') shiftWeek(1); else nextDay();
+}
+
+function refreshPeriod() {
   const btn = document.getElementById('refresh-btn');
   btn.classList.add('spinning');
+
+  if (viewMode === 'week' && currentWeekMonday) {
+    const weekKey = fmtDate(currentWeekMonday);
+    cacheDel('week:' + weekKey);
+    fetch(`${API}/api/week?start=${weekKey}`)
+      .then(r => r.json())
+      .then(data => {
+        cacheSet('week:' + weekKey, data);
+        renderWeek(data);
+      })
+      .catch(() => {})
+      .finally(() => btn.classList.remove('spinning'));
+    return;
+  }
+
+  const ds = currentLoadedDate;
+  if (!ds) { btn.classList.remove('spinning'); return; }
   cacheDel('day:' + ds);
   fetch(`${API}/api/records?date=${ds}`)
     .then(r => r.json())
@@ -973,18 +1054,15 @@ function refreshDay() {
     .finally(() => btn.classList.remove('spinning'));
 }
 
-function loadWeek() {
+function loadWeek(monday) {
   viewMode = 'week';
   document.querySelectorAll('.quick-links button').forEach(b => b.classList.remove('active'));
   document.getElementById('q-week').classList.add('active');
 
   const seq = ++_loadSeq;
 
-  // Monday of current HKT week as cache key
-  const now = hktNow();
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-  const weekKey = fmtDate(monday);
+  currentWeekMonday = monday || mondayOf(hktNow());
+  const weekKey = fmtDate(currentWeekMonday);
 
   const cached = cacheGet('week:' + weekKey);
   if (cached) {
@@ -993,7 +1071,7 @@ function loadWeek() {
     document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
   }
 
-  apiFetch(`/api/week`)
+  apiFetch(`/api/week?start=${weekKey}`)
     .then(data => {
       if (seq !== _loadSeq) return;
       cacheSet('week:' + weekKey, data);
@@ -1047,24 +1125,67 @@ function renderDay(data) {
 }
 
 function renderWeek(data) {
-  document.getElementById('date-label').textContent = displayDate(fmtDate(currentDate));
+  const startD = parseDate(data.start);
+  const endD = parseDate(data.end);
+  document.getElementById('date-label').textContent =
+    `${startD.getMonth()+1}月${startD.getDate()}日 – ${endD.getMonth()+1}月${endD.getDate()}日`;
   updateSummaryBar(data.summary, DAILY_TARGET_KCAL * 7);
 
   const el = document.getElementById('content');
   const days = Object.entries(data.by_day).filter(([_, d]) => d.records.length > 0);
-  if (!days.length) {
-    el.innerHTML = '<div class="empty"><div class="icon">📅</div><p>本周暂无记录</p></div>';
-    return;
-  }
 
-  el.innerHTML = days.map(([ds, day]) => `
-    <div class="day-group">
-      <div class="day-header">
-        ${ds} <span class="day-total">${day.summary.calories} kcal</span>
+  let html = '<div class="week-chart" id="week-chart-wrap"></div>';
+  if (!days.length) {
+    html += '<div class="empty"><div class="icon">📅</div><p>本周暂无记录</p></div>';
+  } else {
+    html += days.map(([ds, day]) => `
+      <div class="day-group">
+        <div class="day-header">
+          ${ds} <span class="day-total">${day.summary.calories} kcal</span>
+        </div>
+        ${day.records.map(r => mealCard(r)).join('')}
       </div>
-      ${day.records.map(r => mealCard(r)).join('')}
-    </div>
-  `).join('');
+    `).join('');
+  }
+  el.innerHTML = html;
+  renderWeekChart(data.by_day);
+}
+
+function renderWeekChart(byDay) {
+  const wrap = document.getElementById('week-chart-wrap');
+  if (!wrap) return;
+
+  const dates = Object.keys(byDay).sort();
+  if (!dates.length) { wrap.style.display = 'none'; return; }
+
+  const vals = dates.map(d => byDay[d].summary.calories);
+  const w = Math.max(wrap.clientWidth - 28, 260);
+  const h = 150, padB = 20, padT = 18;
+  const max = Math.max(DAILY_TARGET_KCAL * 1.15, ...vals, 1);
+  const slot = w / dates.length;
+  const barW = Math.min(slot * 0.5, 40);
+  const yOf = v => (h - padB) - (v / max) * (h - padB - padT);
+  const targetY = yOf(DAILY_TARGET_KCAL);
+  const dayNames = ['一', '二', '三', '四', '五', '六', '日'];
+
+  let s = '';
+  dates.forEach((d, i) => {
+    const cx = slot * i + slot / 2;
+    const v = vals[i];
+    const bh = Math.max((v / max) * (h - padB - padT), v > 0 ? 1.5 : 0);
+    const cls = v > DAILY_TARGET_KCAL ? 'wc-bar over' : 'wc-bar';
+    s += `<rect class="${cls}" x="${(cx - barW / 2).toFixed(1)}" y="${(h - padB - bh).toFixed(1)}" width="${barW.toFixed(1)}" height="${bh.toFixed(1)}" rx="4"></rect>`;
+    const wd = dayNames[(parseDate(d).getDay() + 6) % 7];
+    s += `<text class="wc-axis" x="${cx.toFixed(1)}" y="${h - 6}">${wd}</text>`;
+    if (v > 0) {
+      s += `<text class="wc-val" x="${cx.toFixed(1)}" y="${(h - padB - bh - 4).toFixed(1)}">${v}</text>`;
+    }
+  });
+  s += `<line class="wc-target" x1="0" y1="${targetY.toFixed(1)}" x2="${w}" y2="${targetY.toFixed(1)}"></line>`;
+
+  wrap.innerHTML =
+    `<div class="wc-title">每日热量（kcal）· 虚线为目标 ${DAILY_TARGET_KCAL}</div>` +
+    `<svg viewBox="0 0 ${w} ${h}">${s}</svg>`;
 }
 
 function mealCard(r) {
@@ -1121,12 +1242,6 @@ function fmtTimeHM(isoStr) {
   return isoStr.slice(11, 16); // "HH:MM"
 }
 
-function fmtPhotoTime(isoStr) {
-  if (!isoStr) return '';
-  const s = isoStr.replace('T', ' ');
-  return s.slice(0, 16); // "YYYY-MM-DD HH:MM"
-}
-
 function fmtPhotoTimeDetail(isoStr) {
   if (!isoStr) return '';
   const s = isoStr.replace('T', ' ');
@@ -1169,10 +1284,11 @@ function openLightboxForRecord(assetId) {
 
   document.getElementById('lightbox-labels').style.display = 'flex';
 
-  // Reset reanalysis UI
+  // Reset reanalysis UI + delete button
   document.getElementById('lightbox-reanalysis').classList.remove('active');
   document.getElementById('reanalysis-textarea').value = '';
   document.getElementById('reanalysis-error').textContent = '';
+  disarmDelete();
 
   document.getElementById('lightbox').style.display = 'flex';
 }
@@ -1260,10 +1376,31 @@ function submitReanalysis() {
   });
 }
 
+let _deleteArmTimer = null;
+
+function disarmDelete() {
+  const btn = document.getElementById('lb-delete-btn');
+  if (!btn) return;
+  clearTimeout(_deleteArmTimer);
+  btn.dataset.armed = '';
+  btn.textContent = '删除';
+  btn.classList.remove('armed');
+}
+
 function deleteRecord() {
   const assetId = currentLightboxAssetId;
   if (!assetId) return;
-  if (!confirm('确定要删除这条记录吗？\n删除后该照片不会出现在下次同步中。')) return;
+
+  const btn = document.getElementById('lb-delete-btn');
+  if (!btn.dataset.armed) {
+    // First click: arm for 3 seconds
+    btn.dataset.armed = '1';
+    btn.textContent = '确认删除？';
+    btn.classList.add('armed');
+    _deleteArmTimer = setTimeout(disarmDelete, 3000);
+    return;
+  }
+  disarmDelete();
 
   fetch(`${API}/api/record`, {
     method: 'DELETE',
@@ -1284,10 +1421,11 @@ function deleteRecord() {
       cacheDel('dates');
       loadAvailableDates();
       loadDay(ds);
+      toast('已删除，该照片不会再被同步');
     }
   })
   .catch(err => {
-    alert('删除失败: ' + (err.message || '请重试'));
+    toast('删除失败: ' + (err.message || '请重试'), 'error');
   });
 }
 
@@ -1497,16 +1635,16 @@ async function analyzeAlbumPhoto(photo, dateStr) {
       _pendingLightboxAsset = data.record.asset_id;
       loadDay(data.date);
     } else if (data.error === 'not food') {
-      alert('Gemini 判定此图片不是真实食物，无法记录。');
+      toast('此图片不是真实食物，无法记录', 'error');
     } else if (data.error === 'already processed') {
-      alert('此照片已在记录中。');
+      toast('此照片已在记录中', 'error');
     } else {
-      alert('分析失败: ' + (data.error || '未知错误'));
+      toast('分析失败: ' + (data.error || '未知错误'), 'error');
     }
   } catch (err) {
     overlay.style.display = 'none';
     btn.disabled = false;
-    alert('分析失败: ' + err.message);
+    toast('分析失败: ' + err.message, 'error');
   }
 }
 
@@ -1683,11 +1821,11 @@ function startUpload(file, dateStr) {
         document.getElementById('date-picker').style.display = 'flex';
       }
     } else if (data.error === 'not food') {
-      alert('Gemini 判定此图片不是真实食物，无法记录。');
+      toast('此图片不是真实食物，无法记录', 'error');
     } else if (data.error === 'already processed') {
-      alert('此照片已在记录中。');
+      toast('此照片已在记录中', 'error');
     } else {
-      alert('上传失败: ' + (data.error || '未知错误'));
+      toast('上传失败: ' + (data.error || '未知错误'), 'error');
     }
   }
 
@@ -1697,7 +1835,7 @@ function startUpload(file, dateStr) {
       _doUpload(ctrl.signal).then(handleResult).catch(() => {
         overlay.style.display = 'none';
         btn.disabled = false;
-        alert('上传超时，请检查网络连接后重试。');
+        toast('上传超时，请检查网络连接后重试', 'error');
       });
       return;
     }
@@ -1708,13 +1846,13 @@ function startUpload(file, dateStr) {
       const parts = msg.split(': ');
       const status = parts[0].split(' ')[1];
       const serverMsg = parts.slice(1).join(': ');
-      if (status === '413') alert('图片文件过大（超过 16MB），请压缩后重试。');
-      else if (status === '422') alert('Gemini 判定此图片不是真实食物，无法记录。');
-      else if (status === '409') alert('此照片已在记录中。');
-      else if (status === '400') alert('上传失败: ' + (serverMsg || '参数或图片格式错误'));
-      else alert('服务器错误 (' + status + '): ' + (serverMsg || '请重试'));
+      if (status === '413') toast('图片文件过大（超过 16MB），请压缩后重试', 'error');
+      else if (status === '422') toast('此图片不是真实食物，无法记录', 'error');
+      else if (status === '409') toast('此照片已在记录中', 'error');
+      else if (status === '400') toast('上传失败: ' + (serverMsg || '参数或图片格式错误'), 'error');
+      else toast('服务器错误 (' + status + '): ' + (serverMsg || '请重试'), 'error');
     } else {
-      alert('上传失败，请检查网络连接。');
+      toast('上传失败，请检查网络连接', 'error');
     }
   });
 }
@@ -1763,6 +1901,35 @@ function loadAvailableDates() {
     })
     .catch(() => {});
 }
+
+// ── Keyboard navigation ───────────────────────────────────────
+
+document.addEventListener('keydown', function(e) {
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return;
+
+  const lightboxOpen = document.getElementById('lightbox').style.display === 'flex';
+
+  if (e.key === 'Escape') {
+    if (lightboxOpen) { closeLightbox(); return; }
+    closeUploadPicker();
+    closePhotoPicker();
+    closeDatePicker();
+    if (window.innerWidth < 768) {
+      document.getElementById('calendar-dropdown').style.display = 'none';
+    }
+    return;
+  }
+
+  const modalOpen = lightboxOpen
+    || document.getElementById('upload-picker').style.display === 'flex'
+    || document.getElementById('photo-picker').style.display === 'flex'
+    || document.getElementById('date-picker').style.display === 'flex';
+  if (modalOpen) return;
+
+  if (e.key === 'ArrowLeft') prevPeriod();
+  if (e.key === 'ArrowRight') nextPeriod();
+});
 
 // Init: load today
 loadAvailableDates();
