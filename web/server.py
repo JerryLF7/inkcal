@@ -197,8 +197,14 @@ def api_today():
 
 @app.route("/api/week")
 def api_week():
-    today = datetime.now(HKT)
-    monday = today - timedelta(days=today.weekday())
+    start_str = request.args.get("start", "")
+    if start_str:
+        if not _valid_date(start_str):
+            return jsonify({"error": "invalid start"}), 400
+        anchor = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=HKT)
+    else:
+        anchor = datetime.now(HKT)
+    monday = anchor - timedelta(days=anchor.weekday())
     dates = [(monday + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
     by_day = {}
     for ds in dates:
@@ -579,10 +585,10 @@ def api_move_record():
     if not record:
         return jsonify({"error": "record not found"}), 404
 
-    # Get old date from database
+    # Get old date from database (records has no `date` column — derive it)
     conn = db._get_conn()
-    row = conn.execute("SELECT date FROM records WHERE asset_id = ?", (asset_id,)).fetchone()
-    old_date = row["date"] if row else None
+    row = conn.execute("SELECT date(photo_time) AS d FROM records WHERE asset_id = ?", (asset_id,)).fetchone()
+    old_date = row["d"] if row else None
 
     # Re-try Immich pHash matching on the new date
     immich_matched = None
