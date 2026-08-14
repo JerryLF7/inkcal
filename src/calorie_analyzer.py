@@ -117,7 +117,12 @@ class CalorieAnalyzer:
         if attempt >= MAX_RETRIES:
             return False
         msg = str(e).lower()
-        return "429" in msg or "503" in msg or "rate" in msg or "overloaded" in msg
+        return (
+            "429" in msg or "503" in msg or "502" in msg or "504" in msg
+            or "rate" in msg or "overloaded" in msg
+            or "bad gateway" in msg or "gateway timeout" in msg
+            or "connection error" in msg or "timeout" in msg
+        )
 
     def _parse_response(self, r: Any) -> dict[str, Any]:
         if isinstance(r, str):

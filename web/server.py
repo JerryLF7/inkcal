@@ -566,6 +566,8 @@ def api_analyze_album_photo():
         return jsonify({"error": "already processed"}), 409
     if error == "not_food":
         return jsonify({"error": "not food"}), 422
+    if error == "analysis_failed":
+        return jsonify({"error": "analysis failed"}), 503
     if error is not None:
         return jsonify({"error": error}), 500
 

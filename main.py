@@ -645,6 +645,8 @@ def cmd_analyze(args):
         fail("external_error", f"下载原图失败 [{source}]，请检查照片源是否在线")
     if error == "not_food":
         fail("not_food", f"Gemini 判定 {args.id[:8]} 非真实食物，不记录")
+    if error == "analysis_failed":
+        fail("external_error", f"分析 {args.id[:8]} 失败（模型未返回有效结果），请重试或手动记录")
     if error:
         fail("external_error", f"分析失败: {error}")
     if not record:

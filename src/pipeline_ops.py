@@ -29,7 +29,7 @@ def analyze_asset(
     save record, and remove from classified_non_food.
 
     Returns (record, error) tuple.  On success error is None.
-    Error values: "already_processed", "download_failed", "not_food".
+    Error values: "already_processed", "download_failed", "not_food", "analysis_failed".
     """
     from src import db
     from src.calorie_analyzer import CalorieAnalyzer
@@ -44,6 +44,10 @@ def analyze_asset(
         logger.error("Failed to download original for %s [%s]", asset_id[:8], source)
         return None, "download_failed"
 
+    # Resolve real photo time from source metadata if caller didn't supply it
+    if not photo_time:
+        photo_time = _resolve_photo_time(asset_id, source, config)
+
     analyzer = CalorieAnalyzer(
         config.get("gemini_key", ""),
         base_url=config.get("gemini_base_url"),
@@ -52,9 +56,13 @@ def analyze_asset(
     result = analyzer.analyze(image_bytes)
     analyzer.close()
 
-    if result.get("meal") in ("not real food", "unknown"):
+    if result.get("meal") == "not real food":
         logger.info("Gemini rejected %s as non-food", asset_id[:8])
         return None, "not_food"
+
+    if result.get("meal") == "unknown":
+        logger.warning("Gemini analysis failed for %s (returned unknown)", asset_id[:8])
+        return None, "analysis_failed"
 
     # Build thumbnail URL for the record (unless caller provided one)
     if not thumbnail_url:
@@ -158,6 +166,40 @@ def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
 
 
 # ── internal helpers ──────────────────────────────────────────────────
+
+def _resolve_photo_time(asset_id: str, source: str, config: dict) -> str:
+    """Fetch the original photo capture time from Immich or PhotoPrism metadata."""
+    from src.immich_client import ImmichClient, format_photo_time
+    from src.photoprism_client import PhotoPrismClient
+
+    try:
+        if source == "immich":
+            client = ImmichClient(
+                config.get("immich_url", ""),
+                config.get("immich_key", ""),
+            )
+            req = client._client.get(f"/api/assets/{asset_id}")
+            req.raise_for_status()
+            meta = req.json()
+            client.close()
+            exif = meta.get("exifInfo", {})
+            raw_pt = exif.get("dateTimeOriginal", "")
+            exif_tz = exif.get("timeZone")
+            return format_photo_time(raw_pt, exif_tz)
+        elif source == "photoprism":
+            client = PhotoPrismClient(
+                config.get("photoprism_url", ""),
+                config.get("photoprism_key", ""),
+            )
+            req = client._client.get(f"/photos/{asset_id}")
+            req.raise_for_status()
+            meta = req.json()
+            client.close()
+            return meta.get("TakenAt", "") or meta.get("CreatedAt", "")
+    except Exception as e:
+        logger.warning("Failed to resolve photo time for %s [%s]: %s", asset_id[:8], source, e)
+    return datetime.now(HKT).isoformat()
+
 
 def _download_original(asset_id: str, source: str, config: dict) -> bytes | None:
     """Download original photo from Immich or PhotoPrism."""
