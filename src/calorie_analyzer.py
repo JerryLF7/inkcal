@@ -11,64 +11,15 @@ from typing import Any
 
 from openai import OpenAI
 
+from src.prompts.loader import get_analyze_prompt, get_reanalyze_prompt
+
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 5
 RETRY_BACKOFF = 2  # seconds, doubles each retry
 
-SYSTEM_PROMPT = """You are a nutritionist analyzing a food photo. Carefully inspect the image first.
-
-IMPORTANT — reject non-real-food images. Return all-zero values (calories=0, protein_g=0, carbs_g=0, fat_g=0, meal="not real food", confidence="low") if the image contains ANY of the following:
-- Screenshots (chat, social media, web pages, camera roll grids, app interfaces)
-- Product packaging, food posters, advertisements, menus, or billboards
-- Food displayed on a screen (monitor, TV, phone)
-- Drawings, paintings, or illustrations of food
-- Food in a video game or virtual environment
-- Printed photos of food (e.g., a physical print held up to the camera)
-
-Only analyze REAL food that was directly photographed with a camera — a meal, dish, or ingredients physically in front of the lens.
-
-If it IS real food, return a JSON object with EXACTLY these fields:
-{
-  "meal": "brief description of the food in Chinese",
-  "calories": <estimated number>,
-  "protein_g": <estimated grams>,
-  "carbs_g": <estimated grams>,
-  "fat_g": <estimated grams>,
-  "confidence": "high|medium|low"
-}
-
-Be conservative with calorie estimates. Use common sense portion sizes."""
-
-REANALYSIS_PROMPT = """You are a nutritionist re-evaluating a food photo based on additional user-provided context.
-
-PREVIOUS ANALYSIS (for reference only — may be incorrect):
-- Meal: {meal}
-- Calories: {calories} kcal
-- Protein: {protein_g}g
-- Carbs: {carbs_g}g
-- Fat: {fat_g}g
-- Confidence: {confidence}
-
-USER'S ADDITIONAL NOTES (take these as primary truth):
-{notes}
-
-INSTRUCTIONS:
-1. Re-examine the image carefully, incorporating the user's notes.
-2. The user's notes should OVERRIDE any assumptions from the previous analysis.
-3. If the user describes portions, ingredients, or preparation methods not visible in the image, trust the user and adjust accordingly.
-4. Be conservative with estimates. Use common sense portion sizes unless the user specifies otherwise.
-5. Return a JSON object with EXACTLY these fields:
-   {{
-     "meal": "brief description of the food in Chinese",
-     "calories": <estimated number>,
-     "protein_g": <estimated grams>,
-     "carbs_g": <estimated grams>,
-     "fat_g": <estimated grams>,
-     "confidence": "high|medium|low"
-   }}
-
-IMPORTANT — reject non-real-food images. Return all-zero values (calories=0, protein_g=0, carbs_g=0, fat_g=0, meal="not real food", confidence="low") if the image contains screenshots, packaging, drawings, or other non-real food content."""
+# Prompts live in src/prompts/{analyze,reanalyze}.md and can be overridden
+# by ~/.inkcal/prompts/{analyze,reanalyze}.md — see src/prompts/loader.py.
 
 
 class CalorieAnalyzer:
@@ -93,7 +44,7 @@ class CalorieAnalyzer:
                     model=self.model,
                     messages=[
                         {"role": "user", "content": [
-                            {"type": "text", "text": SYSTEM_PROMPT},
+                            {"type": "text", "text": get_analyze_prompt()},
                             {"type": "image_url", "image_url": {"url": data_url}},
                         ]},
                     ],
@@ -182,7 +133,7 @@ class CalorieAnalyzer:
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         data_url = f"data:image/jpeg;base64,{b64}"
 
-        prompt = REANALYSIS_PROMPT.format(
+        prompt = get_reanalyze_prompt().format(
             meal=current_result.get("meal", "unknown"),
             calories=current_result.get("calories", 0),
             protein_g=current_result.get("protein_g", 0),
