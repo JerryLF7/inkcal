@@ -6,8 +6,17 @@ Prefers fine-tuned local model over HuggingFace base.
 
 import io
 import logging
+import os
 from pathlib import Path
 from typing import Any
+
+# The base model is fully cached in ~/.cache/huggingface — never phone home.
+# On this network huggingface.co is unreachable, and transformers' update
+# check would retry for minutes then crash the pipeline (cron went silent
+# after the 2026-08-22 reboot for exactly this reason). Must be set before
+# transformers is imported / from_pretrained is called.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from PIL import Image
 
