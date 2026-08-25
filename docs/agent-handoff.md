@@ -1,6 +1,6 @@
 # inkcal · Agent Layer Handoff
 
-> Status: **骨架完成 / 未接入 pipeline**
+> Status: **harness 已实测验证 / 未接入 pipeline**（2026-08-22 晚间更新：复查完成 + Responses API 移植，见 §13）
 > Date: 2026-08-22
 > Scope: 把 SigLIP2 过滤出的食物照片从「单张直送 Gemini」改为「流入当天 session，由 Luna 做同餐判断与提示词生成，再调 Gemini 专家层评估热量」
 
@@ -16,7 +16,7 @@ SigLIP2 (本地) ──► 新照片批 ──► [Luna 主循环] ──► Dec
                           ▲ 失败/越界 ── 降级到旧「单张直送 Gemini」路径（灰度）
 ```
 
-Luna 是便宜视觉模型（gpt-5.6-luna via openlux），负责**看图、判断同餐、生成辅助提示词**；
+Luna 是便宜视觉模型（`gpt-5.6-luna`，经海外 VPS 转发到 opencode go），负责**看图、判断同餐、生成辅助提示词**；
 Gemini 保留为「数值评估专家」，由 Luna 以工具方式调用。
 Harness 失败时回退旧路径，灰度过渡。
 
@@ -30,7 +30,7 @@ Harness 失败时回退旧路径，灰度过渡。
 | 上线策略 | **先灰度** | harness 失败 → 旧路径兜底 |
 | 每天一个 session | 是 | session 状态层（todo 3）尚未实现 |
 | 前端 agent 交互 | 暂缓 | 形态以后单独聊（todo 6） |
-| 模型选择 | Luna = openlux 网关 / `gpt-5.6-luna`；Gemini = `gemini-3.1-pro-preview`（保留） | 配置见 §4 |
+| 模型选择 | Luna = `gpt-5.6-luna`；Gemini = `gemini-3.1-pro-preview`（保留） | 配置见 §4；传输层已改走 Responses API（§13） |
 | 未来换 fx 的代价 | 工具层 + 契约层 = 0；只换 loop | 详见 §5 |
 
 ---
@@ -49,6 +49,10 @@ src/agent_harness.py    # Luna 主循环（薄 loop）+ 收敛/超时/截断
 
 - ✅ T6（跳过，按体感裁决）
 - ✅ 手搓 harness 骨架
+- ✅ P0-1 复查 diff（2026-08-22：文件无输出通道故障残留，详见 §13）
+- ✅ P0-2 端到端 smoke test（假图 skip 路径 + Immich 真图完整工具链路，见 §13.3）
+- ✅ 计划外：harness 移植到 OpenAI Responses API（上游 chat/completions 适配器吞图，§13.2）
+- ✅ `.env.example` 重建 + 补 LUNA 配置段
 
 ### 还在 todo 列表里
 
@@ -89,12 +93,14 @@ src/agent_harness.py    # Luna 主循环（薄 loop）+ 收敛/超时/截断
 ## 4. 配置变更（已落到 `.env` 和 `.env.example`）
 
 ```
-LUNA_API_KEY=sk-...        # 同一个 openlux 网关，与 Gemini 同源即可
-LUNA_BASE_URL=https://api.openlux.ai/v1
+LUNA_API_KEY=sk-...
+LUNA_BASE_URL=<VPS 转发地址>/zen/go/v1   # GPT 系大陆不可直连：海外 VPS 转发到 opencode go
 LUNA_MODEL=gpt-5.6-luna
 ```
 
-`CalorieAnalyzer`（现有 Gemini 客户端）保持不变；harness 单独用 OpenAI SDK 连接 LUNA_* 凭据。
+`.env.example` 里的 `https://api.openlux.ai/v1` 只是占位默认值，实际以 `.env` 为准。
+
+`CalorieAnalyzer`（现有 Gemini 客户端）保持不变；harness 单独用 OpenAI SDK 连接 LUNA_* 凭据（**Responses API**，非 chat/completions，原因见 §13.2）。
 
 ---
 
@@ -166,7 +172,7 @@ LUNA_MODEL=gpt-5.6-luna
 
 ## 8. 实测中暴露并修复的 P0 问题
 
-修复记录都在 git log 里了（最近几次提交），但**自检时务必复查**——本会话遇到罕见的输出通道故障（"引号后特定字母被截断"），虽然在 base64 绕过后已通过所有验证，**建议你跑一下 `git diff src/agent_*.py` 看看是否有视觉异常**。
+修复记录都在 git log 里了（2026-08-22 已随 `e982dc2` 提交）。**复查已完成**：三个文件无输出通道故障残留；顺带发现并修复了传输层与参数层的问题（详见 §13）。
 
 修复摘要：
 - **P0-1**：`_execute_tool` 的截断会 `json.loads(截断字符串)` 必炸 → 重写为 `_bounded_result()`，优先裁剪列表字段，巨型结果降级为合法 JSON 的 error marker
@@ -178,9 +184,9 @@ LUNA_MODEL=gpt-5.6-luna
 ## 9. 下一步（按优先级）
 
 ### P0：实际能立刻开工的
-1. **复查 git diff**（5 分钟）——验证三个新文件没被输出通道故障污染
-2. **端到端 smoke test**：从 Immich 拉 1 张真图，构造 assets + image_getter，跑一次 `AgentHarness.run()`，确认真实环境跑通
-3. **session 状态层（todo 3）**：与项目 owner 拍板方案（详见 §10）
+1. ~~复查 git diff~~ ✅ 完成（2026-08-22，结论见 §13）
+2. ~~端到端 smoke test~~ ✅ 完成（假图 skip + Immich 真图工具链路，见 §13.3）
+3. **session 状态层（todo 3）**：与项目 owner 拍板方案（详见 §10）← 当前最优先
 
 ### P1：核心路径完善
 4. **pipeline 接入 main.py run（todo 4）**：SigLIP2 过滤后改走 harness，而不是 `result = analyzer.analyze(original)`
@@ -220,4 +226,41 @@ LUNA_MODEL=gpt-5.6-luna
 
 ## 12. 一句话
 
-手搓 harness 已落地且经过严格验证（多决策契约、MIME 检测、安全截断都已修），**业务状态留在 SQLite** 是为将来无痛迁移 fx 埋的伏笔。下一步主要是复查 diff + 跑通 smoke test + 与项目 owner 拍板 session 状态层方案。
+手搓 harness 已落地并**在真实环境验证通过**（多决策契约、MIME 检测、安全截断、Responses API 工具往返），**业务状态留在 SQLite** 是为将来无痛迁移 fx 埋的伏笔。下一步：拍板 session 状态层方案 → 接 pipeline。
+
+---
+
+## 13. 2026-08-22 晚间更新：复查结论 + Responses API 移植
+
+### 13.1 疑点结案
+
+| 事项 | 结论 |
+|---|---|
+| MIME 硬编码疑点（T4 引发） | **不用改**——"缺前缀会炸"成立，"错前缀"从未复现问题；生产 `calorie_analyzer.py` 同样硬编码多年无症状。移植时顺手用上了 `detect_image_mime()`（新代码路径，白拿正确性） |
+| LUNA_BASE_URL 失效 | 是填错了。实际拓扑：大陆 → 海外 VPS 转发 → opencode go（上游名 "Console Go"）。无网关聚合层 |
+
+### 13.2 上游三个怪癖（都已在 harness 内消化）
+
+1. **chat/completions 吞图**：适配器只翻译纯文本，任何图片内容 → 空壳 400（无错误信息）；流式同样失败；`/responses` 原生路径图片正常 → **移植到 `client.responses.create()`**
+2. **参数怪癖**：拒收 `max_tokens` 和 `max_completion_tokens`（Responses 的 `max_output_tokens` 可用）；reasoning token 与答案共享该预算，已提到 8192
+3. **luna 通道是 Responses 原生**：响应带 `resp_` ID / `phase: final_answer` / `prompt_cache_retention`
+
+移植要点：
+- system prompt 走 `instructions` 参数
+- **`previous_response_id` 链式调用**：每轮只传增量，多 MB 原图不在工具往返间重复上传
+- 工具 schema 在 harness 层做 chat→flat 转换，契约层保持 MCP-ready 不动
+- `function_call_output.output` 字段是必填字符串（不是 `content`）
+
+### 13.3 Smoke test 结果（Gemini 为桩函数）
+
+| 用例 | 结果 |
+|---|---|
+| 假图（红圈 PNG） | ✅ Luna 正确判非食物 → `skip/rejected`，全零 + reasoning 清晰 |
+| Immich 真图（麦当劳套餐 2.2MB JPEG） | ✅ 完整工具链路：`get_recent_meals` → `analyze_with_gemini` → 最终决策；prompt_for_gemini 主动排除菜单/小票/包装；发现 asset 已有记录主动选 `update/same_meal` |
+
+真实 Gemini 链路（`_gemini_multi_image`）留待 pipeline 接入时验证。
+
+### 13.4 提交记录
+
+- `e3cf90d` analyzer: extract prompts to src/prompts/（大改前的独立改动）
+- `e982dc2` agent: add Luna harness via Responses API with contract/tools layers
