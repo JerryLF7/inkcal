@@ -77,13 +77,14 @@ def query_food_database(args: dict, deps: dict) -> dict:
 
 def get_recent_meals(args: dict, deps: dict) -> dict:
     """
-    Return today's meal records (the current session's existing entries),
-    ordered by photo_time. Used by Luna to judge whether a new photo belongs
-    to an existing meal.
+    Return existing meal records around the batch's anchor date (anchor day
+    plus the day before), ordered by photo_time. Used by Luna to judge
+    whether a new photo belongs to an existing meal.
 
-    NOTE: "today" is derived from the newest asset's photo_time (the batch
-    being processed), so the session is anchored to the photos, not to wall
-    clock — this makes it safe for backfill runs on historical dates.
+    The window covers cross-midnight meals (23:55 + next-day 00:05 photos):
+    the anchor is derived from the newest asset's photo_time, so without
+    looking back one day, a just-after-midnight photo could never see the
+    late-night meal it belongs to. Grouping itself remains image-based.
     """
     from src import db
 
@@ -97,7 +98,15 @@ def get_recent_meals(args: dict, deps: dict) -> dict:
     if not anchor_date:
         return {"ok": False, "error": "cannot determine anchor date from assets"}
 
-    records = db.get_records_by_date(anchor_date)
+    try:
+        from datetime import date as _date, timedelta as _timedelta
+
+        prev_date = (_date.fromisoformat(anchor_date)
+                     - _timedelta(days=1)).isoformat()
+    except ValueError:
+        prev_date = anchor_date
+
+    records = db.get_records_by_date_range(prev_date, anchor_date)
     meals = []
     for r in records:
         meals.append({
@@ -112,8 +121,9 @@ def get_recent_meals(args: dict, deps: dict) -> dict:
         })
     # Sort by photo_time for stable "which came first" reading
     meals.sort(key=lambda m: m.get("photo_time") or "")
-    logger.info("get_recent_meals(anchor=%s) -> %d meals", anchor_date, len(meals))
-    return {"ok": True, "anchor_date": anchor_date, "meals": meals}
+    logger.info("get_recent_meals(window=%s..%s) -> %d meals",
+                prev_date, anchor_date, len(meals))
+    return {"ok": True, "window": [prev_date, anchor_date], "meals": meals}
 
 
 # ── analyze_with_gemini ──────────────────────────────────────────────

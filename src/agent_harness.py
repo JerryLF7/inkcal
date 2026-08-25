@@ -40,6 +40,7 @@ from src.agent_contract import (
     SYSTEM_PROMPT,
     TOOL_SCHEMAS,
     build_user_prompt,
+    enforce_zero_skip,
     parse_decisions_json,
     Decision,
 )
@@ -180,6 +181,9 @@ class AgentHarness:
 
             try:
                 decisions = parse_decisions_json(content)
+                # Hard safety net: all-zero / not-real-food results must be
+                # skip, regardless of what Luna decided (todo-2 guarantee).
+                decisions = enforce_zero_skip(decisions)
                 logger.info(
                     "Luna decisions: %d total (actions=%s)",
                     len(decisions),

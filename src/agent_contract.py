@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 logger = logging.getLogger("inkcal.agent_contract")
@@ -50,9 +50,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "get_recent_meals",
             "description": (
-                "获取当天 session 里已有的餐食记录（包括待结算的中间态），"
+                "获取锚定日期及前一天的已有餐食记录（覆盖跨零点拍摄的同餐场景），"
                 "用于判断新照片是否与已有记录属于同一餐。返回按拍摄时间排序的列表，"
                 "每条含 asset_id、photo_time、meal、calories、confidence。"
+                "是否同餐仍只按图片内容判断，与日期无关。"
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
@@ -207,6 +208,50 @@ def parse_decisions_json(text: str) -> list[Decision]:
     raise ValueError("expected {\"decisions\": [...]} or a single decision object")
 
 
+# ── post-loop safety net (todo-2 leftover, now enforced) ─────────────
+
+def is_all_zero_result(result: dict[str, Any]) -> bool:
+    """
+    True when Gemini's numeric output is all zeros — its non-real-food /
+    failed-analysis marker. Mirrors the legacy pipeline's rejection check.
+    """
+    return all(
+        float(result.get(k) or 0) == 0
+        for k in ("calories", "protein_g", "carbs_g", "fat_g")
+    )
+
+
+def is_rejected_result(result: dict[str, Any]) -> bool:
+    """True when the result itself says non-food (same set as legacy path)."""
+    return str(result.get("meal", "")).strip().lower() in ("not real food", "unknown")
+
+
+def enforce_zero_skip(decisions: list[Decision]) -> list[Decision]:
+    """
+    Unconditional mapping of "Gemini returned all-zero / not-real-food" to
+    action=skip. The system prompt already asks Luna to do this itself;
+    this makes it a hard guarantee at the loop boundary instead of a
+    prompt-level hope.
+    Returns new Decision objects; does not mutate the input.
+    """
+    out: list[Decision] = []
+    for d in decisions:
+        if d.action != "skip" and (
+            is_all_zero_result(d.result) or is_rejected_result(d.result)
+        ):
+            note = ("系统兜底：analyze_with_gemini 返回全零或 not real food，"
+                    f"action 由 {d.action} 强制改写为 skip。")
+            out.append(replace(
+                d,
+                action="skip",
+                relation="rejected",
+                reasoning=f"{d.reasoning}｜{note}",
+            ))
+        else:
+            out.append(d)
+    return out
+
+
 # ── system prompt ────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """你是 inkcal 的 agent，负责判断 SigLIP2 过滤出的食物照片该如何处理。
@@ -217,6 +262,7 @@ SYSTEM_PROMPT = """你是 inkcal 的 agent，负责判断 SigLIP2 过滤出的�
 ## 判断规则
 
 1. 同餐判断**只看图片内容**，不看拍摄时间间隔。拍摄时间只用于排序先后。
+   - get_recent_meals 返回的列表可能包含昨天的记录（跨零点拍摄的场景，如 23:55 与次日 00:05 同餐）；是否同餐仍只看图片内容。
    - 同餐的信号：相同桌面/餐具、相同食物组合、吃剩状态的延续（如：第一张全量，第二张某食物变少）。
    - 不同餐的信号：完全不同的桌面、完全不同的食物、明显是两次独立进食。
 2. 如果是**同餐**，决定以哪张照片为准（通常是最后一张，显示最终剩余状态），然后调用 analyze_with_gemini，把相关照片都传给它，并写清实际食用部分。

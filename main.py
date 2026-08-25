@@ -200,6 +200,7 @@ def _run_source(
     skipped_ignored = len([a for a in assets if a["id"] in ignored])
     logger.info("未处理: %d 张 (忽略 %d 张)", len(new_assets), skipped_ignored)
 
+    food_batch: list[dict] = []
     for asset in new_assets:
         aid = asset["id"]
 
@@ -250,32 +251,209 @@ def _run_source(
                              {"score": round(score, 3)})
             continue
 
-        logger.info("  🍽️  检测到食物! 调 Gemini 分析...")
-        result = analyzer.analyze(original)
-
-        # Gemini may reject non-real-food images (screenshots, menus, etc.).
-        # Treat this as an automatic (not user-initiated) non-food decision so
-        # the photo remains visible in the album picker for manual correction.
-        if result.get("meal") in ("not real food", "unknown"):
-            logger.info("  ❌ Gemini 判定非真实食物，加入自动非食物缓存")
-            db.add_classified_non_food(aid, decided_by="gemini")
-            db.add_event(run_id, "gemini_rejected", aid, None)
-            continue
-
-        rec = append_log(date_str, aid, photo_time, thumbnail_url, result,
-                         source_type=source)
-        logger.info("  ✅ %s ~%skcal", result.get("meal", "?"), result.get("calories", 0))
-
-        db.add_event(run_id, "meal_recorded", aid, {
-            "record_id": rec.get("id"),
-            "meal": rec.get("meal"),
-            "calories": rec.get("calories"),
+        logger.info("  🍽️  检测到食物，加入待处理批次")
+        food_batch.append({
+            "aid": aid,
+            "source": source,
+            "photo_time": photo_time,
+            "thumbnail_url": thumbnail_url,
+            "original": original,
         })
-        if rec.get("confidence") == "low":
-            db.add_event(run_id, "low_confidence", aid,
-                         {"record_id": rec.get("id")})
 
     client.close()
+
+    if not food_batch:
+        return
+
+    # ── analysis: agent path (gray release) or legacy single-photo path ──
+    if os.getenv("AGENT_ENABLED", "0") == "1":
+        # Chunk the batch: every photo goes inline (base64) in one Responses
+        # request, so a whole-day backfill (20+ originals) would blow past
+        # the upstream context/size limits. Steady-state cron ticks see
+        # 1-3 photos and stay within a single chunk.
+        try:
+            max_batch = max(1, int(os.getenv("AGENT_BATCH_SIZE", "6")))
+        except ValueError:
+            max_batch = 6
+        for i in range(0, len(food_batch), max_batch):
+            _run_agent_batch(date_str, food_batch[i:i + max_batch],
+                             analyzer, run_id=run_id)
+    else:
+        for item in food_batch:
+            _legacy_analyze_single(item, analyzer, run_id=run_id)
+
+
+def _legacy_analyze_single(item: dict, analyzer, run_id: str = ""):
+    """Legacy path: send one photo straight to Gemini and save the record."""
+    aid = item["aid"]
+    result = analyzer.analyze(item["original"])
+
+    # Gemini may reject non-real-food images (screenshots, menus, etc.).
+    # Treat this as an automatic (not user-initiated) non-food decision so
+    # the photo remains visible in the album picker for manual correction.
+    if result.get("meal") in ("not real food", "unknown"):
+        logger.info("  ❌ Gemini 判定非真实食物，加入自动非食物缓存")
+        db.add_classified_non_food(aid, decided_by="gemini")
+        db.add_event(run_id, "gemini_rejected", aid, None)
+        return
+
+    rec = append_log(_date_of(item["photo_time"]), aid, item["photo_time"],
+                     item["thumbnail_url"], result,
+                     source_type=item["source"])
+    logger.info("  ✅ %s ~%skcal", result.get("meal", "?"),
+                result.get("calories", 0))
+
+    db.add_event(run_id, "meal_recorded", aid, {
+        "record_id": rec.get("id"),
+        "meal": rec.get("meal"),
+        "calories": rec.get("calories"),
+    })
+    if rec.get("confidence") == "low":
+        db.add_event(run_id, "low_confidence", aid,
+                     {"record_id": rec.get("id")})
+
+
+def _date_of(photo_time: str) -> str:
+    """HKT date part of an ISO photo_time string."""
+    return (photo_time or "")[:10]
+
+
+def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
+                     run_id: str = ""):
+    """
+    Agent path: hand the whole filtered batch to Luna's harness, apply the
+    returned decisions to records + audit table. Falls back to the legacy
+    per-photo path when the harness fails (gray-release guarantee).
+    """
+    from src.agent_harness import AgentHarness
+
+    luna_model = os.getenv("LUNA_MODEL", "gpt-5.6-luna")
+
+    def image_getter(asset_id: str) -> bytes:
+        for it in batch:
+            if it["aid"] == asset_id:
+                return it["original"]
+        raise KeyError(asset_id)
+
+    harness = AgentHarness(
+        luna_api_key=os.getenv("LUNA_API_KEY", ""),
+        luna_base_url=os.getenv("LUNA_BASE_URL") or None,
+        luna_model=luna_model,
+        deps={"gemini_analyzer": analyzer},
+    )
+    assets = [{
+        "asset_id": it["aid"],
+        "photo_time": it["photo_time"],
+        "source": it["source"],
+        "image_bytes": it["original"],
+    } for it in batch]
+
+    decisions = None
+    try:
+        decisions = harness.run(assets, image_getter)
+    finally:
+        harness.close()
+
+    if decisions is None:
+        logger.warning("  ⚠️ Agent 路径失败，降级旧路径逐张处理 (%d 张)",
+                       len(batch))
+        for it in batch:
+            db.add_event(run_id, "harness_fallback", it["aid"], None)
+        for item in batch:
+            _legacy_analyze_single(item, analyzer, run_id=run_id)
+        return
+
+    session_date = max((_date_of(a["photo_time"]) for a in assets),
+                       default=date_str)
+    covered: set[str] = set()
+
+    for dec in decisions:
+        db.insert_agent_decision(
+            session_date,
+            {
+                "asset_ids": dec.asset_ids,
+                "action": dec.action,
+                "relation": dec.relation,
+                "target_asset_id": dec.target_asset_id,
+                "result": dec.result,
+                "reasoning": dec.reasoning,
+                "prompt_for_gemini": dec.prompt_for_gemini,
+            },
+            run_id=run_id,
+            model_used=luna_model,
+        )
+        covered.update(dec.asset_ids)
+        db.add_event(run_id, "agent_decision", ",".join(dec.asset_ids), {
+            "action": dec.action,
+            "relation": dec.relation,
+            "target_asset_id": dec.target_asset_id,
+            "meal": dec.result.get("meal"),
+            "calories": dec.result.get("calories"),
+        })
+
+        if dec.action == "skip":
+            # Luna rejected these photos (non-food etc.) — same handling as
+            # the legacy Gemini rejection: keep them visible in album picker.
+            for aid in dec.asset_ids:
+                db.add_classified_non_food(aid, decided_by="agent")
+                logger.info("  ⏭️  skip [%s...] %s", aid[:8],
+                            dec.reasoning[:60])
+            continue
+
+        if dec.action == "update":
+            target = dec.target_asset_id
+            ok = False
+            if target:
+                ok = db.update_record(target, {
+                    "meal": dec.result.get("meal"),
+                    "calories": dec.result.get("calories"),
+                    "protein_g": dec.result.get("protein_g"),
+                    "carbs_g": dec.result.get("carbs_g"),
+                    "fat_g": dec.result.get("fat_g"),
+                    "confidence": dec.result.get("confidence", "low"),
+                    "model_used": f"agent+{analyzer.model}",
+                })
+            if ok:
+                logger.info("  🔄 update → [%s...] %s ~%skcal",
+                            target[:8], dec.result.get("meal"),
+                            dec.result.get("calories"))
+            else:
+                logger.warning("  ⚠️ update 目标不存在: %s（降级为 add）",
+                               target)
+                for aid in dec.asset_ids:
+                    _agent_add(dec, aid, batch, run_id)
+            continue
+
+        # action == "add"
+        for aid in dec.asset_ids:
+            _agent_add(dec, aid, batch, run_id)
+
+    # Safety net: every photo must be settled exactly once
+    missing = [it["aid"] for it in batch if it["aid"] not in covered]
+    if missing:
+        logger.error("  ❌ 决策未覆盖 %d 张照片，逐张走旧路径: %s",
+                     len(missing), [a[:8] for a in missing])
+        for it in batch:
+            if it["aid"] in missing:
+                _legacy_analyze_single(it, analyzer, run_id=run_id)
+
+
+def _agent_add(dec, aid: str, batch: list[dict], run_id: str):
+    """Apply one 'add' decision: insert a record for a single new photo."""
+    item = next((it for it in batch if it["aid"] == aid), None)
+    if item is None:
+        logger.error("  ❌ add 决策引用了批外 asset_id: %s", aid)
+        return
+    rec = append_log(_date_of(item["photo_time"]), aid, item["photo_time"],
+                     item["thumbnail_url"], dec.result,
+                     source_type=item["source"])
+    logger.info("  ✅ add [%s...] %s ~%skcal", aid[:8],
+                dec.result.get("meal"), dec.result.get("calories"))
+    db.add_event(run_id, "meal_recorded", aid, {
+        "record_id": rec.get("id"),
+        "meal": rec.get("meal"),
+        "calories": rec.get("calories"),
+    })
 
 
 # ── subcommand: run ──────────────────────────────────────────────────
@@ -613,6 +791,42 @@ def cmd_events(args):
     for e in all_events:
         print(f"  [{e['created_at']}] {e['event_type']}  "
               f"(run {e['run_id'][:12]})")
+
+
+# ── subcommand: decisions ────────────────────────────────────────────
+
+def cmd_decisions(args):
+    """Show the agent decision audit trail for a date."""
+    db.init_db()
+
+    date_str = args.date or datetime.now(
+        timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    decisions = db.get_decisions_by_date(date_str)
+
+    if _emit({"ok": True, "command": "decisions", "date": date_str,
+              "count": len(decisions), "decisions": decisions}):
+        return
+
+    if not decisions:
+        print(f"🤖 {date_str} 没有 agent 决策记录")
+        return
+
+    print(f"🤖 {date_str} 共 {len(decisions)} 条 agent 决策:")
+    for d in decisions:
+        emoji = {"add": "✅", "update": "🔄", "skip": "⏭️"}.get(
+            d["action"], "📌")
+        assets = ",".join(a[:8] for a in d.get("asset_ids", []))
+        result = d.get("result") or {}
+        line = f"  [{d['created_at']}] {emoji} {d['action']}/{d['relation']}"
+        line += f"  assets={assets}"
+        if d["action"] == "update" and d.get("target_asset_id"):
+            line += f" → target={d['target_asset_id'][:8]}"
+        if d["action"] != "skip":
+            line += f"  {result.get('meal', '?')} ~{result.get('calories', 0)}kcal"
+        print(line)
+        reasoning = d.get("reasoning") or ""
+        if reasoning:
+            print(f"      💭 {reasoning}")
 
 
 # ── subcommand: analyze ──────────────────────────────────────────────
@@ -1276,6 +1490,11 @@ def main():
                           help="Peek without marking as consumed")
     p_events.add_argument("--limit", type=int, default=100,
                           help="Max events to show (--consumed mode only)")
+
+    p_dec = sub.add_parser("decisions",
+                           help="Show agent decision audit trail for a date")
+    p_dec.add_argument("--date", help="Date to view (YYYY-MM-DD), defaults to today")
+    add_json_flag(p_dec)
     add_json_flag(p_events)
 
     args = parser.parse_args()
@@ -1311,6 +1530,8 @@ def main():
         cmd_reanalyze(args)
     elif args.command == "events":
         cmd_events(args)
+    elif args.command == "decisions":
+        cmd_decisions(args)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 """SQLite database layer for inkcal — replaces JSON file storage."""
 
+import json
 import os
 import sqlite3
 import logging
@@ -113,6 +114,27 @@ def _create_schema(conn: sqlite3.Connection):
 
         CREATE INDEX IF NOT EXISTS idx_classified_non_food_asset_id
             ON classified_non_food(asset_id);
+
+        -- Agent decision audit trail. Business data lives in `records`;
+        -- this table persists what the agent decided (including skip
+        -- decisions, which have no records row) for auditing and tuning.
+        CREATE TABLE IF NOT EXISTS agent_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_date TEXT NOT NULL,
+            run_id TEXT,
+            asset_ids TEXT NOT NULL,
+            action TEXT NOT NULL CHECK(action IN ('add', 'update', 'skip')),
+            relation TEXT NOT NULL CHECK(relation IN ('new_meal', 'same_meal', 'rejected')),
+            target_asset_id TEXT,
+            result TEXT NOT NULL,
+            reasoning TEXT NOT NULL,
+            prompt_for_gemini TEXT,
+            model_used TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_decisions_date
+            ON agent_decisions(session_date);
 
         -- Full-text search over meal descriptions for quick retrieval
         CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
@@ -789,6 +811,51 @@ def mark_events_consumed(event_ids: list[int]):
         tuple(event_ids),
     )
     conn.commit()
+
+
+# ── agent decisions (audit trail) ────────────────────────────────────
+
+def insert_agent_decision(session_date: str, decision: dict, *,
+                          run_id: str | None = None,
+                          model_used: str | None = None) -> int:
+    """
+    Persist one validated agent Decision (dict with asset_ids/action/relation/
+    target_asset_id/result/reasoning/prompt_for_gemini). Skip decisions have
+    no records row, so this table is their only landing place.
+    """
+    conn = _get_conn()
+    cur = conn.execute(
+        """INSERT INTO agent_decisions
+           (session_date, run_id, asset_ids, action, relation, target_asset_id,
+            result, reasoning, prompt_for_gemini, model_used)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (session_date, run_id,
+         json.dumps(decision["asset_ids"], ensure_ascii=False),
+         decision["action"], decision["relation"], decision.get("target_asset_id"),
+         json.dumps(decision["result"], ensure_ascii=False),
+         decision["reasoning"], decision.get("prompt_for_gemini"), model_used),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_decisions_by_date(date_str: str) -> list[dict]:
+    """All agent decisions anchored to a date (HKT), oldest first."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM agent_decisions WHERE session_date = ? ORDER BY id",
+        (date_str,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["asset_ids"] = json.loads(d["asset_ids"])
+            d["result"] = json.loads(d["result"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+        out.append(d)
+    return out
 
 
 def get_run_summary(run_id: str) -> dict:
