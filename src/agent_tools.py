@@ -109,9 +109,11 @@ def get_recent_meals(args: dict, deps: dict) -> dict:
     records = db.get_records_by_date_range(prev_date, anchor_date)
     meals = []
     for r in records:
+        pt = r.get("photo_time") or ""
         meals.append({
             "asset_id": r.get("asset_id"),
-            "photo_time": r.get("photo_time"),
+            "photo_time": pt,
+            "date": pt[:10],  # explicit for cross-day reasoning
             "meal": r.get("meal"),
             "calories": r.get("calories"),
             "protein_g": r.get("protein_g"),
