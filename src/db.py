@@ -858,6 +858,26 @@ def get_decisions_by_date(date_str: str) -> list[dict]:
     return out
 
 
+def get_data_version() -> str:
+    """
+    Cheap fingerprint of all meal-data writes (insert / update / delete /
+    relabel / reanalyze). The web frontend polls this to detect background
+    writes from cron runs (agent or legacy path) and refresh stale views.
+    COUNT covers deletes; timestamps cover in-place updates.
+    """
+    conn = _get_conn()
+    row = conn.execute(
+        """
+        SELECT
+          (SELECT COUNT(*) FROM records)                        AS n,
+          (SELECT MAX(created_at) FROM records)                 AS c,
+          (SELECT MAX(updated_at) FROM records)                 AS u,
+          (SELECT MAX(reanalyzed_at) FROM reanalysis_history)   AS r
+        """
+    ).fetchone()
+    return f"{row['n']}:{row['c']}:{row['u']}:{row['r']}"
+
+
 def get_run_summary(run_id: str) -> dict:
     """Aggregate stats for a single run from its events."""
     conn = _get_conn()

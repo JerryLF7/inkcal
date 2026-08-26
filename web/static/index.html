@@ -1864,11 +1864,12 @@ function handleManualUpload(e) {
   e.target.value = '';
 }
 
-function loadAvailableDates() {
+function loadAvailableDates(force) {
   const cached = cacheGet('dates');
 
-  // Under 5 minutes: use cache, skip network
-  if (cached && cached.ts && (Date.now() - cached.ts < 300000)) {
+  // Under 5 minutes: use cache, skip network (unless force, e.g. data
+  // version changed while the page was idle)
+  if (!force && cached && cached.ts && (Date.now() - cached.ts < 300000)) {
     availableDates = new Set(cached.data);
     if (window.innerWidth >= 768) {
       calendarYear = currentDate.getFullYear();
@@ -1901,6 +1902,38 @@ function loadAvailableDates() {
     })
     .catch(() => {});
 }
+
+// ── Background data-version polling ──────────────────────────
+// Cron runs (agent or legacy path) write records server-side; an idle open
+// page would never notice. Poll a cheap fingerprint every 30s and refresh
+// the visible view + calendar dots when it changes.
+
+let _lastDataVersion = null;
+
+function refreshCurrentView() {
+  if (viewMode === 'week' && currentWeekMonday) {
+    loadWeek(currentWeekMonday);
+  } else if (currentDate) {
+    loadDay(fmtDate(currentDate));
+  }
+  loadAvailableDates(true);
+}
+
+function pollDataVersion() {
+  if (document.visibilityState !== 'visible') return;
+  apiFetch(`${API}/api/data-version`)
+    .then(v => {
+      if (!v || !v.version) return;
+      if (_lastDataVersion === null) { _lastDataVersion = v.version; return; }
+      if (v.version !== _lastDataVersion) {
+        _lastDataVersion = v.version;
+        refreshCurrentView();
+      }
+    })
+    .catch(() => {});
+}
+
+setInterval(pollDataVersion, 30000);
 
 // ── Keyboard navigation ───────────────────────────────────────
 

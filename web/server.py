@@ -195,6 +195,13 @@ def api_today():
     })
 
 
+@app.route("/api/data-version")
+def api_data_version():
+    """Fingerprint of all meal-data writes; lets the SPA detect background
+    writes from cron runs (agent or legacy) and refresh stale views."""
+    return jsonify({"version": db.get_data_version()})
+
+
 @app.route("/api/week")
 def api_week():
     start_str = request.args.get("start", "")
