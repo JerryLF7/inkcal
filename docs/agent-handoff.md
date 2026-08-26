@@ -1,7 +1,7 @@
 # inkcal · Agent Layer Handoff
 
-> Status: **harness 已实测验证 / 未接入 pipeline**（2026-08-22 晚间更新：复查完成 + Responses API 移植，见 §13）
-> Date: 2026-08-22
+> Status: **已接入 pipeline 生产运行（AGENT_ENABLED=1 灰度）**（2026-08-26 更新：session 层落地 + pipeline 接入 + cron 修复，见 §14）
+> Date: 2026-08-22 · 08-26 二次更新
 > Scope: 把 SigLIP2 过滤出的食物照片从「单张直送 Gemini」改为「流入当天 session，由 Luna 做同餐判断与提示词生成，再调 Gemini 专家层评估热量」
 
 ---
@@ -27,8 +27,8 @@ Harness 失败时回退旧路径，灰度过渡。
 | 决策点 | 决定 | 备注 |
 |---|---|---|
 | 同餐判断依据 | **仅看图片内容**，不看时间间隔 | 照片 metadata 仅用于排序 |
-| 上线策略 | **先灰度** | harness 失败 → 旧路径兜底 |
-| 每天一个 session | 是 | session 状态层（todo 3）尚未实现 |
+| 上线策略 | **先灰度** | harness 失败 → 旧路径兜底。已实装：`AGENT_ENABLED=1` 开关 + `AGENT_BATCH_SIZE=6` 分块 |
+| 每天一个 session | 是 | **已落地为"session = 一次 harness.run()"**——无长命 session，状态全在 SQLite（§14.1） |
 | 前端 agent 交互 | 暂缓 | 形态以后单独聊（todo 6） |
 | 模型选择 | Luna = `gpt-5.6-luna`；Gemini = `gemini-3.1-pro-preview`（保留） | 配置见 §4；传输层已改走 Responses API（§13） |
 | 未来换 fx 的代价 | 工具层 + 契约层 = 0；只换 loop | 详见 §5 |
@@ -53,15 +53,18 @@ src/agent_harness.py    # Luna 主循环（薄 loop）+ 收敛/超时/截断
 - ✅ P0-2 端到端 smoke test（假图 skip 路径 + Immich 真图完整工具链路，见 §13.3）
 - ✅ 计划外：harness 移植到 OpenAI Responses API（上游 chat/completions 适配器吞图，§13.2）
 - ✅ `.env.example` 重建 + 补 LUNA 配置段
+- ✅ **session 状态层**（todo 3）：一张 `agent_decisions` 审计表方案（§14.1）
+- ✅ **pipeline 接入**（todo 4）：`_run_source` 攒批 → agent 分块处理 → 失败降级 + 埋点
+- ✅ **全零→skip 强制映射**（todo 2 收尾）：`enforce_zero_skip()` 契约层硬保证
+- ✅ **跨零点窗口**：get_recent_meals 查 [anchor-1天, anchor]
+- ✅ **灰度补跑实战**：8/23-25 积压 51 张，agent 路径零降级（§14.3）
 
 ### 还在 todo 列表里
 
-- ⬜ 堵 Luna 静默失败洞（**注：实际已部分完成**——`agent_tools.analyze_with_gemini` 已返回 ok/result/error 结构，系统提示词已要求 Luna 用 skip 而非 add 处理"全零/not real food"。但**没在主循环层强制把"Gemini 返回全零"映射为 action=skip**，这是 todo 2 的剩余工作）
-- ⬜ session 状态层（待讨论）
-- ⬜ pipeline 接入 main.py run
-- ⬜ web 增量更新
-- ⬜ 前端 agent 交互
-- ⬜ 收尾验收（文档 / 隐私说明 / 成本观测）
+- ⬜ web 增量更新（todo 5）
+- ⬜ 前端 agent 交互（todo 6）
+- ⬜ 收尾验收：文档同步 / 隐私说明 / 成本观测（todo 7）
+- ⬜ 灰度观察期：跑 1-2 周看 `harness_fallback` 比例，稳定后考虑清理旧路径
 
 ---
 
@@ -186,28 +189,33 @@ LUNA_MODEL=gpt-5.6-luna
 ### P0：实际能立刻开工的
 1. ~~复查 git diff~~ ✅ 完成（2026-08-22，结论见 §13）
 2. ~~端到端 smoke test~~ ✅ 完成（假图 skip + Immich 真图工具链路，见 §13.3）
-3. **session 状态层（todo 3）**：与项目 owner 拍板方案（详见 §10）← 当前最优先
+3. ~~session 状态层方案拍板~~ ✅ 完成（一张审计表方案，见 §14.1）
 
 ### P1：核心路径完善
-4. **pipeline 接入 main.py run（todo 4）**：SigLIP2 过滤后改走 harness，而不是 `result = analyzer.analyze(original)`
-5. **完成 todo 2 剩余部分**：主循环层强制"Luna 用 skip 处理 Gemini 全零/格式错误返回"
-6. **web 增量更新（todo 5）**：复用现有 cache 失效机制
+4. ~~pipeline 接入 main.py run~~ ✅ 完成（AGENT_ENABLED 灰度开关，§14.2）
+5. ~~完成 todo 2 剩余部分~~ ✅ enforce_zero_skip() 契约层硬保证
+6. ⬜ **web 增量更新（todo 5）**：复用现有 cache 失效机制 ← 当前唯一 P1
 
 ### P2：收尾
 7. 前端 agent 交互（todo 6，形态待定）
-8. 文档/Hermes 并存/成本观测（todo 7）
+8. 文档同步 / 隐私说明 / 成本观测（todo 7）
+9. 灰度观察期后清理旧路径（新债）
 
 ---
 
-## 10. 待讨论的关键岔口（todo 3 session 状态层）
+## 10. 岔口裁决记录（todo 3 session 状态层，已全部拍板）
 
-落地 harness 到 pipeline 前，需要先决定：
+原五个岔口的裁决（详细论证见 §14.1）：
 
-- **session 表结构**：新建 `meal_sessions` + `session_photos` 两张表？还是复用 `records` 扩展字段？
-- **"待结算的中间态"怎么记**：Gemini 已经返回了热量但 Luna 还在判断同餐时，临时记录在哪？
-- **结算时机**：当前构想是"每张新图进来就增量判断"（你后来确认的方案），无需等全餐结束。这让 session 状态相对简单——主要是**记录每张照片归属哪个决策**，而不是"等齐了三张再结算"
-- **跨零点批次**：昨天 23:55 + 今天 00:05 的照片是否合并 session？现有 `get_recent_meals` 按锚定最新照片的日期取，可能丢昨天的中间态
-- **孤张超时兜底**：一张照片进了 session 后 LUNA 失败/超时，怎么标记？是否设超时后自动按单张结算？
+| 岔口 | 裁决 |
+|---|---|
+| 表结构 | **只建一张 `agent_decisions` 审计表**，不建 meal_sessions/session_photos。业务状态在 `records`，skip 决策的落点由审计表补上 |
+| 中间态 | **不需要存储**——"Gemini 已返回但 Luna 还在判断"只存在于一次 API 循环内部 |
+| 结算时机 | 每张新图增量判断（维持原拍板），决策返回后顺序应用 |
+| 跨零点批次 | `get_recent_meals` 查 **[anchor-1天, anchor]**，提示词声明窗口可能含昨天 |
+| 孤张超时兜底 | 不需要新机制：harness 内部超时 + 返回 None 即降级旧路径，无跨轮次滞留；降级时埋 `harness_fallback` 事件 |
+
+关键洞察：**session 的生命周期就是一次 harness.run() 调用**。Luna 对"今天吃过什么"的了解完全来自 get_recent_meals 现查 SQLite，没有跨批次记忆体——所以传统 agent 框架需要持久化的 session 状态在这个架构里不存在。现成 agent（fx/pi）的 session 本质是对话日志，不承载业务状态，替代不了 records/agent_decisions。
 
 ---
 
@@ -226,7 +234,7 @@ LUNA_MODEL=gpt-5.6-luna
 
 ## 12. 一句话
 
-手搓 harness 已落地并**在真实环境验证通过**（多决策契约、MIME 检测、安全截断、Responses API 工具往返），**业务状态留在 SQLite** 是为将来无痛迁移 fx 埋的伏笔。下一步：拍板 session 状态层方案 → 接 pipeline。
+Agent 层已**全链路上生产**（契约 → 工具 → Responses API harness → pipeline 分块接入 → 审计表），灰度补跑 51 张零降级。业务状态留在 SQLite 为将来迁 fx 埋伏笔。剩余：web 增量更新、前端交互、收尾文档。
 
 ---
 
@@ -264,3 +272,62 @@ LUNA_MODEL=gpt-5.6-luna
 
 - `e3cf90d` analyzer: extract prompts to src/prompts/（大改前的独立改动）
 - `e982dc2` agent: add Luna harness via Responses API with contract/tools layers
+
+---
+
+## 14. 2026-08-26 更新：session 层落地 + pipeline 接入 + cron 修复
+
+### 14.1 session 状态层：一张审计表方案
+
+讨论结论：**session 的生命周期 = 一次 harness.run() 调用**。没有跨批次记忆体，Luna 对"今天吃过什么"的了解完全来自 get_recent_meals 现查 SQLite。由此原五个岔口消解大半，最终只加一张表：
+
+```sql
+agent_decisions(id, session_date, run_id, asset_ids JSON, action, relation,
+                target_asset_id, result JSON, reasoning, prompt_for_gemini,
+                model_used, created_at)
+```
+
+配套：`insert_agent_decision()` / `get_decisions_by_date()` / `inkcal decisions [--date] [--json]`。
+设计要点：skip 决策在 records 没有落点，审计表是它们唯一的家；records 不动，web UI 零影响。
+
+### 14.2 pipeline 接入与安全网
+
+`_run_source` 重构为攒批模式：
+
+```
+SigLIP 过滤 → 攒 food_batch → AGENT_ENABLED?
+  ├─ 是 → 按 AGENT_BATCH_SIZE(默认6) 分块调 harness
+  │       ├─ 决策成功 → 应用到 records + 写 agent_decisions + agent_decision 事件
+  │       ├─ 决策漏照片 → 未覆盖的逐张走旧路径
+  │       └─ harness 返回 None → 全部降级旧路径 + harness_fallback 事件
+  └─ 否 → 旧路径逐张直送 Gemini（原行为）
+```
+
+其他落地项：
+- `enforce_zero_skip()`：全零 / not real food → 强制 skip（契约层硬保证，todo 2 清账）
+- 跨零点：get_recent_meals 查 [anchor-1天, anchor]
+- skip 决策 → `classified_non_food(decided_by='agent')`，与 Gemini 拒绝同语义（相册选择器仍可见）
+
+### 14.3 灰度补跑实战（8/23-25 积压 51 张）
+
+| 日期 | 积压 | SigLIP 放行 | Agent 结果 |
+|---|---|---|---|
+| 8/23 | 19 | 1 | skip：毛绒玩具——**SigLIP 误报被 Luna 低成本拦截** |
+| 8/24 | 27 | 0 | 无需调用 |
+| 8/25 | 5 | 2 | add 煮饺子 720kcal ＋ skip 社交截图 |
+
+- **harness_fallback = 0 次**
+- 多决策契约首次实战（一批 → add+skip）；reasoning 明确引用了 get_recent_meals 的比对结果
+- 用户手动录入的记录未被重复处理（幂等正常）
+- 生产已切 `AGENT_ENABLED=1`
+
+### 14.4 计划外：cron 三天静默故障的根因与修复
+
+8/22 18:45 机器重启后 cron 每 10 分钟照常触发但全部卡死：重启丢失了到 huggingface.co 的路由，transformers 加载检测器时的联网更新检查无限重试。8/23-25 事件表归零、51 张积压（部分照片经 web 手动路径入库，造成"有记录无事件"的假象）。
+
+修复：`src/food_detector.py` 模块加载时强制 `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`——模型缓存本地齐全，从此 pipeline 不依赖 HF 可达性。
+
+### 14.5 提交记录
+
+- `efd7458` agent: integrate Luna batch path into pipeline with decision audit
+- `42008c2` detector: force HuggingFace offline mode
