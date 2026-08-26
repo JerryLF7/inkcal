@@ -1,7 +1,7 @@
 # inkcal · Agent Layer Handoff
 
-> Status: **已接入 pipeline 生产运行（AGENT_ENABLED=1 灰度）**（2026-08-26 更新：session 层落地 + pipeline 接入 + cron 修复，见 §14）
-> Date: 2026-08-22 · 08-26 二次更新
+> Status: **已接入 pipeline 生产运行（AGENT_ENABLED=1 灰度）**（2026-08-26 更新×2：web 增量轮询上线；跨天同款食物误合并缺陷已修——见 §15）
+> Date: 2026-08-22 · 08-26 三次更新
 > Scope: 把 SigLIP2 过滤出的食物照片从「单张直送 Gemini」改为「流入当天 session，由 Luna 做同餐判断与提示词生成，再调 Gemini 专家层评估热量」
 
 ---
@@ -58,11 +58,12 @@ src/agent_harness.py    # Luna 主循环（薄 loop）+ 收敛/超时/截断
 - ✅ **全零→skip 强制映射**（todo 2 收尾）：`enforce_zero_skip()` 契约层硬保证
 - ✅ **跨零点窗口**：get_recent_meals 查 [anchor-1天, anchor]
 - ✅ **灰度补跑实战**：8/23-25 积压 51 张，agent 路径零降级（§14.3）
+- ✅ **web 增量更新**（todo 5）：`/api/data-version` 指纹 + 前端 30s 可见性感知轮询（§15.1）
+- ✅ **跨天同款食物误合并缺陷修复**：same_meal 加时间硬约束 + 工具返回加 date 字段（§15.2）
 
 ### 还在 todo 列表里
 
-- ⬜ web 增量更新（todo 5）
-- ⬜ 前端 agent 交互（todo 6）
+- ⬜ 前端 agent 交互（todo 6）——**分层提案与待拍板问题见 §16，下个 session 从这里继续**
 - ⬜ 收尾验收：文档同步 / 隐私说明 / 成本观测（todo 7）
 - ⬜ 灰度观察期：跑 1-2 周看 `harness_fallback` 比例，稳定后考虑清理旧路径
 
@@ -194,10 +195,10 @@ LUNA_MODEL=gpt-5.6-luna
 ### P1：核心路径完善
 4. ~~pipeline 接入 main.py run~~ ✅ 完成（AGENT_ENABLED 灰度开关，§14.2）
 5. ~~完成 todo 2 剩余部分~~ ✅ enforce_zero_skip() 契约层硬保证
-6. ⬜ **web 增量更新（todo 5）**：复用现有 cache 失效机制 ← 当前唯一 P1
+6. ~~web 增量更新~~ ✅ 完成（data-version 轮询，§15.1）
 
 ### P2：收尾
-7. 前端 agent 交互（todo 6，形态待定）
+7. **前端 agent 交互（todo 6）← 下个 session 的主题，提案见 §16**
 8. 文档同步 / 隐私说明 / 成本观测（todo 7）
 9. 灰度观察期后清理旧路径（新债）
 
@@ -234,7 +235,7 @@ LUNA_MODEL=gpt-5.6-luna
 
 ## 12. 一句话
 
-Agent 层已**全链路上生产**（契约 → 工具 → Responses API harness → pipeline 分块接入 → 审计表），灰度补跑 51 张零降级。业务状态留在 SQLite 为将来迁 fx 埋伏笔。剩余：web 增量更新、前端交互、收尾文档。
+Agent 层全链路上生产 + web 闲置页面可感知后台写入（todo 5 收官）+ 跨天误合并缺陷已修。剩余：前端 agent 交互（§16 有现成提案）、收尾文档、灰度观察。
 
 ---
 
@@ -331,3 +332,54 @@ SigLIP 过滤 → 攒 food_batch → AGENT_ENABLED?
 
 - `efd7458` agent: integrate Luna batch path into pipeline with decision audit
 - `42008c2` detector: force HuggingFace offline mode
+
+---
+
+## 15. 2026-08-26 更新×2：web 轮询 + 跨天误合并修复
+
+### 15.1 web 增量更新（todo 5 收官）
+
+缺口：day/week/dates 都有"导航时自愈"，但页面闲置时感知不到 cron 的后台写入。
+
+方案：数据版本指纹 + 30s 可见性感知轮询
+- `db.get_data_version()`：`记录数:max(created_at):max(updated_at):max(reanalyzed_at)`，增/删/改/重评都会变（秒级精度足够——中间态无需观测）
+- `GET /api/data-version`（自动受现有登录保护）
+- 前端每 30s 轮询（`document.visibilityState !== 'visible'` 时跳过）；版本变化 → 重载当前 day/week 视图 + 强刷日历圆点
+
+提交：`af31867`
+
+### 15.2 跨天同款食物误合并缺陷（owner 复审 reasoning 时发现）
+
+**现象**：8/25 饺子批次的 reasoning 拿 8/24 的炒面做对比依据——跨零点窗口 `[anchor-1天, anchor]` 让隔天记录进入了上下文，但提示词没教 Luna 如何对待它们；且原规则"同餐只看图片、不看时间"被错误泛化到跨天场景。
+
+**风险推演**：连续两天中午吃同款食物 → Luna 判 same_meal/update → 今天的饭被合并进昨天的记录。
+
+**修复**：
+1. 系统提示词：把"不看时间"的管辖权收回到**批内分组**；对已有记录判 same_meal 时时间是硬约束——昨日记录只服务跨零点连续进食，正常时段跨天同款一律 add
+2. 工具描述删除"与日期无关"的误导表述
+3. `get_recent_meals` 每条记录新增显式 `date` 字段
+
+**回归验证**：真实饺子照片 + 伪造"昨天中午饺子"记录 + 真实 Luna 调用 → `add/new_meal` ✅，reasoning 主动引用规则原文。提交：`6814299`
+
+---
+
+## 16. todo 6 前端 agent 交互——待讨论提案（下个 session 从这里开始）
+
+### 可用数据（agent_decisions 表）
+reasoning / asset_ids 分组 / action+relation / prompt_for_gemini / result
+
+### 现状缺口
+1. 用户不知道记录是 agent 记的、凭什么记的
+2. **skip 的照片完全隐身**（Luna 拒绝的东西无法被发现，误判无纠错入口）
+3. update 合并发生后用户不知道"这餐为什么变了"
+
+### 分层提案（已抛出，未拍板）
+| 层 | 内容 | 备注 |
+|---|---|---|
+| 一 | 餐卡 🤖 角标 + lightbox"AI 决策"区块（reasoning 全文 + relation） | 需要 `GET /api/decisions?date=` 端点（CLI 已有对应实现可搬） |
+| 二 | 同餐分组可视化："由 N 张合并判定"+ 参与照片缩略图 | UI 复杂度最高、日常价值最低 |
+| 三 | skip 透明化：day view 底部折叠条"已过滤 N 张非食物"+ 每条"误判？"按钮走 album picker 强制分析 | 纠错回路，机制现成 |
+
+### 待拍板问题
+1. **做到第几层？** 助手建议一期做 1+3，二层缓
+2. **移动端交互优先级？** 手机为主的话弹层/折叠条按底部抽屉设计而非 hover
