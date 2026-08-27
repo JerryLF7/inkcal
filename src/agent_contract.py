@@ -189,12 +189,23 @@ def parse_decisions_json(text: str) -> list[Decision]:
         data = json.loads(t)
     except json.JSONDecodeError:
         if not t.endswith("}"):
+            # Tolerate truncated JSON missing its final closer(s).
             try:
                 data = json.loads(t + "}")
             except json.JSONDecodeError:
                 raise ValueError(f"invalid JSON in decision: {t[:200]}")
         else:
-            raise ValueError(f"invalid JSON in decision: {t[:200]}")
+            # Tolerate trailing extra closers (e.g. "...}]}]}") — observed
+            # from Luna on longer decisions: the envelope is complete and
+            # valid, followed by stray "]}" characters. Parse the first
+            # complete JSON value and ignore a pure-bracket remainder.
+            try:
+                data, end = json.JSONDecoder().raw_decode(t)
+            except json.JSONDecodeError:
+                raise ValueError(f"invalid JSON in decision: {t[:200]}")
+            remainder = t[end:].strip()
+            if remainder.strip("]}").strip():
+                raise ValueError(f"trailing garbage in decision: {t[:200]}")
 
     if isinstance(data, dict) and "decisions" in data:
         items = data["decisions"]
@@ -328,3 +339,178 @@ def build_user_prompt(assets: list[dict[str, Any]]) -> str:
     lines.append("")
     lines.append("请先查看所有照片，再调用工具做出决策。")
     return "\n".join(lines)
+
+
+# ── chat (conversational agent) contract ─────────────────────────────
+#
+# The chat agent answers diet/calorie questions and performs corrections
+# over the same SQLite business state. Separate schema set from the batch
+# TOOL_SCHEMAS above: the batch loop only exposes its 3 ingest tools.
+
+CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_records_in_range",
+            "description": (
+                "查询日期范围内的餐食记录（闭区间，HKT 日期 YYYY-MM-DD）。"
+                "返回每条记录的 id、asset_id、photo_time、meal、calories、"
+                "protein_g、carbs_g、fat_g、confidence。相对日期（昨天/前天/"
+                "本周）请先换算成具体日期再调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "开始日期 YYYY-MM-DD"},
+                    "end": {"type": "string", "description": "结束日期 YYYY-MM-DD"},
+                },
+                "required": ["start", "end"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_intake_stats",
+            "description": (
+                "查询日期范围内的热量与宏量营养汇总（总量 + 逐日）。"
+                "适合'这周吃得怎么样''哪天热量最高'这类聚合问题。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "开始日期 YYYY-MM-DD"},
+                    "end": {"type": "string", "description": "结束日期 YYYY-MM-DD"},
+                },
+                "required": ["start", "end"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_meals",
+            "description": (
+                "按关键词搜索历史餐食记录（全文检索，支持中文模糊匹配）。"
+                "适合'我最近什么时候吃过火锅'这类问题。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "搜索关键词（中文食物名）"},
+                    "start": {"type": "string", "description": "可选，开始日期 YYYY-MM-DD"},
+                    "end": {"type": "string", "description": "可选，结束日期 YYYY-MM-DD"},
+                },
+                "required": ["keyword"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_decisions",
+            "description": (
+                "获取某天照片批处理的 agent 决策审计记录（action/relation/"
+                "reasoning/result）。当用户问'这条记录是怎么来的''为什么这餐"
+                "被合并/跳过'时使用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "日期 YYYY-MM-DD"},
+                },
+                "required": ["date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_record",
+            "description": (
+                "直接修改一条餐食记录的字段（旧值自动留痕）。参数 record_id "
+                "为记录 id（由 get_records_in_range / search_meals 返回），"
+                "updates 为要改的字段子集：meal/calories/protein_g/carbs_g/fat_g。"
+                "修改前先向用户确认理解无误。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "record_id": {"type": "integer", "description": "记录 id"},
+                    "updates": {
+                        "type": "object",
+                        "description": "要修改的字段，如 {\"calories\": 300}",
+                        "properties": {
+                            "meal": {"type": "string"},
+                            "calories": {"type": "number"},
+                            "protein_g": {"type": "number"},
+                            "carbs_g": {"type": "number"},
+                            "fat_g": {"type": "number"},
+                        },
+                    },
+                },
+                "required": ["record_id", "updates"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reanalyze_record",
+            "description": (
+                "带补充说明重新分析一条记录的照片（如'没算米饭''这是两人份'），"
+                "由 Gemini 重新估算并记录历史。参数 record_id 为记录 id，"
+                "notes 为补充说明。耗时较长，调用前告知用户。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "record_id": {"type": "integer", "description": "记录 id"},
+                    "notes": {"type": "string", "description": "补充说明"},
+                },
+                "required": ["record_id", "notes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_delete_record",
+            "description": (
+                "请求删除一条记录。删除是破坏性操作：此工具**不会真正删除**，"
+                "只生成确认卡片，由用户在界面上点击确认后才执行。调用后请告诉"
+                "用户'已生成删除确认，请在卡片上确认'。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "record_id": {"type": "integer", "description": "记录 id"},
+                },
+                "required": ["record_id"],
+            },
+        },
+    },
+]
+
+
+CHAT_SYSTEM_PROMPT = """你是 inkcal 的饮食助手 Luna，正在与用户对话。当前时间：{now}（HKT）。
+
+用户的食物照片由后台 pipeline 自动分析入库，你可以通过工具查询和修改这些记录。
+
+## 工具使用原则
+
+- 涉及具体饮食事实的问题**必须查工具**，不要凭记忆或猜测回答。对话窗口之外的内容你记不住，但 SQLite 里都有，随时现查。
+- 相对日期先换算成具体日期：今天是 {today}。
+- 一次问题可能需要多次工具调用（如对比两天 = 查两次或一次范围查询）。
+
+## 写操作规则
+
+- edit_record / reanalyze_record 可以直接执行，但执行前先用一句话向用户确认你理解的需求（在同一条回复里说明即可，无需等待）。
+- 删除记录只能调用 request_delete_record 生成确认卡片，绝不承诺"已删除"。
+- 所有写操作都会留痕审计，操作后告知用户结果。
+
+## 回答风格
+
+- 简洁口语化，像朋友聊天，不要列长篇表格除非用户要求。
+- 数字从工具结果来，不要自己估算热量（你没有这个能力）。
+- 工具查不到就如实说"没有找到记录"，并建议可能的原因（那天没拍照？被过滤了？）。"""

@@ -182,7 +182,18 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
     """
     import base64
 
-    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    # Luna's prompt_for_gemini describes WHAT to analyze, but says nothing
+    # about output format — long analytical instructions were observed to
+    # pull Gemini into markdown essays that fail JSON parsing. Pin the
+    # output contract at the end of the prompt, closest to generation.
+    format_anchor = (
+        "\n\n重要：无论上面的分析要求是什么，最终只返回一个 JSON 对象，"
+        "不要输出任何解释文字或 markdown 代码块。字段必须严格为："
+        '{"meal": "中文简述", "calories": <数字>, "protein_g": <数字>, '
+        '"carbs_g": <数字>, "fat_g": <数字>, "confidence": "high|medium|low"}。'
+        '若不是真实食物，所有数值置 0 且 meal="not real food"、confidence="low"。'
+    )
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt + format_anchor}]
     for img in images:
         b64 = base64.b64encode(img).decode("utf-8")
         mime = detect_image_mime(img)
@@ -217,4 +228,180 @@ def call_tool(name: str, args: dict, deps: dict) -> dict:
         return fn(args, deps)
     except Exception as e:
         logger.exception("tool %s raised", name)
+        return {"ok": False, "error": f"tool {name} error: {e}"}
+
+
+# ── chat tools (conversational agent) ────────────────────────────────
+#
+# Same pure-function contract as the batch tools above. deps carries
+# "pipeline_config" (immich/photoprism/gemini settings) for write tools
+# that need the analyzer.
+
+def _record_brief(r: dict) -> dict:
+    """Trim a db record to the fields useful in conversation context."""
+    return {k: r.get(k) for k in (
+        "id", "asset_id", "photo_time", "meal", "calories",
+        "protein_g", "carbs_g", "fat_g", "confidence",
+    )}
+
+
+def get_records_in_range(args: dict, deps: dict) -> dict:
+    from src import db
+
+    start = str(args.get("start", "")).strip()
+    end = str(args.get("end", "")).strip()
+    if not start or not end:
+        return {"ok": False, "error": "start and end are required (YYYY-MM-DD)"}
+    records = db.get_records_by_date_range(start, end)
+    return {"ok": True, "count": len(records),
+            "records": [_record_brief(r) for r in records]}
+
+
+def get_intake_stats(args: dict, deps: dict) -> dict:
+    from src import db
+
+    start = str(args.get("start", "")).strip()
+    end = str(args.get("end", "")).strip()
+    if not start or not end:
+        return {"ok": False, "error": "start and end are required (YYYY-MM-DD)"}
+    records = db.get_records_by_date_range(start, end)
+    by_day: dict[str, list[dict]] = {}
+    for r in records:
+        by_day.setdefault((r.get("photo_time") or "")[:10], []).append(r)
+    return {
+        "ok": True,
+        "total": db.summarize_records(records),
+        "by_day": {d: db.summarize_records(rs) for d, rs in sorted(by_day.items())},
+    }
+
+
+def search_meals(args: dict, deps: dict) -> dict:
+    from src import db
+
+    keyword = str(args.get("keyword", "")).strip()
+    if not keyword:
+        return {"ok": False, "error": "keyword is required"}
+    records = db.search_records(
+        keyword,
+        start_date=str(args.get("start", "")).strip() or None,
+        end_date=str(args.get("end", "")).strip() or None,
+        limit=10,
+    )
+    return {"ok": True, "count": len(records),
+            "records": [_record_brief(r) for r in records]}
+
+
+def get_decisions(args: dict, deps: dict) -> dict:
+    from src import db
+
+    date_str = str(args.get("date", "")).strip()
+    if not date_str:
+        return {"ok": False, "error": "date is required (YYYY-MM-DD)"}
+    decisions = db.get_decisions_by_date(date_str)
+    # Trim to conversation-useful fields
+    brief = [{
+        "action": d.get("action"),
+        "relation": d.get("relation"),
+        "asset_ids": d.get("asset_ids"),
+        "target_asset_id": d.get("target_asset_id"),
+        "reasoning": d.get("reasoning"),
+        "result": d.get("result"),
+    } for d in decisions]
+    return {"ok": True, "count": len(brief), "decisions": brief}
+
+
+def edit_record(args: dict, deps: dict) -> dict:
+    from src import db
+
+    record_id = args.get("record_id")
+    updates = args.get("updates") or {}
+    if not record_id or not isinstance(updates, dict) or not updates:
+        return {"ok": False, "error": "record_id and non-empty updates are required"}
+
+    rec = db.get_record_by_id(int(record_id))
+    if not rec:
+        return {"ok": False, "error": f"record {record_id} not found"}
+
+    allowed = {"meal", "calories", "protein_g", "carbs_g", "fat_g"}
+    clean = {k: v for k, v in updates.items() if k in allowed}
+    if not clean:
+        return {"ok": False, "error": f"no editable fields in updates (allowed: {sorted(allowed)})"}
+
+    before = _record_brief(rec)
+    db.update_record(rec["asset_id"], clean)
+    after = db.get_record_by_id(int(record_id))
+    return {"ok": True, "before": before, "after": _record_brief(after)}
+
+
+def reanalyze_record_tool(args: dict, deps: dict) -> dict:
+    from src import db
+    from src.pipeline_ops import reanalyze_record
+
+    record_id = args.get("record_id")
+    notes = str(args.get("notes", "")).strip()
+    if not record_id or not notes:
+        return {"ok": False, "error": "record_id and notes are required"}
+
+    rec = db.get_record_by_id(int(record_id))
+    if not rec:
+        return {"ok": False, "error": f"record {record_id} not found"}
+
+    config = deps.get("pipeline_config")
+    if not config:
+        return {"ok": False, "error": "pipeline_config missing in deps"}
+
+    updated = reanalyze_record(rec["asset_id"], notes, config)
+    if updated is None:
+        return {"ok": False, "error": "image unavailable or analysis failed"}
+    return {"ok": True, "before": _record_brief(rec),
+            "after": _record_brief(updated)}
+
+
+def request_delete_record(args: dict, deps: dict) -> dict:
+    """Never deletes. Returns a confirmation-card payload; the actual
+    deletion happens only when the user clicks the card, via the existing
+    DELETE /api/record endpoint (which handles ignore-list side effects)."""
+    from src import db
+
+    record_id = args.get("record_id")
+    if not record_id:
+        return {"ok": False, "error": "record_id is required"}
+    rec = db.get_record_by_id(int(record_id))
+    if not rec:
+        return {"ok": False, "error": f"record {record_id} not found"}
+    return {
+        "ok": True,
+        "requires_confirmation": True,
+        "confirm_card": {
+            "kind": "delete_record",
+            "record_id": rec["id"],
+            "asset_id": rec["asset_id"],
+            "meal": rec["meal"],
+            "calories": rec["calories"],
+            "photo_time": rec["photo_time"],
+        },
+    }
+
+
+CHAT_TOOLS = {
+    "get_records_in_range": get_records_in_range,
+    "get_intake_stats": get_intake_stats,
+    "search_meals": search_meals,
+    "get_decisions": get_decisions,
+    "edit_record": edit_record,
+    "reanalyze_record": reanalyze_record_tool,
+    "request_delete_record": request_delete_record,
+}
+
+
+def call_chat_tool(name: str, args: dict, deps: dict) -> dict:
+    """Dispatch one chat tool call. Returns a result dict (never raises)."""
+    fn = CHAT_TOOLS.get(name)
+    if fn is None:
+        logger.warning("unknown chat tool: %s", name)
+        return {"ok": False, "error": f"unknown tool: {name}"}
+    try:
+        return fn(args, deps)
+    except Exception as e:
+        logger.exception("chat tool %s raised", name)
         return {"ok": False, "error": f"tool {name} error: {e}"}
