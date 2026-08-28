@@ -1,8 +1,8 @@
 # inkcal · Agent Layer Handoff
 
-> Status: **已接入 pipeline 生产运行（AGENT_ENABLED=1 灰度）**（2026-08-26 更新×2：web 增量轮询上线；跨天同款食物误合并缺陷已修——见 §15）
-> Date: 2026-08-22 · 08-26 三次更新
-> Scope: 把 SigLIP2 过滤出的食物照片从「单张直送 Gemini」改为「流入当天 session，由 Luna 做同餐判断与提示词生成，再调 Gemini 专家层评估热量」
+> Status: **Agent 批处理已上线；Vue 双 Tab 重构已完成记录侧骨架与聊天后端，当前待接通 Luna 聊天 Pane**（2026-08-28）
+> Date: 2026-08-22 起，最后更新 2026-08-28
+> Scope: 记录 Luna 批处理层、跨天聊天层，以及以“记录 + Luna”双 Tab 为核心的前端重构决策和实施状态。
 
 ---
 
@@ -28,8 +28,12 @@ Harness 失败时回退旧路径，灰度过渡。
 |---|---|---|
 | 同餐判断依据 | **仅看图片内容**，不看时间间隔 | 照片 metadata 仅用于排序 |
 | 上线策略 | **先灰度** | harness 失败 → 旧路径兜底。已实装：`AGENT_ENABLED=1` 开关 + `AGENT_BATCH_SIZE=6` 分块 |
-| 每天一个 session | 是 | **已落地为"session = 一次 harness.run()"**——无长命 session，状态全在 SQLite（§14.1） |
-| 前端 agent 交互 | 暂缓 | 形态以后单独聊（todo 6） |
+| 批处理 session | **一次 `harness.run()` 即一次工作上下文** | 不跨批记忆；`agent_decisions.session_date` 只用于审计与照片处理锚点 |
+| 聊天 session | **与批处理完全分离，跨天存活** | 默认打开最新 session；支持手动新建与历史切换；日期是工具查询参数，不是会话属性。当前每个 `chat_sessions` 行即一个会话线程，后续多线程需求再引入 `conversation_id` |
+| 聊天上下文 | **滑动窗口，无摘要** | 默认 20 轮，可设置 5–50；`previous_response_id` 是缓存，SQLite 是可重建真相源 |
+| 聊天权限 | **高权限但可审计** | edit/reanalyze 走已有留痕路径；delete 只生成确认卡片，用户确认后才执行 |
+| 前端产品骨架 | **记录 + Luna 双 Tab，左右滑动或底部 Tab 切换** | 设计原型已交付：`docs/prototypes/two-tab-proto.html` |
+| 前端技术栈 | **Vue 3 + Vite 全量重构** | Flask 退为 JSON API；旧 `web/static/index.html` 冻结，面向未来开源与 Capacitor 移动端封装 |
 | 模型选择 | Luna = `gpt-5.6-luna`；Gemini = `gemini-3.1-pro-preview`（保留） | 配置见 §4；传输层已改走 Responses API（§13） |
 | 未来换 fx 的代价 | 工具层 + 契约层 = 0；只换 loop | 详见 §5 |
 
@@ -37,13 +41,33 @@ Harness 失败时回退旧路径，灰度过渡。
 
 ## 2. 当前代码状态
 
-### 已落地（3 个新文件）
+### Agent 批处理已落地
 
 ```
 src/agent_contract.py    # 工具 schema + 决策契约 + 系统提示词
-src/agent_tools.py      # 3 个纯函数工具（query_food_database / get_recent_meals / analyze_with_gemini）+ MIME 检测
-src/agent_harness.py    # Luna 主循环（薄 loop）+ 收敛/超时/截断
+src/agent_tools.py       # 3 个纯函数工具（query_food_database / get_recent_meals / analyze_with_gemini）+ MIME 检测
+src/agent_harness.py     # Luna 主循环（薄 loop）+ 收敛/超时/截断
 ```
+
+### 聊天后端已落地，等待前端接线
+
+```
+src/chat_agent.py        # Responses API 聊天 loop；链失效时从 SQLite 窗口重建
+src/agent_contract.py    # CHAT_TOOL_SCHEMAS + CHAT_SYSTEM_PROMPT
+src/agent_tools.py       # 查询/统计/搜索/决策查询/edit/reanalyze/delete-confirm 工具
+src/db.py                # chat_sessions / chat_messages / app_settings
+web/server.py            # /api/chat/*、/api/settings、/api/decisions
+```
+
+### Vue 前端已落地的部分
+
+```
+web/ui/                  # Vue 3 + Vite 源码；构建产物输出到 web/static/app/
+web/ui/src/App.vue       # 双 Pane、底部 Tab、左右滑动、日/周/月切换骨架
+web/ui/src/components/   # DayView / WeekView / MonthView / MealCard / MealLightbox
+```
+
+记录侧已实现最新在顶的无限时间轴、吸顶日期、周图表与时间轴、月历热量目标圆环、Luna 决策角标和 lightbox 审计展开，并已补回“选择照片”入口（相册选择或本地上传）。右侧 Luna Pane 已按交付原型完成静态视觉骨架，但尚未连接已有聊天 API。
 
 ### 已完成的 todo
 
@@ -63,7 +87,10 @@ src/agent_harness.py    # Luna 主循环（薄 loop）+ 收敛/超时/截断
 
 ### 还在 todo 列表里
 
-- ⬜ 前端 agent 交互（todo 6）——**分层提案与待拍板问题见 §16，下个 session 从这里继续**
+- ⬜ **Luna 聊天 Pane 接线**：恢复最新 session、历史/新建 session、消息流、发送与失败状态、工具调用状态
+- ⬜ **聊天交互 artifact**：复用 `MealCard` 展示查询结果；按 `tool_log` 渲染删除确认卡，并接入真实删除动作
+- ⬜ **设置入口**：暴露并保存 `chat_window`（5–50，默认 20）
+- ⬜ **主动确认队列**：在记录/聊天 UI 中显示后台待处理确认；保持轮询，不上 WebSocket
 - ⬜ 收尾验收：文档同步 / 隐私说明 / 成本观测（todo 7）
 - ⬜ 灰度观察期：跑 1-2 周看 `harness_fallback` 比例，稳定后考虑清理旧路径
 
@@ -198,7 +225,7 @@ LUNA_MODEL=gpt-5.6-luna
 6. ~~web 增量更新~~ ✅ 完成（data-version 轮询，§15.1）
 
 ### P2：收尾
-7. **前端 agent 交互（todo 6）← 下个 session 的主题，提案见 §16**
+7. **前端 agent 交互**：§16 的产品与交互模型已经拍板；当前实现焦点是 §18 的 Phase 5 聊天 Pane 接线
 8. 文档同步 / 隐私说明 / 成本观测（todo 7）
 9. 灰度观察期后清理旧路径（新债）
 
@@ -363,23 +390,103 @@ SigLIP 过滤 → 攒 food_batch → AGENT_ENABLED?
 
 ---
 
-## 16. todo 6 前端 agent 交互——待讨论提案（下个 session 从这里开始）
+## 16. 前端重构：已确认的产品与交互模型
 
-### 可用数据（agent_decisions 表）
-reasoning / asset_ids 分组 / action+relation / prompt_for_gemini / result
+原型已交付于 [two-tab-proto.html](./prototypes/two-tab-proto.html)。它是视觉与信息架构的设计依据，不应被当作下一轮需要重画的需求。
 
-### 现状缺口
-1. 用户不知道记录是 agent 记的、凭什么记的
-2. **skip 的照片完全隐身**（Luna 拒绝的东西无法被发现，误判无纠错入口）
-3. update 合并发生后用户不知道"这餐为什么变了"
+### 16.1 产品定位
 
-### 分层提案（已抛出，未拍板）
-| 层 | 内容 | 备注 |
+前端不再只是 records 的展示器，而是用户对 Luna 的**浏览界面、监督界面与双向交互界面**。记录浏览与 Agent 对话是平级能力：不能把 Luna 降级为记录页上的一个弹层，也不把时间轴降级为聊天的附属页面。
+
+### 16.2 全局导航
+
+- 全局只有 `记录` 与 `Luna` 两个 Tab。
+- 手机端同时支持底部 Tab 点击与水平滑动切换；底部 Tab 常驻，避免占用记录页的顶部信息密度。
+- 默认首页尚未拍板；实现时不得假设必然落在记录或 Luna。
+
+### 16.3 记录 Tab
+
+| 视图 | 职责与交互 |
+|---|---|
+| 日 | 最新记录在顶部；向下无限加载更早日期；日期分隔线与吸顶日期头维持时间定位；餐卡点开进入图片与详情 lightbox |
+| 周 | 保留热量柱状图 + 按日期组织的餐食时间轴；用于快速扫一周摄入，而非取代日浏览 |
+| 月 | 日历即快速跳转器；日期只显示热量占每日目标的进度圆环，不显示总热量数字；点日期切回日时间轴并定位 |
+
+日/周/月通过记录页顶栏右侧分段控件切换。现有的 `MealCard`、图片 lightbox、上传/相册能力与日期数据模型是可复用材料；旧版单页布局、以日历为主导航和旧 tab 结构不再是设计约束。
+
+Agent 决策透明度保留在记录原位：已实现餐卡 🤖 标识和 lightbox 的“AI 决策”折叠区。**不在时间轴展示被 SigLIP2 或 Luna 判为非食物的 skip 照片**；`/api/skipped` 可保留为未来纠错接口，但不驱动一期记录 UI。聊天传图与同餐分组缩略图可视化也不属于一期。
+
+### 16.4 Luna Tab
+
+- 顶栏显示 Luna，并提供“历史 session”与“新建 session”图标入口。
+- 进入时恢复最近 session；新建只创建新的对话上下文，不影响批处理 run 或 records。
+- 对话消息可包含普通文本、餐记录 artifact、统计/解释结果、工具执行状态与删除确认卡。
+- 输入栏旁保留 `+` 入口，为未来相册/本地上传或聊天传图预留；一期聊天只处理文本。
+- 用户可自然语言查询饮食、比较摄入、要求修改或重新分析；不是只读问答。
+- 删除必须以确认卡片完成，不由模型直接删库。确认后的 HTTP 动作复用现有 `DELETE /api/record`，确保忽略列表等副作用一致。
+
+### 16.5 会话、缓存与主动性
+
+批处理 run 和聊天 session 是不同概念：前者是短命照片决策上下文，后者是用户可跨天延续或手动新建的对话流。聊天每轮通过 `previous_response_id` 追加增量，利用上游 prompt cache；链过期、上游重启或转发失败时，按 `chat_window` 从 SQLite 重放最近消息并建立新链。
+
+聊天窗口默认 20 轮、可调 5–50；不做摘要压缩。工具查询的业务事实始终从 SQLite 现查，因此窗口滑动只会软化语言上下文，不会令历史饮食事实不可访问。
+
+主动确认不引入 WebSocket：沿用 `/api/data-version` 轮询，在响应中附带 pending 数量；聊天输出将优先尝试 SSE，若转发层不支持则退化为非流式响应并展示工具执行进度。
+
+---
+
+## 17. 2026-08-27 更新：午餐实测暴露两个缺陷（已修复）+ 缓存实测
+
+### 17.1 缺陷 A：Luna 决策 JSON 多余尾括号（契约层）
+
+**现象**：用 8/26 两张午餐真图（11:35/11:48 同一份外卖盒饭前后状态）重跑 harness，loop 12 步全部报 "invalid JSON"，降级旧路径。
+**根因**：抓原文发现 JSON **完整有效**，但 Luna 在较长决策上稳定追加多余尾部 `]}`（如 `..."}]}]}`）。`parse_decisions_json` 只容忍"缺尾"（补 `}`），不容忍"多尾"。
+**修复**：`raw_decode` 解析首个完整 JSON 值，残余经纯括号字符校验后忽略；真垃圾（如尾随 SQL）仍拒绝。回归测试 `scripts/test_contract_parse.py`（含 642 字符真实捕获用例）。
+
+### 17.2 缺陷 B：Gemini 被长指令带成 markdown 散文（工具层）
+
+**现象**：同上实测，3 次运行中 2 次 Gemini 返回 markdown 分析报告而非契约 JSON，解析失败退化为 unknown/全零。
+**根因**：`_gemini_multi_image` 把 Luna 的 `prompt_for_gemini` 原样单发，全文无格式约束；`response_format=json_object` 在该网关上约束不住。长指令（"对比前后状态估算实际食用量…"）诱导散文输出。
+**修复**：prompt 末尾追加硬性格式锚点（字段契约 + 只返回 JSON），贴近生成位置。
+
+### 17.3 修复后验证（同批午餐照片）
+
+3 步收敛：get_recent_meals → 两图同送 Gemini（720kcal，按"实际吃掉的部分"估算）→ `update/same_meal` 合并进 11:35 记录。对比：旧路径把同顿记成 450+970=1420kcal 两条独立记录——**同餐合并的核心价值第一次完整跑通**。
+
+### 17.4 prompt cache 实测（聊天功能的成本前提）
+
+- 小前缀（~1400 tok 系统提示+工具）：第 2/3 轮命中 98.3%/98.4%（`scripts/test_luna_cache.py`）
+- 真实负载（两张 2MB 原图 + 工具往返）：`in=31050 cached=31047`，**99.99%**
+- 结论：`previous_response_id` 链式 + prompt cache 在当前转发通道实测可用，对话场景的 token 成本问题关闭
+
+---
+
+## 18. 2026-08-27–28 拍板与实施状态：前端重构 + Agent 双向交互
+
+讨论结论与当前代码状态：
+
+| 决策点 | 结论 |
+|---|---|
+| 前端定位 | 从“展示”转为“人对 agent 的监督台 + 双向对话”（纠错、主动推送、饮食问答） |
+| 前端技术栈 | **全量重构：Vue 3 + Vite**，Flask 退为纯 API 层；考虑开源发布与后续 Capacitor 移动端封装。旧 `index.html` 冻结，新 UI 只进新前端 |
+| 对话 vs 批处理 session | **分离**。批处理 run 不动；对话 session 跨天，日期降级为工具参数（锚点=消息发出时刻） |
+| session 组织 | 单流 + 手动新建/历史 session 图标，默认开最新；当前每个 `chat_sessions` 行是一个会话线程，未来并行话题确有需求时再增加 `conversation_id` |
+| 上下文窗口 | 滑动窗口无摘要，默认 20 轮，设置页可调（5-50）；有工具在，“失忆”是软性的，事实永远现查 SQLite |
+| 聊天权限 | **高权限**（非只读）：写工具全走现有审计路径（edit 留痕 / reanalyze 写历史）；delete 等破坏性动作出确认卡片，点了才执行 |
+| 推送通道 | 不上 WebSocket：data-version 轮询携带 pending 确认数；聊天流式走 SSE（转发层不支持则降级非流式+工具进度事件） |
+| 一期不做 | 聊天传图、同餐分组可视化、时间轴展示 skip 照片 |
+
+实施进度：
+
+| Phase | 状态 | 交付 |
 |---|---|---|
-| 一 | 餐卡 🤖 角标 + lightbox"AI 决策"区块（reasoning 全文 + relation） | 需要 `GET /api/decisions?date=` 端点（CLI 已有对应实现可搬） |
-| 二 | 同餐分组可视化："由 N 张合并判定"+ 参与照片缩略图 | UI 复杂度最高、日常价值最低 |
-| 三 | skip 透明化：day view 底部折叠条"已过滤 N 张非食物"+ 每条"误判？"按钮走 album picker 强制分析 | 纠错回路，机制现成 |
+| 0：批处理稳定性与缓存验证 | ✅ | JSON 尾括号容错、Gemini JSON 格式锚点、真实午餐双图验证、prompt cache 实测 |
+| 1：监督 API | ✅ | `/api/decisions`、`/api/skipped`、`/api/data-version` |
+| 2：聊天后端 | ✅ | 聊天表、聊天工具、`ChatAgent`、`/api/chat/*`、`/api/settings`、断链 SQLite 重建 |
+| 3：Vue 骨架与记录浏览 | ✅ | 双 Pane / 底部 Tab / 手势、Luna 静态原型骨架、日无限时间轴、周/月视图、相册/本地上传入口、构建产物发布 |
+| 4：记录侧监督 UI | ✅（一期范围） | 🤖 角标 + lightbox AI 决策折叠；skip UI 按已拍板范围不做 |
+| 5：Luna 聊天面板 | ⬜ | 当前右 Pane 是占位；需连接 session、消息、发送、artifact、确认卡与设置 |
+| 6：迁移切换与回归 | ⬜ | 旧静态 UI 冻结；待新 UI 的聊天主路径完成后切换并回归上传、认证、图片代理等能力 |
+| 7：主动确认队列 | ⬜ | pending 计数、确认卡、轮询/SSE 降级策略 |
 
-### 待拍板问题
-1. **做到第几层？** 助手建议一期做 1+3，二层缓
-2. **移动端交互优先级？** 手机为主的话弹层/折叠条按底部抽屉设计而非 hover
+测试脚本资产：`scripts/test_luna_cache.py`（缓存复测）、`scripts/test_luna_lunch.py`（真实双图链路）、`scripts/test_contract_parse.py`（契约回归）。

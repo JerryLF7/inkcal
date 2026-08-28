@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>inkcal 重构原型 — 双 tab 构想</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: #000; color: #e0e0e0; min-height: 100vh;
+    font-family: -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .phone {
+    width: 390px; height: 844px; max-height: 92vh;
+    background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 36px;
+    overflow: hidden; position: relative; display: flex; flex-direction: column;
+    box-shadow: 0 24px 80px rgba(0,0,0,.8);
+  }
+  /* ---------- 双 pane 滑动容器 ---------- */
+  .panes {
+    flex: 1; display: flex; width: 200%;
+    transition: transform .28s ease;
+    transform: translateX(0);
+    overflow: hidden;
+  }
+  .panes.show-chat { transform: translateX(-50%); }
+  .pane { width: 50%; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ---------- 顶栏 ---------- */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 14px 10px; border-bottom: 1px solid #1c1c1c; flex: none;
+  }
+  .sticky-date { font-size: 15px; font-weight: 600; color: #e0e0e0; }
+  .sticky-date small { color: #888; font-weight: 400; margin-left: 4px; }
+  /* 日/周/月 三段切换（segmented control） */
+  .seg {
+    display: flex; background: #1a1a1a; border: 1px solid #2a2a2a;
+    border-radius: 9px; padding: 2px; gap: 2px;
+  }
+  .seg button {
+    border: none; background: none; color: #888; font-size: 12px;
+    padding: 4px 12px; border-radius: 7px; cursor: pointer; font-family: inherit;
+  }
+  .seg button.active { background: #2a6eff22; color: #2a6eff; }
+
+  .scroll { flex: 1; overflow-y: auto; padding: 0 14px 14px; scrollbar-width: none; }
+  .scroll::-webkit-scrollbar { display: none; }
+
+  /* ---------- 日视图：时间轴 ---------- */
+  .date-sep {
+    position: sticky; top: 0; z-index: 2;
+    font-size: 12px; color: #888; padding: 10px 0 6px;
+    background: linear-gradient(#0f0f0f 75%, transparent);
+  }
+  .meal-card {
+    display: flex; gap: 12px; background: #1a1a1a; border: 1px solid #242424;
+    border-radius: 14px; padding: 10px; margin-bottom: 10px; cursor: pointer;
+  }
+  .thumb { width: 72px; height: 72px; border-radius: 10px; flex: none; }
+  .t1 { background: linear-gradient(135deg,#3a2c18,#6b4a22); }
+  .t2 { background: linear-gradient(135deg,#1d3320,#3c6b3a); }
+  .t3 { background: linear-gradient(135deg,#33201d,#6b3a34); }
+  .t4 { background: linear-gradient(135deg,#20242e,#3a4a6b); }
+  .t5 { background: linear-gradient(135deg,#2e2033,#5a3a6b); }
+  .meal-info { flex: 1; min-width: 0; }
+  .meal-name { font-size: 14px; font-weight: 600; margin-bottom: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meal-kcal { font-size: 13px; color: #ccc; }
+  .meal-kcal b { color: #fff; font-size: 15px; }
+  .meal-macros { font-size: 11px; color: #777; margin-top: 3px; }
+  .meal-macros .p { color: #51cf66; } .meal-macros .c { color: #ffd43b; } .meal-macros .f { color: #ff922b; }
+  .meal-time { font-size: 11px; color: #666; align-self: flex-start; flex: none; }
+
+  /* ---------- 周视图 ---------- */
+  .week-chart {
+    display: flex; align-items: flex-end; gap: 8px; height: 120px;
+    background: #1a1a1a; border: 1px solid #242424; border-radius: 14px;
+    padding: 14px 14px 8px; margin: 10px 0;
+  }
+  .wbar { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+  .wbar .bar { width: 60%; border-radius: 4px 4px 0 0; background: #2a6eff; }
+  .wbar .bar.over { background: #ff6b6b; }
+  .wbar .bar.none { background: #2a2a2a; height: 3px !important; }
+  .wbar .dl { font-size: 10px; color: #666; }
+  .week-sum { font-size: 12px; color: #888; text-align: center; margin-bottom: 6px; }
+  .week-sum b { color: #e0e0e0; }
+
+  /* ---------- 月视图：日历 + 进度环 ---------- */
+  .cal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 4px; }
+  .cal-head .m { font-size: 14px; font-weight: 600; }
+  .cal-head button { background: none; border: none; color: #888; font-size: 18px; cursor: pointer; padding: 2px 10px; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 4px; }
+  .cal-wd { text-align: center; font-size: 11px; color: #666; padding: 4px 0; }
+  .cal-day {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    position: relative; border-radius: 10px; cursor: pointer; font-size: 13px; color: #ccc;
+  }
+  .cal-day:hover { background: #1e1e1e; }
+  .cal-day.dim { color: #3d3d3d; }
+  .cal-day.today .num { color: #2a6eff; font-weight: 700; }
+  .cal-day svg.ring { position: absolute; inset: 2px; transform: rotate(-90deg); }
+  .ring .bg { stroke: #222; }
+  .ring .ok { stroke: #2a6eff; }
+  .ring .warn { stroke: #51cf66; }
+  .ring .over { stroke: #ff6b6b; }
+  .cal-legend { display: flex; gap: 14px; justify-content: center; font-size: 11px; color: #777; padding: 12px 0 4px; }
+  .cal-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+
+  /* ---------- 聊天 pane ---------- */
+  .chat-top { display: flex; align-items: center; justify-content: space-between;
+    padding: 14px; border-bottom: 1px solid #1c1c1c; flex: none; }
+  .chat-top .name { font-size: 15px; font-weight: 600; }
+  .chat-top .icons { color: #888; font-size: 15px; display: flex; gap: 14px; }
+  .chat-scroll { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: none; }
+  .msg { max-width: 82%; padding: 10px 13px; border-radius: 16px; font-size: 14px; line-height: 1.55; }
+  .msg.luna { background: #1a1a1a; border: 1px solid #242424; border-bottom-left-radius: 5px; align-self: flex-start; }
+  .msg.user { background: #2a6eff; color: #fff; border-bottom-right-radius: 5px; align-self: flex-end; }
+  /* 餐卡 artifact（嵌在对话里） */
+  .artifact { align-self: flex-start; max-width: 88%; background: #1a1a1a; border: 1px solid #242424;
+    border-radius: 14px; padding: 10px; }
+  .artifact .cap { font-size: 11px; color: #666; margin-bottom: 8px; }
+  /* 确认卡片 */
+  .confirm-card { align-self: flex-start; max-width: 88%; background: #1a1a1a; border: 1px solid #3a3a2a;
+    border-radius: 14px; padding: 12px; }
+  .confirm-card .q { font-size: 13px; margin-bottom: 10px; line-height: 1.5; }
+  .confirm-card .btns { display: flex; gap: 8px; }
+  .confirm-card .btns button {
+    flex: 1; border-radius: 9px; padding: 7px 0; font-size: 13px; cursor: pointer; font-family: inherit;
+    border: 1px solid #2a2a2a; background: #222; color: #ccc;
+  }
+  .confirm-card .btns .yes { background: #2a6eff; border-color: #2a6eff; color: #fff; }
+  .chat-input {
+    flex: none; display: flex; gap: 8px; padding: 10px 12px;
+    border-top: 1px solid #1c1c1c; background: #0f0f0f;
+  }
+  .chat-input .plus {
+    width: 38px; height: 38px; border-radius: 50%; background: #1a1a1a; border: 1px solid #2a2a2a;
+    color: #aaa; font-size: 20px; flex: none; cursor: pointer;
+  }
+  .chat-input .field {
+    flex: 1; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 19px;
+    padding: 0 14px; color: #888; font-size: 13px; display: flex; align-items: center;
+  }
+
+  /* ---------- 底部 tab bar ---------- */
+  .tabbar {
+    flex: none; display: flex; border-top: 1px solid #1c1c1c; background: #0d0d0d;
+    padding: 6px 0 14px;
+  }
+  .tabbar button {
+    flex: 1; background: none; border: none; color: #666; font-size: 12px;
+    cursor: pointer; font-family: inherit; padding: 6px 0;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .tabbar button .ico { font-size: 18px; }
+  .tabbar button.active { color: #2a6eff; }
+
+  .note { position: fixed; left: 24px; bottom: 16px; color: #555; font-size: 12px; max-width: 260px; line-height: 1.6; }
+  @media (max-width: 760px) { .note { display: none; } body { padding: 0; } .phone { border-radius: 0; width: 100vw; height: 100vh; max-height: none; border: none; } }
+</style>
+</head>
+<body>
+
+<div class="phone">
+  <div class="panes" id="panes">
+
+    <!-- ============ 左 pane：记录 ============ -->
+    <section class="pane">
+      <div class="topbar">
+        <div class="sticky-date" id="sticky-date">8月27日<small>周三</small></div>
+        <div class="seg" id="seg">
+          <button class="active" data-v="day">日</button>
+          <button data-v="week">周</button>
+          <button data-v="month">月</button>
+        </div>
+      </div>
+
+      <!-- 日：无限时间轴（最新在顶） -->
+      <div class="scroll" id="v-day">
+        <div class="date-sep">今天 · 8月27日</div>
+        <div class="meal-card"><div class="thumb t2"></div>
+          <div class="meal-info"><div class="meal-name">鸡胸肉沙拉 + 全麦面包</div>
+          <div class="meal-kcal"><b>420</b> kcal</div>
+          <div class="meal-macros"><span class="p">蛋 38</span> · <span class="c">碳 30</span> · <span class="f">脂 12</span></div></div>
+          <div class="meal-time">12:20</div></div>
+        <div class="meal-card"><div class="thumb t1"></div>
+          <div class="meal-info"><div class="meal-name">豆浆 + 鸡蛋 + 包子</div>
+          <div class="meal-kcal"><b>380</b> kcal</div>
+          <div class="meal-macros"><span class="p">蛋 18</span> · <span class="c">碳 52</span> · <span class="f">脂 11</span></div></div>
+          <div class="meal-time">08:05</div></div>
+
+        <div class="date-sep">8月26日 · 周二</div>
+        <div class="meal-card"><div class="thumb t3"></div>
+          <div class="meal-info"><div class="meal-name">红烧牛腩饭</div>
+          <div class="meal-kcal"><b>740</b> kcal</div>
+          <div class="meal-macros"><span class="p">蛋 35</span> · <span class="c">碳 88</span> · <span class="f">脂 26</span></div></div>
+          <div class="meal-time">18:40</div></div>
+        <div class="meal-card"><div class="thumb t4"></div>
+          <div class="meal-info"><div class="meal-name">轻食三明治（两张合并）</div>
+          <div class="meal-kcal"><b>720</b> kcal</div>
+          <div class="meal-macros"><span class="p">蛋 28</span> · <span class="c">碳 74</span> · <span class="f">脂 22</span></div></div>
+          <div class="meal-time">11:35</div></div>
+
+        <div class="date-sep">8月25日 · 周一</div>
+        <div class="meal-card"><div class="thumb t5"></div>
+          <div class="meal-info"><div class="meal-name">麻辣烫（中辣）</div>
+          <div class="meal-kcal"><b>680</b> kcal</div>
+          <div class="meal-macros"><span class="p">蛋 30</span> · <span class="c">碳 60</span> · <span class="f">脂 30</span></div></div>
+          <div class="meal-time">19:10</div></div>
+      </div>
+
+      <!-- 周：图表 + 时间轴 -->
+      <div class="scroll" id="v-week" style="display:none">
+        <div class="week-chart">
+          <div class="wbar"><div class="bar" style="height:46%"></div><div class="dl">一</div></div>
+          <div class="wbar"><div class="bar" style="height:78%"></div><div class="dl">二</div></div>
+          <div class="wbar"><div class="bar" style="height:32%"></div><div class="dl">三</div></div>
+          <div class="wbar"><div class="bar over" style="height:100%"></div><div class="dl">四</div></div>
+          <div class="wbar"><div class="bar" style="height:60%"></div><div class="dl">五</div></div>
+          <div class="wbar"><div class="bar none"></div><div class="dl">六</div></div>
+          <div class="wbar"><div class="bar none"></div><div class="dl">日</div></div>
+        </div>
+        <div class="week-sum">本周已记录 <b>5</b> 天 · 日均 <b>1,860</b> kcal / 目标 2,500</div>
+        <div class="date-sep">8月26日 · 周二</div>
+        <div class="meal-card"><div class="thumb t3"></div>
+          <div class="meal-info"><div class="meal-name">红烧牛腩饭</div>
+          <div class="meal-kcal"><b>740</b> kcal</div></div><div class="meal-time">18:40</div></div>
+        <div class="meal-card"><div class="thumb t4"></div>
+          <div class="meal-info"><div class="meal-name">轻食三明治（两张合并）</div>
+          <div class="meal-kcal"><b>720</b> kcal</div></div><div class="meal-time">11:35</div></div>
+        <div class="date-sep">8月25日 · 周一</div>
+        <div class="meal-card"><div class="thumb t5"></div>
+          <div class="meal-info"><div class="meal-name">麻辣烫（中辣）</div>
+          <div class="meal-kcal"><b>680</b> kcal</div></div><div class="meal-time">19:10</div></div>
+      </div>
+
+      <!-- 月：日历 + 进度环（点日期跳回时间轴） -->
+      <div class="scroll" id="v-month" style="display:none">
+        <div class="cal-head"><button>‹</button><div class="m">2026年8月</div><button>›</button></div>
+        <div class="cal-grid" id="cal"></div>
+        <div class="cal-legend">
+          <span><i style="background:#2a6eff"></i>达标内</span>
+          <span><i style="background:#51cf66"></i>接近目标</span>
+          <span><i style="background:#ff6b6b"></i>超标</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 右 pane：Luna ============ -->
+    <section class="pane">
+      <div class="chat-top">
+        <div class="name">Luna 🍽️</div>
+        <div class="icons"><span title="历史 session">🕘</span><span title="新建 session">✏️</span></div>
+      </div>
+      <div class="chat-scroll">
+        <div class="msg luna">早。昨天中午的两张照片我判断是同一餐，已经合并记录：</div>
+        <div class="artifact">
+          <div class="cap">8月26日 · 午餐</div>
+          <div class="meal-card" style="margin:0">
+            <div class="thumb t4"></div>
+            <div class="meal-info"><div class="meal-name">轻食三明治（两张合并）</div>
+            <div class="meal-kcal"><b>720</b> kcal</div>
+            <div class="meal-macros"><span class="p">蛋 28</span> · <span class="c">碳 74</span> · <span class="f">脂 22</span></div></div>
+            <div class="meal-time">11:35</div>
+          </div>
+        </div>
+        <div class="msg user">比我前天中午吃的呢？</div>
+        <div class="msg luna">前天午餐是麻辣烫，约 680 kcal。昨天这餐碳水更高、脂肪更低，总热量差不多。</div>
+        <div class="confirm-card">
+          <div class="q">🗑 你说「删掉周一那顿麻辣烫」——确认删除 8月25日 19:10 的记录吗？</div>
+          <div class="btns"><button class="yes">确认删除</button><button>取消</button></div>
+        </div>
+      </div>
+      <div class="chat-input">
+        <button class="plus">＋</button>
+        <div class="field">和 Luna 说说这顿吃了什么…</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 底部 tab bar -->
+  <nav class="tabbar">
+    <button class="active" id="tab-records"><span class="ico">📖</span>记录</button>
+    <button id="tab-chat"><span class="ico">💬</span>Luna</button>
+  </nav>
+</div>
+
+<div class="note">
+  原型说明：<br>
+  · 左右滑动或点底部 tab 切换两页<br>
+  · 顶栏右侧「日/周/月」即上次没讲清的切换按钮（分段控件）<br>
+  · 月视图每个日期下的圆环 = 当日热量占目标百分比，点日期跳回时间轴<br>
+  · 数据为占位假数据
+</div>
+
+<script>
+  const panes = document.getElementById('panes');
+  const tabR = document.getElementById('tab-records');
+  const tabC = document.getElementById('tab-chat');
+
+  function go(chat) {
+    panes.classList.toggle('show-chat', chat);
+    tabR.classList.toggle('active', !chat);
+    tabC.classList.toggle('active', chat);
+  }
+  tabR.onclick = () => go(false);
+  tabC.onclick = () => go(true);
+
+  // 触摸左右滑动
+  let sx = 0, sy = 0;
+  panes.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, {passive:true});
+  panes.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0);
+  }, {passive:true});
+  // 桌面端：鼠标拖拽模拟滑动
+  let md = false;
+  panes.addEventListener('mousedown', e => { md = true; sx = e.clientX; sy = e.clientY; });
+  window.addEventListener('mouseup', e => {
+    if (!md) return; md = false;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0);
+  });
+
+  // 日/周/月 切换
+  const views = { day: 'v-day', week: 'v-week', month: 'v-month' };
+  const titles = { day: '8月27日<small>周三</small>', week: '本周<small>8.24 – 8.30</small>', month: '2026年8月' };
+  document.getElementById('seg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#seg button').forEach(x => x.classList.toggle('active', x === b));
+    for (const k in views) document.getElementById(views[k]).style.display = k === b.dataset.v ? '' : 'none';
+    document.getElementById('sticky-date').innerHTML = titles[b.dataset.v];
+  });
+
+  // 生成 8 月日历（进度环 = 当日热量 / 2500 目标）
+  const cal = document.getElementById('cal');
+  ['一','二','三','四','五','六','日'].forEach(w => {
+    cal.insertAdjacentHTML('beforeend', `<div class="cal-wd">${w}</div>`);
+  });
+  // 假数据：日期 -> 占目标比例
+  const data = { 20:.62, 21:.81, 22:.55, 23:1.12, 24:.9, 25:.73, 26:.86, 27:.32 };
+  const firstDow = (new Date(2026, 7, 1).getDay() + 6) % 7; // 周一起
+  for (let i = 0; i < firstDow; i++) cal.insertAdjacentHTML('beforeend', '<div class="cal-day dim"></div>');
+  for (let d = 1; d <= 31; d++) {
+    const pct = data[d];
+    const isToday = d === 27;
+    let ring = '';
+    if (pct) {
+      const r = 15.5, c = (2 * Math.PI * r).toFixed(1);
+      const fill = (Math.min(pct, 1) * c).toFixed(1);
+      const cls = pct > 1 ? 'over' : pct > .85 ? 'warn' : 'ok';
+      ring = `<svg class="ring" viewBox="0 0 36 36">
+        <circle class="bg" cx="18" cy="18" r="${r}" fill="none" stroke-width="2.4"/>
+        <circle class="${cls}" cx="18" cy="18" r="${r}" fill="none" stroke-width="2.4"
+          stroke-dasharray="${fill} ${c}" stroke-linecap="round"/></svg>`;
+    }
+    cal.insertAdjacentHTML('beforeend',
+      `<div class="cal-day ${isToday ? 'today' : ''}" data-d="${d}">${ring}<span class="num">${d}</span></div>`);
+  }
+  // 点日期 -> 跳回日视图时间轴
+  cal.addEventListener('click', e => {
+    const day = e.target.closest('.cal-day[data-d]'); if (!day) return;
+    document.querySelector('#seg button[data-v="day"]').click();
+    document.getElementById('sticky-date').innerHTML = `8月${day.dataset.d}日<small>周-</small>`;
+  });
+</script>
+</body>
+</html>

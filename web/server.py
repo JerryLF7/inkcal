@@ -134,6 +134,12 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@app.route("/app/")
+def app_index():
+    """Serve the Vue rebuild while the legacy root UI remains available."""
+    return send_from_directory(app.static_folder, "app/index.html")
+
+
 @app.route("/api/dates")
 def api_dates():
     return jsonify(_available_dates())
@@ -199,7 +205,133 @@ def api_today():
 def api_data_version():
     """Fingerprint of all meal-data writes; lets the SPA detect background
     writes from cron runs (agent or legacy) and refresh stale views."""
-    return jsonify({"version": db.get_data_version()})
+    # pending: placeholder for the upcoming confirmation queue (Phase 5+).
+    return jsonify({"version": db.get_data_version(), "pending": 0})
+
+
+@app.route("/api/decisions")
+def api_decisions():
+    """Agent audit trail for a date (HKT). Powers the meal-card badge and
+    the lightbox 'AI 决策' section in the new frontend."""
+    date_str = request.args.get("date", "")
+    if not _valid_date(date_str):
+        return jsonify({"error": "invalid date"}), 400
+    return jsonify({"date": date_str, "decisions": db.get_decisions_by_date(date_str)})
+
+
+@app.route("/api/skipped")
+def api_skipped():
+    """Photos the agent decided to skip on a date — the correction entry
+    point for false rejections. Each item carries everything the frontend
+    needs to render a thumbnail and to re-trigger forced analysis via
+    /api/analyze-album-photo."""
+    date_str = request.args.get("date", "")
+    if not _valid_date(date_str):
+        return jsonify({"error": "invalid date"}), 400
+
+    immich_url = os.getenv("IMMICH_URL", "").rstrip("/")
+    default_source = "immich" if os.getenv("IMMICH_API_KEY") else "photoprism"
+
+    items = []
+    for dec in db.get_decisions_by_date(date_str):
+        if dec.get("action") != "skip":
+            continue
+        for aid in dec.get("asset_ids") or []:
+            thumb = (f"{immich_url}/api/assets/{aid}/thumbnail?size=preview"
+                     if default_source == "immich" else None)
+            items.append({
+                "asset_id": aid,
+                "source": default_source,
+                "thumbnail_url": thumb,
+                "date": date_str,
+                "reasoning": dec.get("reasoning", ""),
+                "decision_id": dec.get("id"),
+            })
+    return jsonify({"date": date_str, "skipped": items})
+
+
+# ── chat (conversational agent) ──────────────────────────────────────
+
+def _pipeline_config() -> dict:
+    return {
+        "immich_url": os.getenv("IMMICH_URL", ""),
+        "immich_key": os.getenv("IMMICH_API_KEY", ""),
+        "photoprism_url": os.getenv("PHOTOPRISM_URL", ""),
+        "photoprism_key": os.getenv("PHOTOPRISM_API_KEY", ""),
+        "gemini_key": os.getenv("GEMINI_API_KEY", ""),
+        "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
+    }
+
+
+def _chat_agent():
+    from src.chat_agent import ChatAgent
+    return ChatAgent(
+        luna_api_key=os.getenv("LUNA_API_KEY", ""),
+        luna_base_url=os.getenv("LUNA_BASE_URL") or None,
+        luna_model=os.getenv("LUNA_MODEL", "gpt-5.6-luna"),
+        deps={"pipeline_config": _pipeline_config()},
+    )
+
+
+@app.route("/api/chat/sessions", methods=["GET"])
+def api_chat_sessions():
+    return jsonify({"sessions": db.list_chat_sessions()})
+
+
+@app.route("/api/chat/sessions", methods=["POST"])
+def api_chat_create_session():
+    sid = db.create_chat_session()
+    return jsonify({"ok": True, "session_id": sid})
+
+
+@app.route("/api/chat/messages")
+def api_chat_messages():
+    session_id = request.args.get("session_id", type=int)
+    if not session_id:
+        session_id = db.get_latest_chat_session_id()
+        if not session_id:
+            return jsonify({"session_id": None, "messages": []})
+    return jsonify({"session_id": session_id,
+                    "messages": db.get_chat_messages(session_id)})
+
+
+@app.route("/api/chat/send", methods=["POST"])
+def api_chat_send():
+    """Send one user message; runs the chat agent loop synchronously and
+    returns the reply plus the tool log. Non-streaming by design (the
+    relay's SSE support is unverified); the UI shows tool progress from
+    tool_log."""
+    data = request.get_json() or {}
+    message = (data.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "empty message"}), 400
+
+    sid = data.get("session_id")
+    if not sid:
+        sid = db.create_chat_session()
+    sid = int(sid)
+
+    result = _chat_agent().send(sid, message)
+    if "error" in result:
+        return jsonify({"error": result["error"],
+                        "tool_log": result.get("tool_log", []),
+                        "session_id": sid}), 502
+    return jsonify({"ok": True, "session_id": sid,
+                    "reply": result["reply"], "tool_log": result["tool_log"]})
+
+
+@app.route("/api/settings", methods=["GET", "PUT"])
+def api_settings():
+    if request.method == "PUT":
+        data = request.get_json() or {}
+        if "chat_window" in data:
+            try:
+                n = max(5, min(50, int(data["chat_window"])))
+            except (TypeError, ValueError):
+                return jsonify({"error": "invalid chat_window"}), 400
+            db.set_setting("chat_window", str(n))
+    return jsonify({"chat_window": int(db.get_setting("chat_window", "20"))})
 
 
 @app.route("/api/week")

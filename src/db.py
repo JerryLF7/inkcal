@@ -187,6 +187,32 @@ def _migrate_schema(conn: sqlite3.Connection):
             consumed INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_events_consumed ON pipeline_events(consumed);
+
+        -- Chat (conversational agent) state. Business data stays in records;
+        -- these tables persist conversation history so the Luna Responses
+        -- chain (previous_response_id) is only a rebuildable cache.
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            tool_log TEXT,
+            response_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_session
+            ON chat_messages(session_id, id);
+
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
     """)
     conn.commit()
 
@@ -856,6 +882,117 @@ def get_decisions_by_date(date_str: str) -> list[dict]:
             pass
         out.append(d)
     return out
+
+
+# ── chat (conversational agent) ──────────────────────────────────────
+
+def create_chat_session(title: str = "") -> int:
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO chat_sessions (title) VALUES (?)", (title,)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_chat_sessions() -> list[dict]:
+    """All sessions, newest first, with message count and last activity."""
+    conn = _get_conn()
+    rows = conn.execute(
+        """
+        SELECT s.id, s.title, s.created_at,
+               COUNT(m.id) AS message_count,
+               MAX(m.created_at) AS last_active
+        FROM chat_sessions s
+        LEFT JOIN chat_messages m ON m.session_id = s.id
+        GROUP BY s.id
+        ORDER BY s.id DESC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_latest_chat_session_id() -> int | None:
+    conn = _get_conn()
+    row = conn.execute("SELECT MAX(id) AS id FROM chat_sessions").fetchone()
+    return row["id"] if row and row["id"] is not None else None
+
+
+def set_chat_session_title(session_id: int, title: str):
+    conn = _get_conn()
+    conn.execute("UPDATE chat_sessions SET title = ? WHERE id = ?",
+                 (title, session_id))
+    conn.commit()
+
+
+def add_chat_message(session_id: int, role: str, content: str, *,
+                     tool_log: list | None = None,
+                     response_id: str | None = None) -> int:
+    conn = _get_conn()
+    cur = conn.execute(
+        """INSERT INTO chat_messages (session_id, role, content, tool_log, response_id)
+           VALUES (?, ?, ?, ?, ?)""",
+        (session_id, role, content,
+         json.dumps(tool_log, ensure_ascii=False) if tool_log else None,
+         response_id),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_chat_messages(session_id: int, limit: int | None = None) -> list[dict]:
+    """Messages of a session, oldest first. limit returns the most recent N."""
+    conn = _get_conn()
+    if limit:
+        rows = conn.execute(
+            """SELECT * FROM (SELECT * FROM chat_messages
+               WHERE session_id = ? ORDER BY id DESC LIMIT ?)
+               ORDER BY id""",
+            (session_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["tool_log"] = json.loads(d["tool_log"]) if d["tool_log"] else []
+        except json.JSONDecodeError:
+            d["tool_log"] = []
+        out.append(d)
+    return out
+
+
+def get_last_response_id(session_id: int) -> str | None:
+    """End-of-chain Responses id for continuing via previous_response_id."""
+    conn = _get_conn()
+    row = conn.execute(
+        """SELECT response_id FROM chat_messages
+           WHERE session_id = ? AND response_id IS NOT NULL
+           ORDER BY id DESC LIMIT 1""",
+        (session_id,),
+    ).fetchone()
+    return row["response_id"] if row else None
+
+
+def get_setting(key: str, default: str = "") -> str:
+    conn = _get_conn()
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?",
+                       (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
 
 
 def get_data_version() -> str:
