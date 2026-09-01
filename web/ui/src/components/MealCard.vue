@@ -93,7 +93,7 @@ function onClick() {
 .body { flex: 1; min-width: 0; }
 .meal-name {
   font-size: 14px; font-weight: 600; margin-bottom: 2px; color: #e0e0e0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: normal; word-break: break-word;
 }
 .meal-meta { font-size: 11px; color: #666; }
 .meal-meta .source { color: #555; }

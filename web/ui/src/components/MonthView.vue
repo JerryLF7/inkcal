@@ -5,6 +5,11 @@ import { store } from '../store.js';
 
 const emit = defineEmits(['title', 'select']);
 
+// compact：PC 左栏常驻日历模式（隐藏大标题/图例，格子紧凑，不占满主区）
+const props = defineProps({
+  compact: { type: Boolean, default: false },
+});
+
 const now0 = hktNow();
 const cursor = ref(new Date(now0.getFullYear(), now0.getMonth(), 1));
 const kcalByDay = ref({});   // { 'YYYY-MM-DD': kcal }
@@ -46,6 +51,7 @@ async function load() {
 }
 
 function emitTitle() {
+  if (props.compact) return;   // 左栏模式不向顶栏上报标题
   emit('title', {
     main: `${cursor.value.getFullYear()}年${cursor.value.getMonth() + 1}月`,
     sub: '',
@@ -82,7 +88,7 @@ defineExpose({ reload: load });
 </script>
 
 <template>
-  <div class="scroll">
+  <div class="scroll" :class="{ compact }">
     <div class="cal-head">
       <button @click="shiftMonth(-1)">‹</button>
       <div class="m">{{ cursor.getFullYear() }}年{{ cursor.getMonth() + 1 }}月</div>
@@ -94,20 +100,20 @@ defineExpose({ reload: load });
         v-for="c in cells"
         :key="c.key"
         class="cal-day"
-        :class="{ dim: c.blank, today: c.today }"
+        :class="{ dim: c.blank, today: c.today, filled: !!c.ring }"
         @click="!c.blank && emit('select', c.ds)"
       >
         <svg v-if="c.ring" class="ring" viewBox="0 0 36 36">
-          <circle class="bg" cx="18" cy="18" r="15.5" fill="none" stroke-width="2.4"/>
+          <circle class="bg" cx="18" cy="18" r="15.5" fill="none" stroke-width="2.8"/>
           <circle
-            :class="c.ring.cls" cx="18" cy="18" r="15.5" fill="none" stroke-width="2.4"
+            :class="c.ring.cls" cx="18" cy="18" r="15.5" fill="none" stroke-width="2.8"
             :stroke-dasharray="c.ring.dash + ' 97.4'" stroke-linecap="round"
           />
         </svg>
         <span v-if="!c.blank" class="num">{{ c.day }}</span>
       </div>
     </div>
-    <div class="cal-legend">
+    <div v-if="!compact" class="cal-legend">
       <span><i style="background:#2a6eff"></i>达标内</span>
       <span><i style="background:#51cf66"></i>接近目标</span>
       <span><i style="background:#ff6b6b"></i>超标</span>
@@ -143,6 +149,9 @@ defineExpose({ reload: load });
 .ring .warn { stroke: #51cf66; }
 .ring .over { stroke: #ff6b6b; }
 
+/* 有记录的格子：数字提亮加粗，与空格子拉开对比 */
+.cal-day.filled .num { color: #e0e0e0; font-weight: 600; }
+
 .cal-legend {
   display: flex; gap: 14px; justify-content: center;
   font-size: 11px; color: #777; padding: 12px 0 4px;
@@ -153,4 +162,13 @@ defineExpose({ reload: load });
 }
 
 .hint { text-align: center; color: #888; font-size: 14px; padding: 20px 0; }
+
+/* 左栏常驻日历（compact）：紧凑排版，无滚动占位 */
+.scroll.compact { flex: none; overflow: visible; padding: 0; }
+.scroll.compact .cal-head { padding: 2px 0 8px; }
+.scroll.compact .cal-head .m { font-size: 13px; }
+.scroll.compact .cal-grid { gap: 2px; }
+.scroll.compact .cal-wd { font-size: 10px; padding: 2px 0; }
+.scroll.compact .cal-day { aspect-ratio: auto; min-height: 34px; height: 34px; font-size: 12px; border-radius: 8px; }
+.scroll.compact .hint { padding: 10px 0; }
 </style>

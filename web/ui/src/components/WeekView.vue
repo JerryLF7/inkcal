@@ -87,7 +87,13 @@ const timeline = computed(() => {
 onMounted(load);
 watch(() => store.bump, load);
 
-defineExpose({ reload: load });
+// 回到当前周（左栏“本周”快捷键）
+function resetToCurrentWeek() {
+  monday.value = mondayOf(hktNow());
+  load();
+}
+
+defineExpose({ reload: load, resetToCurrentWeek });
 </script>
 
 <template>
@@ -115,12 +121,14 @@ defineExpose({ reload: load });
       <div v-if="!timeline.length" class="hint">本周暂无记录</div>
       <template v-for="day in timeline" :key="day.date">
         <div class="date-sep">{{ shortDate(day.date) }} · {{ weekdayLabel(day.date) }}</div>
-        <MealCard
-          v-for="r in day.records"
-          :key="r.asset_id"
-          :record="r"
-          @open="emit('open', $event)"
-        />
+        <div class="week-timeline">
+          <MealCard
+            v-for="r in day.records"
+            :key="r.asset_id"
+            :record="r"
+            @open="emit('open', $event)"
+          />
+        </div>
       </template>
     </template>
   </div>
