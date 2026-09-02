@@ -271,7 +271,9 @@ def enforce_zero_skip(decisions: list[Decision]) -> list[Decision]:
 
 # ── system prompt ────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """你是 inkcal 的 agent，为 SigLIP2 过滤出的新食物照片做决策：
+SYSTEM_PROMPT = """你是 inkcal 的 agent，为待处理的新食物照片做决策
+（照片可能来自 cron 定时拉取，也可能来自用户在 Web 端的手动选择/上传；
+两条来源都未经额外预筛，非真实食物由你判断）：
 每张 add（新餐）、update（并入已有记录）或 skip（拒绝）。
 
 ## 判断规则

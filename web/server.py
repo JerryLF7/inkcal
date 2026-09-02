@@ -483,21 +483,7 @@ def api_manual_upload():
     import sys
     print(f"  [upload] user_date={user_date} exif_time={exif_time} _source={_source} date_str={date_str}", file=sys.stderr, flush=True)
 
-    # ── Gemini analysis (first — skip pHash if not food) ──────────
-    from src.calorie_analyzer import CalorieAnalyzer
-
-    analyzer = CalorieAnalyzer(
-        gemini_key,
-        base_url=os.getenv("GEMINI_BASE_URL"),
-        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-    )
-    result = analyzer.analyze(image_bytes)
-    analyzer.close()
-
-    if result.get("meal") in ("not real food", "unknown"):
-        return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
-
-    # ── Multi-source pHash match (after Gemini confirmed it's food) ─────
+    # ── Multi-source pHash match (before analysis: idempotency first) ───
     sources = _resolve_sources()
     matched = None
     matched_source = None
@@ -528,7 +514,7 @@ def api_manual_upload():
         if any(r.get("asset_id") == matched["id"] for r in records):
             return jsonify({"error": "already processed", "asset_id": matched["id"][:8]}), 409
 
-    # ── Build record ─────────────────────────────────────────────
+    # ── Build identity (asset_id/thumbnail/photo_time) before analysis ──
     if matched:
         asset_id = matched["id"]
         thumbnail_url = matched["thumbnail_url"]
@@ -544,6 +530,47 @@ def api_manual_upload():
         filepath = img_dir / filename
         filepath.write_bytes(image_bytes)
         image_path = str(filepath)
+
+    # ── Analysis: Luna agent path (AGENT_ENABLED=1) or legacy Gemini ────
+    if os.getenv("AGENT_ENABLED", "0") == "1" and os.getenv("LUNA_API_KEY", ""):
+        from src.pipeline_ops import analyze_assets_via_agent
+
+        config = _pipeline_config()
+        records_new, skipped, fallback = analyze_assets_via_agent(
+            [{
+                "asset_id": asset_id,
+                "source": matched_source or "manual",
+                "photo_time": photo_time,
+                "image_bytes": image_bytes,
+                "thumbnail_url": thumbnail_url,
+            }],
+            config,
+        )
+        if fallback is None:
+            if skipped:
+                return jsonify({"error": "not food", "detail": "agent skip"}), 422
+            if records_new:
+                record = records_new[0]
+                if image_path:
+                    record["replacement_image"] = image_path
+                return jsonify({"ok": True, "record": record, "matched": bool(matched), "date": date_str, "_date_source": _source, "_date_received": request.args.get("date", "") or request.form.get("date", "")})
+            return jsonify({"error": "already processed", "asset_id": asset_id[:8]}), 409
+        logger.warning("manual-upload agent fallback (%s), using legacy Gemini",
+                       fallback)
+
+    # ── Legacy Gemini single-photo analysis ──────────────────────────────
+    from src.calorie_analyzer import CalorieAnalyzer
+
+    analyzer = CalorieAnalyzer(
+        os.getenv("GEMINI_API_KEY", ""),
+        base_url=os.getenv("GEMINI_BASE_URL"),
+        model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
+    )
+    result = analyzer.analyze(image_bytes)
+    analyzer.close()
+
+    if result.get("meal") in ("not real food", "unknown"):
+        return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
 
     record = {
         "asset_id": asset_id,
@@ -698,9 +725,11 @@ def api_analyze_album_photo():
         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
     }
 
-    record, error = analyze_asset(asset_id, source, config,
-                                  photo_time=photo_time,
-                                  thumbnail_url=thumbnail_url)
+    record, error = _analyze_album_photo_impl(
+        asset_id, source, config,
+        photo_time=photo_time,
+        thumbnail_url=thumbnail_url,
+    )
     if error == "already_processed":
         return jsonify({"error": "already processed"}), 409
     if error == "not_food":
@@ -711,6 +740,65 @@ def api_analyze_album_photo():
         return jsonify({"error": error}), 500
 
     return jsonify({"ok": True, "record": record, "date": date_str})
+
+
+def _pipeline_config() -> dict:
+    """Shared analysis config for pipeline_ops calls."""
+    return {
+        "immich_url": os.getenv("IMMICH_URL", ""),
+        "immich_key": os.getenv("IMMICH_API_KEY", ""),
+        "photoprism_url": os.getenv("PHOTOPRISM_URL", ""),
+        "photoprism_key": os.getenv("PHOTOPRISM_API_KEY", ""),
+        "gemini_key": os.getenv("GEMINI_API_KEY", ""),
+        "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
+    }
+
+
+def _analyze_album_photo_impl(asset_id: str, source: str, config: dict, *,
+                              photo_time: str = "",
+                              thumbnail_url: str = "") -> tuple[dict | None, str | None]:
+    """Analyze one album photo: via Luna agent when enabled, else legacy path.
+
+    The Luna path analyses a single-photo batch here (no same-meal grouping
+    benefit for a one-shot picker click, but the estimate baseline and the
+    agent_decisions audit stay identical to the cron path).
+    """
+    from src.pipeline_ops import analyze_asset, _download_original, _resolve_photo_time
+
+    image_bytes = _download_original(asset_id, source, config)
+    if image_bytes is None:
+        return None, "download_failed"
+
+    if not photo_time:
+        photo_time = _resolve_photo_time(asset_id, source, config)
+
+    if os.getenv("AGENT_ENABLED", "0") == "1" and os.getenv("LUNA_API_KEY", ""):
+        from src.pipeline_ops import analyze_assets_via_agent
+
+        records, skipped, fallback = analyze_assets_via_agent(
+            [{
+                "asset_id": asset_id,
+                "source": source,
+                "photo_time": photo_time,
+                "image_bytes": image_bytes,
+                "thumbnail_url": thumbnail_url,
+            }],
+            config,
+        )
+        if fallback is None:
+            if skipped:
+                return None, "not_food"
+            if records:
+                return records[0], None
+            return None, "already_processed"
+        logger.warning("agent path fallback (%s), using legacy single-photo",
+                       fallback)
+
+    return analyze_asset(asset_id, source, config,
+                         photo_time=photo_time,
+                         thumbnail_url=thumbnail_url,
+                         image_bytes=image_bytes)
 
 
 @app.route("/api/move-record", methods=["POST"])

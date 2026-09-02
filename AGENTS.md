@@ -30,7 +30,7 @@ Immich / PhotoPrism
 - 所有日期边界采用 **Asia/Hong_Kong（UTC+8）**。
 - 写数据库必须经 `inkcal` CLI、`src/db.py` 的既有业务路径或已有 Flask API；不要用 SQLite shell 直接改数据。
 - `asset_id` 是幂等键。删除 Immich 资产对应记录时要进入 `ignored_assets`，避免 cron 重新入库。
-- SigLIP2 是隐私门槛；用户从相册明确选择照片或手动上传时，才可绕过食物过滤直送 Gemini。
+- SigLIP2 是隐私门槛；用户从相册明确选择照片或手动上传时，才可绕过食物过滤。`AGENT_ENABLED=1` 时绕过 SigLIP2 的照片仍进入 Luna（skip 契约保留），失败降级直送 Gemini；`AGENT_ENABLED=0` 时直送 Gemini。
 - Gemini 只负责估算，不负责同餐关系；Luna 只负责视觉判断/编排，不应自己编造热量。
 - Luna 写给 Gemini 的 `prompt_for_gemini` 只准描述照片关系（同餐/顺序/以哪张为准），禁止餐次结论、食物内容预判、纳入/排除决定（2026-08-31 晚餐案例：Luna 排除啤酒导致漏算）。食物内容与纳入范围由 Gemini 依照片自行判断。
 - `analyze_with_gemini` 单张照片时不经 Luna 提示词：Gemini 收到 固定 task_frame（全摄入基准等）+ 打包版 `analyze.md` + JSON 锚点，Luna 传入的任何文本被忽略。多张照片时 Luna 才必填 `prompt_for_gemini`（只写照片关系）。
@@ -226,13 +226,14 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 ### 运行与上传
 
 - 一定用 `venv/bin/python` 启动；系统 Python 会造成上传/HEIC/Gemini 相关的隐性失败。
-- 手动上传先由 Gemini 判定食物，再做 Immich pHash 匹配；无 EXIF 时应提供日期修正。
+- 手动上传先做 Immich pHash 匹配再分析（幂等键先行）；无 EXIF 时应提供日期修正。
 - SQLite 使用 WAL；不要在 server 运行时删除 `.db-wal` / `.db-shm`。
 - SIGLIP2 对饮料存在漏检盲点；“选择照片”是正式补救路径，不是冗余功能。
 
 ### Agent 批处理关键规则
 
 - 同批照片可按内容分组；对**已有记录**判同餐时，时间/日期是硬约束。
+- 手动路径与 cron 路径共用 `AgentHarness` 与契约层；`SYSTEM_PROMPT` 不再假设照片经过 SigLIP2 过滤（手动照片未经预筛，非真实食物由 Luna 判断）。改动 prompt 时保持这一点。
 - 前一天记录只能为跨零点连续进食提供上下文；正常时段即使同款食物也必须是新餐，不能跨天 update 合并。
 - Gemini 全零、`not real food` 或 `unknown` 必须在契约层强制映射为 skip。
 - Gemini 输出可能夹 markdown；工具层已在 prompt 最末尾固定 JSON 格式锚点。不要删。
@@ -259,8 +260,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ### 图片来源、上传与展示约定
 
-- 相册选择器查询所有启用源的未处理照片，按日期分页（7 天/页）；用户明确选择图片后直接送 Gemini，不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。
-- 手动上传先 Gemini 判食物，成功后才 pHash 匹配 Immich；非食物返回 422，已处理返回 409。无 EXIF 时需允许后续日期修正，经 `/api/move-record` 重新尝试匹配。
+- 相册选择器查询所有启用源的未处理照片，按日期分页（7 天/页）；用户明确选择图片后不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。
+- `AGENT_ENABLED=1` 时手动路径（相册选择、本地上传、`inkcal analyze`）统一经 `src/pipeline_ops.py::analyze_assets_via_agent` 进 Luna harness：跳过 SigLIP2 但保留 Luna skip 契约（skip → `classified_non_food`，decided_by=agent），决策审计写入 `agent_decisions`；`update` 决策在手动路径降级为 `add`（手动照片无已有记录可并入）。harness 失败或决策未覆盖时逐张降级原直发路径。
+- 手动上传先做 Immich pHash 匹配（幂等键先行，已处理返回 409），再走 Luna 或 Gemini；非食物返回 422。无 EXIF 时需允许后续日期修正，经 `/api/move-record` 重新尝试匹配。
 - EXIF 时间必须用 Immich 的 `asset.exifInfo.dateTimeOriginal` 和 `timeZone`，不要下载缩略图再读 EXIF；缩略图可能没有 EXIF。`UTC+8` 与 IANA 时区均要兼容，未知时区回退 HKT。
 - 卡片缩略图优先 Immich `size=thumbnail`，不要回退大 `preview`；慢网下保留超时、重试、请求取消/去重和缓存防御。旧原生 UI 的 localStorage 方案可作参考，新 Vue 实现不应无意倒退。
 

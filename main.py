@@ -832,7 +832,12 @@ def cmd_decisions(args):
 # ── subcommand: analyze ──────────────────────────────────────────────
 
 def cmd_analyze(args):
-    """Force-analyze an asset with Gemini, skipping the food-detection step."""
+    """Force-analyze an asset, skipping the food-detection step.
+
+    AGENT_ENABLED=1 routes through Luna's harness (agent_decisions audit,
+    same estimate baseline as cron); any Luna-layer failure falls back to
+    the legacy single-photo Gemini path.
+    """
     db.init_db()
     config = load_config()
 
@@ -850,8 +855,46 @@ def cmd_analyze(args):
     if source not in ("immich", "photoprism"):
         fail("invalid_args", f"未知来源: {source}，应为 immich 或 photoprism")
 
-    from src.pipeline_ops import analyze_asset
-    record, error = analyze_asset(args.id, source, config)
+    from src.pipeline_ops import analyze_asset, _download_original, _resolve_photo_time
+
+    run_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(3).hex()
+    image_bytes = None
+    record = None
+    error = None
+
+    if os.getenv("AGENT_ENABLED", "0") == "1" and os.getenv("LUNA_API_KEY", ""):
+        from src.pipeline_ops import analyze_assets_via_agent
+
+        image_bytes = _download_original(args.id, source, config)
+        if image_bytes is None:
+            fail("external_error", f"下载原图失败 [{source}]，请检查照片源是否在线")
+        photo_time = _resolve_photo_time(args.id, source, config)
+
+        records, skipped, fallback = analyze_assets_via_agent(
+            [{
+                "asset_id": args.id,
+                "source": source,
+                "photo_time": photo_time,
+                "image_bytes": image_bytes,
+                "thumbnail_url": "",
+            }],
+            config,
+            run_id=run_id,
+        )
+        if fallback is None:
+            if skipped:
+                fail("not_food", f"Luna 判定 {args.id[:8]} 非真实食物，不记录")
+            if records:
+                record = records[0]
+            else:
+                fail("invalid_args", f"照片 {args.id[:8]} 已经分析过了")
+        else:
+            logger.warning("agent path fallback (%s), using legacy single-photo",
+                           fallback)
+
+    if record is None:
+        record, error = analyze_asset(args.id, source, config,
+                                      image_bytes=image_bytes)
 
     if error == "already_processed":
         fail("invalid_args", f"照片 {args.id[:8]} 已经分析过了")
