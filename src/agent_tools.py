@@ -132,10 +132,14 @@ def get_recent_meals(args: dict, deps: dict) -> dict:
 
 def analyze_with_gemini(args: dict, deps: dict) -> dict:
     """
-    Send a batch of photos to Gemini expert layer with Luna's prompt.
+    Send a batch of photos to Gemini expert layer.
     args:
-      asset_ids: list[str] — subset of the batch's asset_ids to send
-      prompt_for_gemini: str — Luna's auxiliary prompt describing relations
+      asset_ids: list[str] — photos to send
+      prompt_for_gemini: str — REQUIRED for multi-photo calls; describes
+        photo relations only. OPTIONAL and IGNORED for single-photo calls
+        (the tool substitutes the shipped analyze.md template — Luna prose
+        for a single photo is pure boilerplate and a content-smuggling
+        channel).
     deps must contain:
       gemini_analyzer: CalorieAnalyzer instance
       image_getter: callable(asset_id) -> bytes (original image bytes)
@@ -149,8 +153,8 @@ def analyze_with_gemini(args: dict, deps: dict) -> dict:
     prompt = str(args.get("prompt_for_gemini", "")).strip()
     if not asset_ids:
         return {"ok": False, "error": "asset_ids must be non-empty"}
-    if not prompt:
-        return {"ok": False, "error": "prompt_for_gemini must be non-empty"}
+    if len(asset_ids) > 1 and not prompt:
+        return {"ok": False, "error": "prompt_for_gemini is required for multi-photo calls"}
 
     images: list[bytes] = []
     for aid in asset_ids:
@@ -160,7 +164,11 @@ def analyze_with_gemini(args: dict, deps: dict) -> dict:
             logger.error("image_getter failed for %s: %s", aid, e)
             return {"ok": False, "error": f"failed to fetch image for {aid}: {e}"}
 
-    # Call Gemini with multi-image + Luna's prompt.
+    if len(images) == 1 and prompt:
+        logger.info("analyze_with_gemini: single-photo call, ignoring prompt_for_gemini (%d chars)",
+                    len(prompt))
+
+    # Call Gemini with images + assembled prompt.
     # The analyzer's analyze() takes a single image; for multi-image we call
     # the underlying client directly with all images in one request.
     try:
@@ -179,13 +187,53 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
     """
     Send multiple images + prompt to Gemini in one request.
     Reuses the analyzer's OpenAI client and JSON parsing.
+
+    Prompt layout (order matters — task frame first, Luna's notes after):
+      1. TASK_FRAME: fixed numeric-estimation rules owned by THIS layer.
+         Luna must not and cannot change these (e.g. 2026-08-31 dinner:
+         Luna excluded a beer; drinks are part of intake and must count).
+      2. Body:
+         - single photo -> shipped analyze.md template (same text as the
+           manual-upload / legacy path; NOT the user-overridable variant —
+           see loader note below). Luna's prompt_for_gemini is ignored for
+           single-photo calls.
+         - multiple photos -> Luna's prompt_for_gemini (photo relations
+           ONLY: same-meal links, order, which photo shows the final
+           state). No meal-type verdicts, no content pre-judgement, no
+           include/exclude decisions.
+      3. format_anchor: JSON output contract pinned last, closest to
+         generation.
     """
     import base64
 
-    # Luna's prompt_for_gemini describes WHAT to analyze, but says nothing
-    # about output format — long analytical instructions were observed to
-    # pull Gemini into markdown essays that fail JSON parsing. Pin the
-    # output contract at the end of the prompt, closest to generation.
+    from src.prompts import loader as prompt_loader
+
+    # Fixed task frame: what to include, how to treat ambiguity, and that
+    # the model must judge content itself from visible evidence. Principle:
+    # over-count (user can correct via reanalyze) beats under-count
+    # (invisible loss). Same rules as src/prompts/analyze.md, adapted for
+    # multi-photo + Luna-annotated batches.
+    task_frame = (
+        "你是营养师，任务是只根据照片可见证据估算这一餐的热量与宏量营养。"
+        "下面附带的辅助说明仅描述照片之间的拍摄关系（是否同餐、先后顺序、以哪张为准），"
+        "其中对食物内容的预判不作为你的依据——请自己从图片判断吃了什么。\n\n"
+        "纳入规则（必须遵守）：\n"
+        "1. 全摄入基准：凡照片中出现的、属于本次进食的食物和饮品一律计入热量与宏量营养，"
+        "包括酒水、饮料、咖啡、奶茶等（此类常被漏算，请特别注意）。\n"
+        "2. 仅排除明确不属于本次进食的物品：外卖盒外的包装盒、手机、电脑、"
+        "他人未入食的餐食、餐桌装饰等非摄入物。\n"
+        "3. 拿不准某物品是否被食用时，计入并调低 confidence——宁可多算让人工纠正，"
+        "不可漏算。\n"
+        "4. 多张照片时以最终状态（最后一张或剩余最少的状态）评估实际食用量，"
+        "未动过的重复出镜物品只算一次。\n"
+        "5. 估算保持保守：按常见份量常识，不放大也不缩小。\n"
+        "6. 若发现是截图、包装、菜单、海报、绘画、屏幕里的食物等非真实食物，"
+        "所有数值置 0 且 meal=\"not real food\"。"
+    )
+
+    # Pin the output contract at the very end, closest to generation:
+    # long analytical instructions were observed to pull Gemini into
+    # markdown essays that fail JSON parsing.
     format_anchor = (
         "\n\n重要：无论上面的分析要求是什么，最终只返回一个 JSON 对象，"
         "不要输出任何解释文字或 markdown 代码块。字段必须严格为："
@@ -193,7 +241,22 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
         '"carbs_g": <数字>, "fat_g": <数字>, "confidence": "high|medium|low"}。'
         '若不是真实食物，所有数值置 0 且 meal="not real food"、confidence="low"。'
     )
-    content: list[dict[str, Any]] = [{"type": "text", "text": prompt + format_anchor}]
+
+    # Single photo: use the shipped analyze.md template so the loop path and
+    # the manual-upload/legacy path run the SAME prompt. Deliberately the
+    # packaged default (not get_analyze_prompt()): the user-override slot
+    # exists for tuning, and system invariants must not depend on it —
+    # task_frame + format_anchor already pin the hard rules either way.
+    if len(images) == 1:
+        body = prompt_loader.load_packaged_analyze()
+        text = task_frame + "\n\n" + body + format_anchor
+    else:
+        # Pin the output contract at the very end, closest to generation:
+        # long analytical instructions were observed to pull Gemini into
+        # markdown essays that fail JSON parsing.
+        text = task_frame + "\n\n——以下为照片关系说明——\n" + prompt + format_anchor
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": text}]
     for img in images:
         b64 = base64.b64encode(img).decode("utf-8")
         mime = detect_image_mime(img)

@@ -52,6 +52,25 @@ def get_analyze_prompt() -> str:
     return _load("analyze", _FALLBACK_ANALYZE)
 
 
+def load_packaged_analyze() -> str:
+    """
+    Shipped analyze.md ONLY — skips the ~/.inkcal/prompts user override.
+
+    Used by the agent batch path for single-photo analyze_with_gemini calls:
+    there the template is part of a layered prompt (task_frame + body +
+    format_anchor) that encodes system invariants (all-intake baseline,
+    JSON contract), so it must not silently change via a user edit. Users
+    who want to tune the loop path can edit task_frame rules in code.
+    """
+    path = _PKG_PROMPTS_DIR / "analyze.md"
+    if path.is_file():
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as e:
+            logger.warning("Could not read packaged prompt %s: %s", path, e)
+    return _FALLBACK_ANALYZE
+
+
 def get_reanalyze_prompt() -> str:
     """Prompt template for reanalyze-with-notes. Contains {meal}/{notes} placeholders."""
     return _load("reanalyze", _FALLBACK_REANALYZE)

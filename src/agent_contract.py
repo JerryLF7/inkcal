@@ -65,8 +65,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "analyze_with_gemini",
             "description": (
                 "把一组照片交给 Gemini 专家层评估热量。必须传 asset_ids（本批新照片的 "
-                "asset_id 列表）和 prompt_for_gemini（你写的辅助提示词，说明照片关系与"
-                "实际食用判断）。返回 {meal, calories, protein_g, carbs_g, fat_g, confidence}。"
+                "asset_id 列表）。prompt_for_gemini 仅多张照片时必填，且只能描述照片之间的"
+                "拍摄关系（是否同餐、先后顺序、以哪张为准、实际剩余状态），"
+                "禁止包含：餐次结论（如'这是新餐'）、食物内容预判（如'主要是炸鱼排'）、"
+                "纳入或排除某种食物/饮品的决定（如'不要把啤酒算进去'）——"
+                "吃什么、算什么由 Gemini 依照片自行判断；单张照片时不写此参数，"
+                "系统会使用内置分析模板。"
+                "返回 {meal, calories, protein_g, carbs_g, fat_g, confidence}。"
             ),
             "parameters": {
                 "type": "object",
@@ -78,10 +83,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     "prompt_for_gemini": {
                         "type": "string",
-                        "description": "给 Gemini 的辅助提示词，说明照片关系与实际食用判断",
+                        "description": "仅多张照片时必填：只描述照片拍摄关系与状态（同餐/顺序/以哪张为准），不得预判食物内容或决定纳入排除；单张照片省略",
                     },
                 },
-                "required": ["asset_ids", "prompt_for_gemini"],
+                "required": ["asset_ids"],
             },
         },
     },
@@ -266,64 +271,47 @@ def enforce_zero_skip(decisions: list[Decision]) -> list[Decision]:
 
 # ── system prompt ────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """你是 inkcal 的 agent，负责判断 SigLIP2 过滤出的食物照片该如何处理。
-
-你的输入：一批新食物照片（带 asset_id 和拍摄时间），以及可调用的工具。
-你的目标：为这批照片做出决策——每张是新的一餐（add）、还是与已有记录同餐（update）、还是应当拒绝（skip）。
+SYSTEM_PROMPT = """你是 inkcal 的 agent，为 SigLIP2 过滤出的新食物照片做决策：
+每张 add（新餐）、update（并入已有记录）或 skip（拒绝）。
 
 ## 判断规则
 
-1. 同餐判断**只看图片内容**、不看时间间隔——这条规则只适用于**同一批内多张照片之间的分组**。对已有记录判断 same_meal 时，时间必须是硬约束：
-   - get_recent_meals 返回的列表可能包含昨天的记录，它们**只服务于跨零点场景**（深夜 23:55 与次日 00:05 的连续进食）。
-   - 新照片若拍摄于正常时段（上午/中午/傍晚等），与昨天的记录**即使食物完全相同也一律判新的一餐**（add/new_meal），绝不用 update 去合并。
-   - 先比对每条记录的 date 字段与新照片的日期：跨日且不是零点前后的连续进食，就不可能同餐。
-   - 同餐的信号（限同一餐时段内）：相同桌面/餐具、相同食物组合、吃剩状态的延续（如：第一张全量，第二张某食物变少）。
-   - 不同餐的信号：完全不同的桌面、完全不同的食物、明显是两次独立进食。
-2. 如果是**同餐**，决定以哪张照片为准（通常是最后一张，显示最终剩余状态），然后调用 analyze_with_gemini，把相关照片都传给它，并写清实际食用部分。
-   - 例：三张照片 A+B → A+½B+C → ½A+B空盘+C，实际食用是 B+½A，C 是后加的背景不算。
-   - prompt_for_gemini 要明确告诉它："以图三为准，前两张是同一餐的先前状态，实际食用部分是 B+½A"。
-3. 如果是**新的一餐**，直接调用 analyze_with_gemini（单张或少量相关照片），prompt 里说明这是新餐。
-4. 如果照片**不是真实食物**（截图、包装、海报、画），用 action=skip，relation=rejected，result 给全零，reasoning 说明为何拒绝。
+1. 同餐判断只看图片内容，但已有记录的时间是一票否决：跨日且非跨零点连续进食
+   （深夜 23:55 与次日 00:05 的连续进食除外），即使食物完全相同也是新餐（add）。
+   同日内的同餐信号：相同桌面/餐具、相同食物组合、吃剩状态的延续。
+2. add / update 都需要热量数值：调用 analyze_with_gemini，把它返回的 result
+   原样作为你的 result，不要自己估算。多张同餐照片一起传。
+3. 照片不是真实食物（截图、包装、海报、画），或 analyze_with_gemini 返回全零 /
+   "not real food"：action=skip，relation=rejected，result 全零。
 
-## 输出契约（必须严格遵守）
-
-最终必须只输出一个 JSON 对象（外层是 decisions 数组），不要 markdown 代码块，不要解释性文字：
+## 输出契约（严格遵守：只输出一个 JSON 对象，无 markdown，无解释文字）
 
 {
   "decisions": [
     {
-      "asset_ids": ["<本决策覆盖的新照片 asset_id 列表>"],
+      "asset_ids": ["<本决策覆盖的新照片 asset_id>"],
       "action": "add" | "update" | "skip",
-      "target_asset_id": "<已有记录的 asset_id，仅 update 需要>",
+      "target_asset_id": "<仅 update 需要>",
       "relation": "new_meal" | "same_meal" | "rejected",
       "result": {
         "meal": "简短中文食物描述",
-        "calories": <数字>,
-        "protein_g": <数字>,
-        "carbs_g": <数字>,
-        "fat_g": <数字>,
+        "calories": <数字>, "protein_g": <数字>,
+        "carbs_g": <数字>, "fat_g": <数字>,
         "confidence": "high" | "medium" | "low"
       },
-      "reasoning": "你的判断依据（中文，说明为什么是同餐/新餐/拒绝，以及实际食用判断）",
-      "prompt_for_gemini": "<你传给 Gemini 的辅助提示词>"
+      "reasoning": "<判断逻辑链，供人工审计>",
+      "prompt_for_gemini": "<仅多张照片时填写；单张照片省略>"
     }
   ]
 }
 
-规则：
-- 一批可能有多个决策（如三张照片：两张同餐 update，一张新餐 add）。每张新照片必须且只能出现在一个决策的 asset_ids 里。
-- 一个决策的 asset_ids 可以是多张（同餐的多张一起交给 Gemini）。
+每张新照片必须且只能出现在一个决策的 asset_ids 里。
 
-## 工具使用
+## prompt_for_gemini 纪律（仅多张照片）
 
-- 你可以随时调用 query_food_database 查询历史同款食物的热量做参考。
-- 调用 analyze_with_gemini 前，先在 reasoning 里想好判断。
-- analyze_with_gemini 的 result 就是你最终 result 的来源——不要自己估热量，直接采用 Gemini 的返回值。
-
-## 注意
-
-- 结果必须基于 analyze_with_gemini 的真实返回。如果它返回了全零或 "not real food"，那很可能是图片格式错误或非食物，你应当用 action=skip 而不是 add。
-- 你的 reasoning 会被人工审计，写清楚逻辑链。"""
+只写照片关系：是否同餐、拍摄顺序、以哪张为准。
+禁止写入：餐次结论（"这是新餐"）、食物内容预判（"主要是炸鱼排"）、
+纳入/排除决定（"不要把啤酒算进去"）——这些由 Gemini 和系统层决定。"""
 
 
 # ── helpers ──────────────────────────────────────────────────────────

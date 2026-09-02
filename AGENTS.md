@@ -17,8 +17,8 @@ inkcal 是本地优先的自动饮食热量记录器：用户只需拍食物照�
 ```text
 Immich / PhotoPrism
   -> SigLIP2（本机 CPU 食物过滤，非食物照片不出内网）
-  -> Luna（视觉编排：同餐 / 新餐 / 跳过判断，生成 Gemini 辅助提示）
-  -> Gemini（数值专家：热量与 P/C/F）
+  -> Luna（视觉编排：同餐 / 新餐 / 跳过判断，只写照片关系说明）
+  -> Gemini（数值专家：热量与 P/C/F，自带全摄入基准任务框架）
   -> data/inkcal.db（SQLite，WAL）
   -> Flask JSON API + Web UI
 ```
@@ -32,6 +32,9 @@ Immich / PhotoPrism
 - `asset_id` 是幂等键。删除 Immich 资产对应记录时要进入 `ignored_assets`，避免 cron 重新入库。
 - SigLIP2 是隐私门槛；用户从相册明确选择照片或手动上传时，才可绕过食物过滤直送 Gemini。
 - Gemini 只负责估算，不负责同餐关系；Luna 只负责视觉判断/编排，不应自己编造热量。
+- Luna 写给 Gemini 的 `prompt_for_gemini` 只准描述照片关系（同餐/顺序/以哪张为准），禁止餐次结论、食物内容预判、纳入/排除决定（2026-08-31 晚餐案例：Luna 排除啤酒导致漏算）。食物内容与纳入范围由 Gemini 依照片自行判断。
+- `analyze_with_gemini` 单张照片时不经 Luna 提示词：Gemini 收到 固定 task_frame（全摄入基准等）+ 打包版 `analyze.md` + JSON 锚点，Luna 传入的任何文本被忽略。多张照片时 Luna 才必填 `prompt_for_gemini`（只写照片关系）。
+- `analyze_with_gemini` 的份量估算规则由系统固定注入（`agent_tools.py::_gemini_multi_image` 的 task_frame）：全摄入基准（饮品一律计入）、拿不准时计入并降 confidence（宁可多算可纠错，不可漏算无感知）、非真实食物全零。该框架在 Luna 文本之前发送；不要把它合并回 prompt 或删除。
 
 ---
 
