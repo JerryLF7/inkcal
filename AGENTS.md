@@ -260,7 +260,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ### 图片来源、上传与展示约定
 
-- 相册选择器查询所有启用源的未处理照片，按日期分页（7 天/页）；用户明确选择图片后不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。
+- 相册选择器查询所有启用源的未处理照片，按日期分页（7 天/页）；用户明确选择图片后不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。选择器支持**多选（≤10 张）**：批量 shape `{items: [...]}` 在 `AGENT_ENABLED=1` 时整批进一次 Luna harness（同餐合并为一条记录），harness 失败逐张降级；单条 shape 保持旧响应契约不变。
 - `AGENT_ENABLED=1` 时手动路径（相册选择、本地上传、`inkcal analyze`）统一经 `src/pipeline_ops.py::analyze_assets_via_agent` 进 Luna harness：跳过 SigLIP2 但保留 Luna skip 契约（skip → `classified_non_food`，decided_by=agent），决策审计写入 `agent_decisions`；`update` 决策在手动路径降级为 `add`（手动照片无已有记录可并入）。harness 失败或决策未覆盖时逐张降级原直发路径。
 - 手动上传先做 Immich pHash 匹配（幂等键先行，已处理返回 409），再走 Luna 或 Gemini；非食物返回 422。无 EXIF 时需允许后续日期修正，经 `/api/move-record` 重新尝试匹配。
 - EXIF 时间必须用 Immich 的 `asset.exifInfo.dateTimeOriginal` 和 `timeZone`，不要下载缩略图再读 EXIF；缩略图可能没有 EXIF。`UTC+8` 与 IANA 时区均要兼容，未知时区回退 HKT。
@@ -270,11 +270,12 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 1. 仅使用 venv Python；系统 Python 缺 `pillow-heif`、`imagehash`、Gemini 相关依赖，上传可能表面成功、实际失败。
 2. 用 `fuser -k <port>/tcp` 释放端口；`pkill -f web/server.py` 可能留下绑定。
-3. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。
-4. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
-5. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
-6. `inkcal migrate` 检测到已有数据库会拒绝；`--force` 会清空再迁移，只能在确有意图时使用。
-7. `~/Coding/food-classifier/` 是独立的 SigLIP2 微调项目，模型产物写入本项目 `data/finetuned-model/` 并由检测器自动加载。
+3. `inkcal run` 有 flock 互斥锁（`data/inkcal-run.lock`）：Luna harness 一轮可跑 ~11 分钟，超过 cron 10 分钟间隔时重叠 run 会直接退出，防止重复入库与孤儿审计决策。若锁残留（进程被 kill -9），手动删除 lockfile 即可。
+4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。
+5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
+6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
+7. `inkcal migrate` 检测到已有数据库会拒绝；`--force` 会清空再迁移，只能在确有意图时使用。
+8. `~/Coding/food-classifier/` 是独立的 SigLIP2 微调项目，模型产物写入本项目 `data/finetuned-model/` 并由检测器自动加载。
 
 ---
 

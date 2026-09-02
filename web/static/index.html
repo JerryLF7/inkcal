@@ -439,8 +439,13 @@
   .album-thumb {
     aspect-ratio: 1; object-fit: cover; border-radius: 8px;
     cursor: pointer; width: 100%; background: #2a2a2a;
+    border: 2px solid transparent; box-sizing: border-box;
   }
   .album-thumb:hover { opacity: 0.85; }
+  .album-thumb.selected { border-color: #2a6eff; }
+  .album-hint {
+    margin: 8px 0 0; color: #777; font-size: 12px; text-align: center;
+  }
   .album-loading-more {
     display: flex; justify-content: center; padding: 12px 0;
   }
@@ -625,10 +630,15 @@
         <div class="spinner" style="width:20px;height:20px;border-width:2px"></div>
       </div>
     </div>
+    <div class="photo-picker-actions" id="album-selection-bar" style="display:none">
+      <button class="local-upload-btn" id="album-analyze-btn" onclick="analyzeAlbumSelected()">分析</button>
+      <button class="upload-picker-cancel" onclick="_albumSelected.clear(); document.querySelectorAll('.album-thumb.selected').forEach(el => el.classList.remove('selected')); _updateAlbumSelectionBar();">重选</button>
+    </div>
     <div class="photo-picker-actions">
       <button class="local-upload-btn" onclick="openLocalUpload()">📤 从本地上传</button>
       <button class="upload-picker-cancel" onclick="closePhotoPicker()">取消</button>
     </div>
+    <p class="album-hint">点击照片选中/取消，可多选（同餐照片会合并为一条记录）</p>
   </div>
 </div>
 
@@ -1496,6 +1506,7 @@ let _albumCursor = '';
 let _albumLoading = false;
 let _albumHasMore = true;
 let _albumScrollHandler = null;
+const _albumSelected = new Map();
 
 function triggerPhotoPicker() {
   const picker = document.getElementById('photo-picker');
@@ -1506,6 +1517,8 @@ function triggerPhotoPicker() {
   _albumCursor = fmtDate(hktNow());
   _albumLoading = false;
   _albumHasMore = true;
+  _albumSelected.clear();
+  _updateAlbumSelectionBar();
 
   const scrollEl = document.getElementById('album-scroll');
   if (_albumScrollHandler) scrollEl.removeEventListener('scroll', _albumScrollHandler);
@@ -1518,6 +1531,31 @@ function triggerPhotoPicker() {
   scrollEl.addEventListener('scroll', _albumScrollHandler);
 
   loadAlbumPage(_albumCursor, false);
+}
+
+function _updateAlbumSelectionBar() {
+  const bar = document.getElementById('album-selection-bar');
+  const btn = document.getElementById('album-analyze-btn');
+  if (!bar || !btn) return;
+  const n = _albumSelected.size;
+  bar.style.display = n > 0 ? 'flex' : 'none';
+  btn.textContent = n > 0 ? `分析 ${n} 张` : '分析';
+  btn.disabled = n === 0;
+}
+
+function toggleAlbumSelect(photo, dateStr, imgEl) {
+  if (_albumSelected.has(photo.asset_id)) {
+    _albumSelected.delete(photo.asset_id);
+    imgEl.classList.remove('selected');
+  } else {
+    if (_albumSelected.size >= 10) {
+      toast('一次最多选择 10 张', 'error');
+      return;
+    }
+    _albumSelected.set(photo.asset_id, { photo, date: dateStr });
+    imgEl.classList.add('selected');
+  }
+  _updateAlbumSelectionBar();
 }
 
 function loadAlbumPage(cursor, append) {
@@ -1564,7 +1602,7 @@ function loadAlbumPage(cursor, append) {
           img.className = 'album-thumb';
           img.src = `${API}/api/image?url=${encodeURIComponent(photo.thumbnail_url)}`;
           img.alt = '';
-          img.onclick = () => analyzeAlbumPhoto(photo, day.date);
+          img.onclick = () => toggleAlbumSelect(photo, day.date, img);
           grid.appendChild(img);
         });
         group.appendChild(grid);
@@ -1594,6 +1632,9 @@ function closePhotoPicker() {
     scrollEl.removeEventListener('scroll', _albumScrollHandler);
     _albumScrollHandler = null;
   }
+  _albumSelected.clear();
+  document.querySelectorAll('.album-thumb.selected').forEach(el => el.classList.remove('selected'));
+  _updateAlbumSelectionBar();
 }
 
 function openLocalUpload() {
@@ -1601,27 +1642,31 @@ function openLocalUpload() {
   triggerManualUpload();
 }
 
-async function analyzeAlbumPhoto(photo, dateStr) {
+async function analyzeAlbumSelected() {
+  if (_albumSelected.size === 0) return;
   closePhotoPicker();
   const overlay = document.getElementById('upload-overlay');
   const detail = document.getElementById('upload-detail');
   const btn = document.getElementById('upload-btn');
 
+  const items = [..._albumSelected.values()].map(({ photo, date }) => ({
+    asset_id: photo.asset_id,
+    source: photo.source,
+    date,
+    thumbnail_url: photo.thumbnail_url,
+    photo_time: photo.photo_time,
+  }));
+  _albumSelected.clear();
+
   overlay.style.display = 'flex';
-  detail.textContent = '从相册获取...';
+  detail.textContent = `正在分析 ${items.length} 张照片（同一餐会合并为一条记录）...`;
   btn.disabled = true;
 
   try {
     const response = await fetch(`${API}/api/analyze-album-photo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        asset_id: photo.asset_id,
-        source: photo.source,
-        date: dateStr,
-        thumbnail_url: photo.thumbnail_url,
-        photo_time: photo.photo_time,
-      }),
+      body: JSON.stringify({ items }),
     });
     const data = await response.json();
 
@@ -1629,11 +1674,22 @@ async function analyzeAlbumPhoto(photo, dateStr) {
     btn.disabled = false;
 
     if (data.ok) {
-      cacheDel('day:' + data.date);
+      const s = data.summary || {};
+      const dates = [...new Set(data.results.map(r => r.date).filter(Boolean))];
+      dates.forEach(d => { cacheDel('day:' + d); });
       cacheDel('dates');
       loadAvailableDates();
-      _pendingLightboxAsset = data.record.asset_id;
-      loadDay(data.date);
+      const firstAdded = data.results.find(r => r.status === 'ok');
+      if (firstAdded) {
+        _pendingLightboxAsset = firstAdded.record.asset_id;
+        loadDay(firstAdded.date);
+      }
+      const parts = [`已添加 ${s.added || 0} 条记录`];
+      if (s.already_processed) parts.push(`${s.already_processed} 张已在记录中`);
+      if (s.not_food) parts.push(`${s.not_food} 张非食物已跳过`);
+      if (s.failed) parts.push(`${s.failed} 张分析失败`);
+      if (s.failed) toast(parts.join('，'), 'error');
+      else toast(parts.join('，'));
     } else if (data.error === 'not food') {
       toast('此图片不是真实食物，无法记录', 'error');
     } else if (data.error === 'already processed') {

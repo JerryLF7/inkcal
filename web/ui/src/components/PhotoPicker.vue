@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { API, displayDate, fmtDate, hktNow } from '../utils/format.js';
 import { toast, touch } from '../store.js';
 
@@ -15,6 +15,9 @@ const status = ref('');
 const fileInput = ref(null);
 const correction = ref(null);
 const correctedDate = ref('');
+const selected = reactive(new Map());
+
+const selectedCount = computed(() => selected.size);
 
 const empty = computed(() => !loading.value && groups.value.length === 0 && !hasMore.value);
 
@@ -24,7 +27,67 @@ function reset() {
   hasMore.value = true;
   status.value = '';
   correction.value = null;
+  selected.clear();
   loadPage(false);
+}
+
+function toggleSelect(photo, date) {
+  if (selected.has(photo.asset_id)) {
+    selected.delete(photo.asset_id);
+  } else {
+    if (selected.size >= 10) {
+      toast('一次最多选择 10 张', 'error');
+      return;
+    }
+    selected.set(photo.asset_id, { photo, date });
+  }
+}
+
+function clearSelection() {
+  selected.clear();
+}
+
+async function analyzeSelected() {
+  if (analyzing.value || selected.size === 0) return;
+  analyzing.value = true;
+  const n = selected.size;
+  status.value = `正在分析 ${n} 张照片（同一餐会合并为一条记录）...`;
+  try {
+    const items = [...selected.values()].map(({ photo, date }) => ({
+      asset_id: photo.asset_id,
+      source: photo.source,
+      date,
+      thumbnail_url: photo.thumbnail_url,
+      photo_time: photo.photo_time,
+    }));
+    const response = await fetch(`${API}/api/analyze-album-photo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+
+    const s = data.summary || { added: n, not_food: 0, already_processed: 0, failed: 0 };
+    const parts = [`已添加 ${s.added} 条记录`];
+    if (s.already_processed) parts.push(`${s.already_processed} 张已在记录中`);
+    if (s.not_food) parts.push(`${s.not_food} 张非食物已跳过`);
+    if (s.failed) parts.push(`${s.failed} 张分析失败`);
+    if (s.failed) toast(parts.join('，'), 'error');
+    else toast(parts.join('，'));
+    touch();
+    if (s.failed < n) {
+      selected.clear();
+      close(true);
+    }
+  } catch (error) {
+    const message = error.message || '未知错误';
+    if (message === 'too many items (max 10)') toast('一次最多选择 10 张', 'error');
+    else toast(`批量分析失败: ${message}`, 'error');
+  } finally {
+    analyzing.value = false;
+    status.value = '';
+  }
 }
 
 async function loadPage(append) {
@@ -57,38 +120,6 @@ function close(force = false) {
 function onScroll(event) {
   const el = event.currentTarget;
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) loadPage(true);
-}
-
-async function analyzeAlbumPhoto(photo, date) {
-  if (analyzing.value) return;
-  analyzing.value = true;
-  status.value = '正在分析照片...';
-  try {
-    const response = await fetch(`${API}/api/analyze-album-photo`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        asset_id: photo.asset_id,
-        source: photo.source,
-        date,
-        thumbnail_url: photo.thumbnail_url,
-        photo_time: photo.photo_time,
-      }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    touch();
-    toast('已添加记录');
-    close(true);
-  } catch (error) {
-    const message = error.message || '未知错误';
-    if (message === 'not food') toast('此图片不是真实食物，无法记录', 'error');
-    else if (message === 'already processed') toast('此照片已在记录中', 'error');
-    else toast(`分析失败: ${message}`, 'error');
-  } finally {
-    analyzing.value = false;
-    status.value = '';
-  }
 }
 
 function chooseLocalFile() {
@@ -190,11 +221,14 @@ reset();
                 v-for="photo in group.photos"
                 :key="photo.asset_id"
                 class="album-photo"
+                :class="{ selected: selected.has(photo.asset_id) }"
                 type="button"
                 :disabled="analyzing"
-                @click="analyzeAlbumPhoto(photo, group.date)"
+                :aria-pressed="selected.has(photo.asset_id)"
+                @click="toggleSelect(photo, group.date)"
               >
                 <img :src="`${API}/api/image?url=${encodeURIComponent(photo.thumbnail_url)}`" alt="">
+                <span class="check" aria-hidden="true">✓</span>
               </button>
             </div>
           </template>
@@ -203,7 +237,14 @@ reset();
         </div>
 
         <footer class="picker-foot">
-          <button class="primary-button" type="button" :disabled="analyzing" @click="chooseLocalFile">从本地上传</button>
+          <div v-if="selectedCount > 0" class="selection-bar">
+            <button class="secondary-button" type="button" :disabled="analyzing" @click="clearSelection">取消</button>
+            <button class="primary-button analyze-button" type="button" :disabled="analyzing" @click="analyzeSelected">
+              分析 {{ selectedCount }} 张
+            </button>
+          </div>
+          <button v-else class="primary-button" type="button" :disabled="analyzing" @click="chooseLocalFile">从本地上传</button>
+          <p class="pick-hint">点击照片选中/取消，可多选（同餐照片会合并为一条记录）</p>
         </footer>
       </template>
 
@@ -229,10 +270,17 @@ h2 { margin: 0; color: #e6e6e6; font-size: 16px; font-weight: 600; }
 .album-date { color: #9a9a9a; font-size: 12px; margin: 12px 0 8px; }
 .album-date:first-child { margin-top: 0; }
 .album-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
-.album-photo { aspect-ratio: 1; padding: 0; overflow: hidden; background: #252525; border: 1px solid #303030; border-radius: 6px; cursor: pointer; }
+.album-photo { position: relative; aspect-ratio: 1; padding: 0; overflow: hidden; background: #252525; border: 1px solid #303030; border-radius: 6px; cursor: pointer; }
 .album-photo:disabled { cursor: wait; opacity: .55; }
 .album-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.album-photo.selected { border-color: #2a6eff; box-shadow: 0 0 0 2px #2a6eff; }
+.album-photo .check { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; display: none; align-items: center; justify-content: center; border-radius: 50%; background: #2a6eff; color: #fff; font-size: 11px; line-height: 1; }
+.album-photo.selected .check { display: flex; }
 .picker-foot { padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid #292929; }
+.selection-bar { display: flex; gap: 8px; }
+.selection-bar .secondary-button { flex: 0 0 auto; }
+.analyze-button { flex: 1; width: auto; }
+.pick-hint { margin: 8px 0 0; color: #6f6f6f; font-size: 11px; text-align: center; }
 .primary-button, .secondary-button { border-radius: 6px; padding: 9px 12px; font: inherit; font-size: 13px; cursor: pointer; }
 .primary-button { width: 100%; border: 1px solid #2a6eff; background: #2a6eff; color: #fff; }
 .primary-button:disabled { opacity: .55; cursor: wait; }

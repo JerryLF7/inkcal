@@ -698,48 +698,203 @@ def api_album_photos():
 
 @app.route("/api/analyze-album-photo", methods=["POST"])
 def api_analyze_album_photo():
-    """Download album original, run Gemini (skip food detection), save record."""
+    """Analyze album photo(s): download originals, run Luna (or legacy Gemini).
+
+    Body: either the legacy single-photo shape
+      {asset_id, source, date, thumbnail_url?, photo_time?}
+    or a batch shape
+      {items: [{asset_id, source, date, thumbnail_url?, photo_time?}, ...]}
+
+    Batch responses aggregate per-item outcomes; with AGENT_ENABLED=1 the
+    whole batch goes through Luna in one harness run so same-meal photos
+    are grouped into a single record.
+    """
     data = request.get_json() or {}
-    asset_id = data.get("asset_id", "")
-    source = data.get("source", "")
-    date_str = data.get("date", "")
-    thumbnail_url = data.get("thumbnail_url", "")
-    photo_time = data.get("photo_time", "")
 
-    if not asset_id or not source or not _valid_date(date_str):
-        return jsonify({"error": "missing or invalid params"}), 400
+    # Normalize to item list
+    if "items" in data:
+        items = data["items"]
+        if not isinstance(items, list) or not items:
+            return jsonify({"error": "items must be a non-empty list"}), 400
+        if len(items) > 10:
+            return jsonify({"error": "too many items (max 10)"}), 400
+    else:
+        items = [data]
 
-    gemini_key = os.getenv("GEMINI_API_KEY", "")
-    if not gemini_key:
+    config = _pipeline_config()
+    if not config["gemini_key"]:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 500
 
-    from src.pipeline_ops import analyze_asset
+    # Validate all items first — reject the whole request on bad params
+    # so the caller never gets a partial surprise.
+    for i, it in enumerate(items):
+        if (not it.get("asset_id") or not it.get("source")
+                or not _valid_date(it.get("date", ""))):
+            return jsonify({"error": f"item {i}: missing or invalid params"}), 400
 
-    config = {
-        "immich_url": os.getenv("IMMICH_URL", ""),
-        "immich_key": os.getenv("IMMICH_API_KEY", ""),
-        "photoprism_url": os.getenv("PHOTOPRISM_URL", ""),
-        "photoprism_key": os.getenv("PHOTOPRISM_API_KEY", ""),
-        "gemini_key": gemini_key,
-        "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
-        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-    }
-
-    record, error = _analyze_album_photo_impl(
-        asset_id, source, config,
-        photo_time=photo_time,
-        thumbnail_url=thumbnail_url,
+    # Batch + agent enabled: one Luna harness run over the whole selection so
+    # same-meal photos are grouped into a single record (the whole point of
+    # multi-select). Legacy single shape keeps the per-item path.
+    use_batch_agent = (
+        len(items) > 1
+        and os.getenv("AGENT_ENABLED", "0") == "1"
+        and os.getenv("LUNA_API_KEY", "")
     )
-    if error == "already_processed":
-        return jsonify({"error": "already processed"}), 409
-    if error == "not_food":
-        return jsonify({"error": "not food"}), 422
-    if error == "analysis_failed":
-        return jsonify({"error": "analysis failed"}), 503
-    if error is not None:
-        return jsonify({"error": error}), 500
+    if use_batch_agent:
+        return _analyze_album_batch_impl(items, config)
 
-    return jsonify({"ok": True, "record": record, "date": date_str})
+    results = []
+    for it in items:
+        record, error = _analyze_album_photo_impl(
+            it["asset_id"], it["source"], config,
+            photo_time=it.get("photo_time", ""),
+            thumbnail_url=it.get("thumbnail_url", ""),
+        )
+        if error == "already_processed":
+            results.append({"asset_id": it["asset_id"],
+                            "status": "already_processed", "date": it["date"]})
+        elif error == "not_food":
+            results.append({"asset_id": it["asset_id"], "status": "not_food",
+                            "date": it["date"]})
+        elif error == "analysis_failed":
+            results.append({"asset_id": it["asset_id"], "status": "analysis_failed",
+                            "date": it["date"]})
+        elif error is not None:
+            results.append({"asset_id": it["asset_id"], "status": "error",
+                            "detail": error, "date": it["date"]})
+        else:
+            results.append({"asset_id": it["asset_id"], "status": "ok",
+                            "record": record, "date": it["date"]})
+
+    # Single-item shape keeps the legacy response contract exactly.
+    if len(items) == 1:
+        r = results[0]
+        if r["status"] == "ok":
+            return jsonify({"ok": True, "record": r["record"], "date": r["date"]})
+        error_map = {"already_processed": 409, "not_food": 422,
+                     "analysis_failed": 503, "error": 500}
+        body = {"error": r["status"]}
+        if "detail" in r:
+            body["detail"] = r["detail"]
+        return jsonify(body), error_map[r["status"]]
+
+    added = [r for r in results if r["status"] == "ok"]
+    return jsonify({
+        "ok": True,
+        "results": results,
+        "summary": {
+            "total": len(results),
+            "added": len(added),
+            "already_processed": sum(1 for r in results if r["status"] == "already_processed"),
+            "not_food": sum(1 for r in results if r["status"] == "not_food"),
+            "failed": sum(1 for r in results if r["status"] in ("analysis_failed", "error")),
+        },
+    })
+
+
+def _analyze_album_batch_impl(items: list[dict], config: dict):
+    """Analyze a multi-photo selection in ONE Luna harness run.
+
+    Downloads all originals up front, hands the whole batch to
+    analyze_assets_via_agent (same-meal grouping inside), then reports
+    per-item outcomes. Any harness failure falls back to per-item analysis
+    so the user still gets results instead of a dead button.
+    """
+    from src.pipeline_ops import analyze_assets_via_agent, _download_original, _resolve_photo_time
+
+    # Build asset payloads; drop items that fail to download (reported individually)
+    assets = []
+    download_failed = []
+    for it in items:
+        image_bytes = _download_original(it["asset_id"], it["source"], config)
+        if image_bytes is None:
+            download_failed.append(it)
+            continue
+        photo_time = it.get("photo_time") or _resolve_photo_time(
+            it["asset_id"], it["source"], config)
+        assets.append({
+            "asset_id": it["asset_id"],
+            "source": it["source"],
+            "photo_time": photo_time,
+            "image_bytes": image_bytes,
+            "thumbnail_url": it.get("thumbnail_url", ""),
+        })
+
+    results = []
+    if assets:
+        records, skipped, fallback = analyze_assets_via_agent(assets, config)
+        if fallback is None:
+            rec_map = {r["asset_id"]: r for r in (records or [])}
+            skipped_set = set(skipped)
+            for a in assets:
+                aid = a["asset_id"]
+                if aid in rec_map:
+                    results.append({"asset_id": aid, "status": "ok",
+                                    "record": rec_map[aid], "date": _item_date(items, aid)})
+                elif aid in skipped_set:
+                    results.append({"asset_id": aid, "status": "not_food",
+                                    "date": _item_date(items, aid)})
+                else:
+                    results.append({"asset_id": aid, "status": "already_processed",
+                                    "date": _item_date(items, aid)})
+        else:
+            logger.warning("batch agent fallback (%s); analyzing per-item", fallback)
+            return _analyze_album_batch_per_item(items, config)
+
+    for it in download_failed:
+        results.append({"asset_id": it["asset_id"], "status": "error",
+                        "detail": "download_failed", "date": it["date"]})
+
+    return jsonify({
+        "ok": True,
+        "results": results,
+        "summary": {
+            "total": len(results),
+            "added": sum(1 for r in results if r["status"] == "ok"),
+            "already_processed": sum(1 for r in results if r["status"] == "already_processed"),
+            "not_food": sum(1 for r in results if r["status"] == "not_food"),
+            "failed": sum(1 for r in results if r["status"] in ("analysis_failed", "error")),
+        },
+    })
+
+
+def _analyze_album_batch_per_item(items: list[dict], config: dict):
+    """Per-item fallback: reuse the single-item loop shape."""
+    results = []
+    for it in items:
+        record, error = _analyze_album_photo_impl(
+            it["asset_id"], it["source"], config,
+            photo_time=it.get("photo_time", ""),
+            thumbnail_url=it.get("thumbnail_url", ""),
+        )
+        if error == "already_processed":
+            results.append({"asset_id": it["asset_id"], "status": "already_processed", "date": it["date"]})
+        elif error == "not_food":
+            results.append({"asset_id": it["asset_id"], "status": "not_food", "date": it["date"]})
+        elif error == "analysis_failed":
+            results.append({"asset_id": it["asset_id"], "status": "analysis_failed", "date": it["date"]})
+        elif error is not None:
+            results.append({"asset_id": it["asset_id"], "status": "error", "detail": error, "date": it["date"]})
+        else:
+            results.append({"asset_id": it["asset_id"], "status": "ok", "record": record, "date": it["date"]})
+    return jsonify({
+        "ok": True,
+        "results": results,
+        "summary": {
+            "total": len(results),
+            "added": sum(1 for r in results if r["status"] == "ok"),
+            "already_processed": sum(1 for r in results if r["status"] == "already_processed"),
+            "not_food": sum(1 for r in results if r["status"] == "not_food"),
+            "failed": sum(1 for r in results if r["status"] in ("analysis_failed", "error")),
+        },
+    })
+
+
+def _item_date(items: list[dict], asset_id: str) -> str:
+    for it in items:
+        if it["asset_id"] == asset_id:
+            return it.get("date", "")
+    return ""
 
 
 def _pipeline_config() -> dict:

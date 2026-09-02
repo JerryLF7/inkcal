@@ -459,6 +459,22 @@ def _agent_add(dec, aid: str, batch: list[dict], run_id: str):
 # ── subcommand: run ──────────────────────────────────────────────────
 
 def cmd_run(args):
+    # Single-instance guard: cron runs every 10 min but a Luna harness loop
+    # can take much longer (observed ~11 min); an overlapping run would
+    # double-process the same photos and leave orphan agent decisions.
+    import fcntl
+
+    lock_path = DATA_DIR / "inkcal-run.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fp = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        logger.warning("另一个 inkcal run 正在执行，本次跳过 (lock: %s)", lock_path)
+        return
+    lock_fp.write(str(os.getpid()))
+    lock_fp.flush()
+
     db.init_db()
 
     from src.food_detector import FoodDetector
