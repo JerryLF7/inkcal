@@ -308,6 +308,30 @@ def _record_brief(r: dict) -> dict:
     )}
 
 
+def _group_brief(r: dict) -> dict:
+    """Brief of a PRIMARY record plus its photo/sub-item rows (同餐组).
+
+    photos 按拍摄时间排序，含主行自己；独立条目形态的从行携带自己的
+    meal/数值，状态延续形态的从行为 0 值。
+    """
+    b = _record_brief(r)
+    b["photos"] = [{k: p.get(k) for k in
+                    ("asset_id", "photo_time", "meal", "calories")}
+                   for p in r.get("photos", [])]
+    return b
+
+
+def _resolve_primary(rec: dict) -> dict:
+    """若传入的是同餐组从行，解析到组的主记录（写操作只作用于主记录）。"""
+    from src import db
+
+    if rec.get("merged_into"):
+        root = db.get_record_by_asset_id(rec["merged_into"])
+        if root:
+            return root
+    return rec
+
+
 def get_records_in_range(args: dict, deps: dict) -> dict:
     from src import db
 
@@ -316,8 +340,9 @@ def get_records_in_range(args: dict, deps: dict) -> dict:
     if not start or not end:
         return {"ok": False, "error": "start and end are required (YYYY-MM-DD)"}
     records = db.get_records_by_date_range(start, end)
-    return {"ok": True, "count": len(records),
-            "records": [_record_brief(r) for r in records]}
+    grouped = db.group_meals(records)
+    return {"ok": True, "count": len(grouped),
+            "records": [_group_brief(r) for r in grouped]}
 
 
 def get_intake_stats(args: dict, deps: dict) -> dict:
@@ -350,8 +375,16 @@ def search_meals(args: dict, deps: dict) -> dict:
         end_date=str(args.get("end", "")).strip() or None,
         limit=10,
     )
-    return {"ok": True, "count": len(records),
-            "records": [_record_brief(r) for r in records]}
+    # 命中从行时归并到组主记录，一餐只出现一次
+    roots: dict[str, dict] = {}
+    for r in records:
+        root_id = db.resolve_group_root(r["asset_id"])
+        root = db.get_record_by_asset_id(root_id)
+        if root:
+            roots.setdefault(root_id, root)
+    grouped = db.group_meals(list(roots.values()))
+    return {"ok": True, "count": len(grouped),
+            "records": [_group_brief(r) for r in grouped]}
 
 
 def get_decisions(args: dict, deps: dict) -> dict:
@@ -384,6 +417,7 @@ def edit_record(args: dict, deps: dict) -> dict:
     rec = db.get_record_by_id(int(record_id))
     if not rec:
         return {"ok": False, "error": f"record {record_id} not found"}
+    rec = _resolve_primary(rec)
 
     allowed = {"meal", "calories", "protein_g", "carbs_g", "fat_g"}
     clean = {k: v for k, v in updates.items() if k in allowed}
@@ -408,6 +442,7 @@ def reanalyze_record_tool(args: dict, deps: dict) -> dict:
     rec = db.get_record_by_id(int(record_id))
     if not rec:
         return {"ok": False, "error": f"record {record_id} not found"}
+    rec = _resolve_primary(rec)
 
     config = deps.get("pipeline_config")
     if not config:
@@ -432,6 +467,7 @@ def request_delete_record(args: dict, deps: dict) -> dict:
     rec = db.get_record_by_id(int(record_id))
     if not rec:
         return {"ok": False, "error": f"record {record_id} not found"}
+    rec = _resolve_primary(rec)
     return {
         "ok": True,
         "requires_confirmation": True,

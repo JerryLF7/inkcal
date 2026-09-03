@@ -194,8 +194,34 @@ def analyze_assets_via_agent(
     records: list[dict] = []
     skipped: list[str] = []
     covered: set[str] = set()
+    deferred: list = []  # 形态 B 的 group_with add（第二遍处理，目标需先落库）
     session_date = max(((a.get("photo_time") or "")[:10] for a in pending),
                        default=datetime.now(HKT).strftime("%Y-%m-%d"))
+
+    def _apply_add(dec, aid: str, merged_into: str | None = None,
+                   zero: bool = False):
+        """Insert one record row for a covered asset (respecting grouping)."""
+        item = next((a for a in pending if a["asset_id"] == aid), None)
+        if item is None:
+            logger.error("agent path: add references unknown asset %s",
+                         aid[:8])
+            return
+        record = _build_record(
+            asset_id=item["asset_id"],
+            source=item.get("source", "manual"),
+            photo_time=item.get("photo_time", ""),
+            thumbnail_url=item.get("thumbnail_url", ""),
+            result=dec.result,
+            merged_into=merged_into,
+            zero=zero,
+        )
+        db.insert_record(record)
+        db.remove_classified_non_food(aid)
+        records.append(record)
+        logger.info("agent path: ✅ add [%s...] %s ~%skcal%s",
+                    aid[:8], dec.result.get("meal"),
+                    record.get("calories"),
+                    f" └ merged into {merged_into[:8]}" if merged_into else "")
 
     for dec in decisions:
         db.insert_agent_decision(
@@ -205,6 +231,7 @@ def analyze_assets_via_agent(
                 "action": dec.action,
                 "relation": dec.relation,
                 "target_asset_id": dec.target_asset_id,
+                "group_with": dec.group_with,
                 "result": dec.result,
                 "reasoning": dec.reasoning,
                 "prompt_for_gemini": dec.prompt_for_gemini,
@@ -217,6 +244,7 @@ def analyze_assets_via_agent(
             "action": dec.action,
             "relation": dec.relation,
             "target_asset_id": dec.target_asset_id,
+            "group_with": dec.group_with,
             "meal": dec.result.get("meal"),
             "calories": dec.result.get("calories"),
             "origin": "manual",
@@ -235,26 +263,36 @@ def analyze_assets_via_agent(
                         "(manual photos have no target record)")
             dec = replace(dec, action="add", relation="new_meal")
 
+        if dec.group_with:
+            # 形态 B：延后——group_with 可能指向同批稍后落库的照片
+            deferred.append(dec)
+            continue
+
         if dec.action == "add":
-            for aid in dec.asset_ids:
-                item = next((a for a in pending if a["asset_id"] == aid), None)
-                if item is None:
-                    logger.error("agent path: add references unknown asset %s",
-                                 aid[:8])
-                    continue
-                record = _build_record(
-                    asset_id=item["asset_id"],
-                    source=item.get("source", "manual"),
-                    photo_time=item.get("photo_time", ""),
-                    thumbnail_url=item.get("thumbnail_url", ""),
-                    result=dec.result,
+            if len(dec.asset_ids) > 1:
+                # 形态 A（状态延续）：最早拍摄为主记录，其余 0 值从行
+                ordered = sorted(
+                    dec.asset_ids,
+                    key=lambda a: next(
+                        (x.get("photo_time", "") for x in pending
+                         if x["asset_id"] == a), ""),
                 )
-                db.insert_record(record)
-                db.remove_classified_non_food(aid)
-                records.append(record)
-                logger.info("agent path: ✅ add [%s...] %s ~%skcal",
-                            aid[:8], dec.result.get("meal"),
-                            dec.result.get("calories"))
+                _apply_add(dec, ordered[0])
+                for aid in ordered[1:]:
+                    _apply_add(dec, aid, merged_into=ordered[0], zero=True)
+            else:
+                _apply_add(dec, dec.asset_ids[0])
+
+    # 第二遍：形态 B 的 group_with add（目标此时应已落库）
+    for dec in deferred:
+        root = None
+        if db.get_record_by_asset_id(dec.group_with):
+            root = db.resolve_group_root(dec.group_with)
+        if root is None:
+            logger.error("agent path: group_with target missing: %s"
+                         "（降级为独立记录）", dec.group_with[:8])
+        for aid in dec.asset_ids:
+            _apply_add(dec, aid, merged_into=root)
 
     missing = [a["asset_id"] for a in pending if a["asset_id"] not in covered]
     if missing:
@@ -266,8 +304,13 @@ def analyze_assets_via_agent(
 
 
 def _build_record(asset_id: str, source: str, photo_time: str,
-                  thumbnail_url: str, result: dict) -> dict:
-    """Assemble a records-row dict from a Luna decision result."""
+                  thumbnail_url: str, result: dict,
+                  merged_into: str | None = None, zero: bool = False) -> dict:
+    """Assemble a records-row dict from a Luna decision result.
+
+    merged_into: 同餐组从行指向主记录的 asset_id。zero=True（状态延续形态）
+    数值清零——该餐总值只在主行；zero=False（独立条目形态）保留自己的数值。
+    """
     return {
         "asset_id": asset_id,
         "source_type": source,
@@ -275,12 +318,13 @@ def _build_record(asset_id: str, source: str, photo_time: str,
         "photo_time": photo_time or datetime.now(HKT).isoformat(),
         "thumbnail_url": thumbnail_url,
         "meal": result.get("meal", "unknown"),
-        "calories": result.get("calories", 0),
-        "protein_g": result.get("protein_g", 0),
-        "carbs_g": result.get("carbs_g", 0),
-        "fat_g": result.get("fat_g", 0),
+        "calories": 0 if zero else result.get("calories", 0),
+        "protein_g": 0 if zero else result.get("protein_g", 0),
+        "carbs_g": 0 if zero else result.get("carbs_g", 0),
+        "fat_g": 0 if zero else result.get("fat_g", 0),
         "confidence": result.get("confidence", "low"),
         "analyzed_at": datetime.now(HKT).isoformat(),
+        "merged_into": merged_into,
     }
 
 

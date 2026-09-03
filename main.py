@@ -118,7 +118,8 @@ def load_ignored() -> set[str]:
 
 
 def append_log(date_str: str, asset_id: str, photo_time: str,
-               thumbnail_url: str, result: dict, source_type: str = "immich"):
+               thumbnail_url: str, result: dict, source_type: str = "immich",
+               merged_into: str | None = None):
     record = {
         "asset_id": asset_id,
         "source_type": source_type,
@@ -132,6 +133,7 @@ def append_log(date_str: str, asset_id: str, photo_time: str,
         "fat_g": result.get("fat_g", 0),
         "confidence": result.get("confidence", "low"),
         "analyzed_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "merged_into": merged_into,
     }
     return db.insert_record(record)
 
@@ -366,6 +368,7 @@ def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
     session_date = max((_date_of(a["photo_time"]) for a in assets),
                        default=date_str)
     covered: set[str] = set()
+    deferred: list = []  # 形态 B 的 group_with add 决策（第二遍处理）
 
     for dec in decisions:
         db.insert_agent_decision(
@@ -375,6 +378,7 @@ def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
                 "action": dec.action,
                 "relation": dec.relation,
                 "target_asset_id": dec.target_asset_id,
+                "group_with": dec.group_with,
                 "result": dec.result,
                 "reasoning": dec.reasoning,
                 "prompt_for_gemini": dec.prompt_for_gemini,
@@ -387,6 +391,7 @@ def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
             "action": dec.action,
             "relation": dec.relation,
             "target_asset_id": dec.target_asset_id,
+            "group_with": dec.group_with,
             "meal": dec.result.get("meal"),
             "calories": dec.result.get("calories"),
         })
@@ -400,11 +405,18 @@ def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
                             dec.reasoning[:60])
             continue
 
+        if dec.group_with:
+            # 形态 B（同餐独立条目）：延后到第二遍处理——group_with 可能指向
+            # 同批稍后决策才落库的照片。
+            deferred.append(dec)
+            continue
+
         if dec.action == "update":
-            target = dec.target_asset_id
+            root = db.resolve_group_root(dec.target_asset_id) \
+                if dec.target_asset_id else None
             ok = False
-            if target:
-                ok = db.update_record(target, {
+            if root:
+                ok = db.update_record(root, {
                     "meal": dec.result.get("meal"),
                     "calories": dec.result.get("calories"),
                     "protein_g": dec.result.get("protein_g"),
@@ -414,19 +426,48 @@ def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
                     "model_used": f"agent+{analyzer.model}",
                 })
             if ok:
+                # 幂等修复：update 覆盖的新照片必须落 0 值从行，否则下一轮
+                # cron 的 already_processed 查不到它们 → 无限重复处理
+                # （2026-08-29 生产事故：同一照片 6 小时被 update 35 次）。
+                for aid in dec.asset_ids:
+                    _agent_add(dec, aid, batch, run_id,
+                               merged_into=root, zero=True)
                 logger.info("  🔄 update → [%s...] %s ~%skcal",
-                            target[:8], dec.result.get("meal"),
+                            root[:8], dec.result.get("meal"),
                             dec.result.get("calories"))
             else:
                 logger.warning("  ⚠️ update 目标不存在: %s（降级为 add）",
-                               target)
+                               dec.target_asset_id)
                 for aid in dec.asset_ids:
                     _agent_add(dec, aid, batch, run_id)
             continue
 
-        # action == "add"
+        # action == "add"，无 group_with
+        if len(dec.asset_ids) > 1:
+            # 形态 A（状态延续）：最早拍摄的照片是主记录（带全量数值），
+            # 其余挂 0 值从行——一组照片只计一次数。
+            ordered = sorted(
+                dec.asset_ids,
+                key=lambda a: next(
+                    (it["photo_time"] for it in batch if it["aid"] == a), ""),
+            )
+            _agent_add(dec, ordered[0], batch, run_id)
+            for aid in ordered[1:]:
+                _agent_add(dec, aid, batch, run_id,
+                           merged_into=ordered[0], zero=True)
+        else:
+            _agent_add(dec, dec.asset_ids[0], batch, run_id)
+
+    # 第二遍：形态 B 的 group_with add（目标此时应已落库）
+    for dec in deferred:
+        root = None
+        if db.get_record_by_asset_id(dec.group_with):
+            root = db.resolve_group_root(dec.group_with)
+        if root is None:
+            logger.error("  ❌ group_with 目标不存在: %s（降级为独立记录）",
+                         dec.group_with[:8])
         for aid in dec.asset_ids:
-            _agent_add(dec, aid, batch, run_id)
+            _agent_add(dec, aid, batch, run_id, merged_into=root)
 
     # Safety net: every photo must be settled exactly once
     missing = [it["aid"] for it in batch if it["aid"] not in covered]
@@ -438,17 +479,29 @@ def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
                 _legacy_analyze_single(it, analyzer, run_id=run_id)
 
 
-def _agent_add(dec, aid: str, batch: list[dict], run_id: str):
-    """Apply one 'add' decision: insert a record for a single new photo."""
+def _agent_add(dec, aid: str, batch: list[dict], run_id: str, *,
+               merged_into: str | None = None, zero: bool = False):
+    """Apply one 'add' decision: insert a record for a single new photo.
+
+    merged_into: 非 None 时插为同餐组的从行。zero=True（状态延续形态）
+    数值清零——总值只在主行；zero=False（独立条目形态）保留自己的数值。
+    """
     item = next((it for it in batch if it["aid"] == aid), None)
     if item is None:
         logger.error("  ❌ add 决策引用了批外 asset_id: %s", aid)
         return
+    if db.get_record_by_asset_id(aid):
+        logger.warning("  ⚠️ [%s...] 已有记录，跳过重复插入", aid[:8])
+        return
+    result = dict(dec.result)
+    if zero:
+        result.update({"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0})
     rec = append_log(_date_of(item["photo_time"]), aid, item["photo_time"],
-                     item["thumbnail_url"], dec.result,
-                     source_type=item["source"])
-    logger.info("  ✅ add [%s...] %s ~%skcal", aid[:8],
-                dec.result.get("meal"), dec.result.get("calories"))
+                     item["thumbnail_url"], result,
+                     source_type=item["source"], merged_into=merged_into)
+    tag = f"└ merged into {merged_into[:8]}" if merged_into else ""
+    logger.info("  ✅ add [%s...] %s ~%skcal %s", aid[:8],
+                rec.get("meal"), rec.get("calories"), tag)
     db.add_event(run_id, "meal_recorded", aid, {
         "record_id": rec.get("id"),
         "meal": rec.get("meal"),
@@ -607,9 +660,18 @@ def cmd_view(args):
                 time_str = time_str[:16]
         else:
             time_str = r.get("analyzed_at", "")[:16]
+        merged = bool(r.get("merged_into"))
+        # 同餐组从行：缩进显示。形态 A（0 值）只示照片时间；
+        # 形态 B（独立条目）带自己的餐名与数值。
+        if merged and not (r.get("calories") or 0):
+            meal_cell = "└ 📷"
+        elif merged:
+            meal_cell = "└ " + r.get("meal", "?")[:18]
+        else:
+            meal_cell = r.get("meal", "?")[:20]
         rows.append([
             r.get("asset_id", "?")[:8],
-            r.get("meal", "?")[:20],
+            meal_cell,
             f"{r.get('calories', 0)}kcal",
             f"{r.get('protein_g', 0)}g",
             f"{r.get('carbs_g', 0)}g",
@@ -971,27 +1033,101 @@ def cmd_delete(args):
         fail(e.code, e.message, candidates=e.candidates)
 
     aid = record["asset_id"]
-    replacement_image = record.get("replacement_image", "")
 
-    deleted = db.delete_record(aid)
-    if deleted is None:
-        fail("not_found", f"删除失败: {aid}")
+    if args.photo:
+        # 仅移除这一张照片；删主行时最早从行晋升
+        result = db.delete_record_photo(aid)
+        if result is None:
+            fail("not_found", f"删除失败: {aid}")
+        deleted, promoted = result
+        deleted_rows = [deleted]
+        deleted_assets = [aid]
+    else:
+        # 整餐删除：级联同餐组所有照片行
+        rows = db.delete_record_group(aid)
+        if rows is None:
+            fail("not_found", f"删除失败: {aid}")
+        deleted = rows[0]
+        promoted = None
+        deleted_rows = rows
+        deleted_assets = [r["asset_id"] for r in rows]
 
-    # Clean up local replacement image
-    if replacement_image:
-        try:
-            Path(replacement_image).unlink(missing_ok=True)
-        except Exception:
-            pass
+    # Clean up local replacement images of all deleted rows
+    for r in deleted_rows:
+        replacement_image = r.get("replacement_image", "")
+        if replacement_image:
+            try:
+                Path(replacement_image).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # Add to ignore list so cron won't re-process
-    if aid and not aid.startswith("manual-"):
-        db.add_ignored_asset(aid)
+    for da in deleted_assets:
+        if da and not da.startswith("manual-"):
+            db.add_ignored_asset(da)
 
     if _emit({"ok": True, "command": "delete", "asset_id": aid,
+              "deleted_assets": deleted_assets, "promoted": promoted,
               "record": deleted}):
         return
-    print(f"🗑️  已删除 {aid[:8]}... ({record.get('meal', '?')})")
+    if promoted:
+        print(f"🗑️  已移除照片 {aid[:8]}...，{promoted[:8]}... 晋升为餐主记录"
+              f"（原数值随主行删除，请按需 reanalyze）")
+    elif len(deleted_assets) > 1:
+        print(f"🗑️  已删除整餐（{len(deleted_assets)} 张照片）: "
+              f"{deleted.get('meal', '?')}")
+    else:
+        print(f"🗑️  已删除 {aid[:8]}... ({deleted.get('meal', '?')})")
+
+
+# ── subcommand: merge ────────────────────────────────────────────────
+
+def cmd_merge(args):
+    """把一条记录并入另一条，成为同餐组的照片行。
+
+    默认清零从行数值（状态延续形态：同一食物重复记录，总值以主行为准，
+    之后可 reanalyze 主行修正）；--keep 保留从行数值（独立条目形态：
+    同餐不同食物，各自数值组内求和）。
+    """
+    db.init_db()
+
+    try:
+        primary = resolve_one(asset_prefix=args.primary)
+        secondary = resolve_one(asset_prefix=args.secondary)
+    except ResolverError as e:
+        fail(e.code, e.message, candidates=e.candidates)
+
+    pa, sa = primary["asset_id"], secondary["asset_id"]
+    if pa == sa:
+        fail("invalid_args", "主记录与从记录是同一条")
+    if secondary.get("merged_into"):
+        fail("invalid_args", f"{sa[:8]} 已是其他餐的附属行，不能再次并入")
+
+    conn = db._get_conn()
+    children = conn.execute(
+        "SELECT asset_id FROM records WHERE merged_into = ?", (sa,)
+    ).fetchall()
+
+    updates: dict = {"merged_into": pa}
+    if not args.keep:
+        updates.update({"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0})
+    db.update_record(sa, updates)
+    # 从行若自带组，组员整体转挂新主行（保持组扁平）
+    if children:
+        placeholders = ",".join("?" for _ in children)
+        conn.execute(
+            f"UPDATE records SET merged_into = ? WHERE asset_id IN ({placeholders})",
+            (pa, *[c["asset_id"] for c in children]))
+        conn.commit()
+
+    if _emit({"ok": True, "command": "merge", "primary": pa,
+              "secondary": sa, "kept_values": bool(args.keep)}):
+        return
+    mode = "保留数值（独立条目）" if args.keep else "数值清零（状态延续）"
+    print(f"🔗 已并入：{sa[:8]}... → {pa[:8]}... [{mode}]"
+          + (f"，{len(children)} 张组员一并转挂" if children else ""))
+    if not args.keep:
+        print("   提示：如需修正该餐估值，用 inkcal reanalyze 主记录")
 
 
 # ── subcommand: stats ────────────────────────────────────────────────
@@ -1511,8 +1647,18 @@ def main():
 
     p_delete = sub.add_parser("delete", help="Delete a record and ignore the asset")
     p_delete.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
+    p_delete.add_argument("--photo", action="store_true",
+                          help="仅移除这一张照片（默认整餐删除，级联同餐组）")
     add_locator_args(p_delete)
     add_json_flag(p_delete)
+
+    p_merge = sub.add_parser("merge",
+                             help="Merge a record into another as a same-meal photo")
+    p_merge.add_argument("primary", help="主记录 asset_id（前缀即可）")
+    p_merge.add_argument("secondary", help="要并入的记录 asset_id（前缀即可）")
+    p_merge.add_argument("--keep", action="store_true",
+                         help="保留从记录自己的数值（独立条目形态）；默认清零（状态延续形态）")
+    add_json_flag(p_merge)
 
     p_stats = sub.add_parser("stats", help="Aggregate stats over a date range")
     p_stats.add_argument("--from", dest="from_date", help="Range start (YYYY-MM-DD)")
@@ -1581,6 +1727,8 @@ def main():
         cmd_explain(args)
     elif args.command == "delete":
         cmd_delete(args)
+    elif args.command == "merge":
+        cmd_merge(args)
     elif args.command == "stats":
         cmd_stats(args)
     elif args.command == "analyze":

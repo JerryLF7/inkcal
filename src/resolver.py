@@ -21,6 +21,15 @@ class Resolution:
     error: str | None = None       # 'not_found' | 'ambiguous'
 
 
+def _to_primary(rec: dict) -> dict:
+    """同餐组从行归并到主记录：写命令只应作用于主记录。"""
+    if rec.get("merged_into"):
+        root = db.get_record_by_asset_id(rec["merged_into"])
+        if root:
+            return root
+    return rec
+
+
 def resolve(
     *,
     asset_prefix: str | None = None,
@@ -33,7 +42,8 @@ def resolve(
 
     if ref is not None:
         row = db.get_record_by_id(ref)
-        return Resolution(row, error=None if row else "not_found")
+        return Resolution(_to_primary(row) if row else None,
+                          error=None if row else "not_found")
 
     if asset_prefix:
         hits = db.find_records_by_asset_id_prefix(asset_prefix, date)
@@ -44,6 +54,13 @@ def resolve(
         hits = db.search_records(meal, start_date=date, end_date=date, limit=5)
     else:
         raise ValueError("no locator given — need one of asset_prefix/ref/last/meal")
+
+    # 同餐组归并：从行映射到组主记录并去重（避免同一餐被列成多个候选）
+    seen: dict[str, dict] = {}
+    for h in hits:
+        p = _to_primary(h)
+        seen.setdefault(p["asset_id"], p)
+    hits = list(seen.values())
 
     if len(hits) == 1:
         return Resolution(record=hits[0])

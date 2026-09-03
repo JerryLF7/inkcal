@@ -78,6 +78,7 @@ def _create_schema(conn: sqlite3.Connection):
             model_used TEXT,
             user_label TEXT CHECK(user_label IN ('correct', 'wrong')),
             replacement_image TEXT,
+            merged_into TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -126,6 +127,7 @@ def _create_schema(conn: sqlite3.Connection):
             action TEXT NOT NULL CHECK(action IN ('add', 'update', 'skip')),
             relation TEXT NOT NULL CHECK(relation IN ('new_meal', 'same_meal', 'rejected')),
             target_asset_id TEXT,
+            group_with TEXT,
             result TEXT NOT NULL,
             reasoning TEXT NOT NULL,
             prompt_for_gemini TEXT,
@@ -174,6 +176,21 @@ def _migrate_schema(conn: sqlite3.Connection):
             "ALTER TABLE classified_non_food "
             "ADD COLUMN decided_by TEXT NOT NULL DEFAULT 'siglip2'"
         )
+        conn.commit()
+
+    rcols = {r["name"] for r in conn.execute("PRAGMA table_info(records)")}
+    if "merged_into" not in rcols:
+        # Same-meal grouping: NULL = 主记录（一餐一行）; 非 NULL = 附属照片行，
+        # 指向该餐主记录的 asset_id。附属行有两种形态：
+        #   状态延续（同一食物吃前/吃后）→ 数值为 0，总值只在主行；
+        #   独立条目（同餐不同食物分开拍）→ 携带自己的数值，组内求和。
+        conn.execute("ALTER TABLE records ADD COLUMN merged_into TEXT")
+        conn.commit()
+
+    dcols = {r["name"] for r in conn.execute("PRAGMA table_info(agent_decisions)")}
+    if "group_with" not in dcols:
+        # 审计 add 决策的 group_with（形态 B 独立条目入组）
+        conn.execute("ALTER TABLE agent_decisions ADD COLUMN group_with TEXT")
         conn.commit()
 
     conn.executescript("""
@@ -274,6 +291,11 @@ def _record_from_row(row: sqlite3.Row, history: list[dict] | None = None) -> dic
         record["user_label"] = row["user_label"]
     if row["replacement_image"]:
         record["replacement_image"] = row["replacement_image"]
+    try:
+        if row["merged_into"]:
+            record["merged_into"] = row["merged_into"]
+    except (KeyError, IndexError):
+        pass  # pre-migration rows / SELECT subsets without the column
     if history:
         record["reanalysis_history"] = history
     return record
@@ -292,8 +314,9 @@ def insert_record(record: dict) -> dict:
         INSERT INTO records (
             asset_id, source_type, source_id, photo_time, thumbnail_url,
             original_url, meal, calories, protein_g, carbs_g, fat_g,
-            confidence, analyzed_at, model_used, user_label, replacement_image
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            confidence, analyzed_at, model_used, user_label, replacement_image,
+            merged_into
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             asset_id,
@@ -312,6 +335,7 @@ def insert_record(record: dict) -> dict:
             record.get("model_used"),
             record.get("user_label"),
             record.get("replacement_image"),
+            record.get("merged_into"),
         ),
     )
     conn.commit()
@@ -517,6 +541,7 @@ def update_record(asset_id: str, updates: dict) -> bool:
         "model_used": "model_used",
         "user_label": "user_label",
         "replacement_image": "replacement_image",
+        "merged_into": "merged_into",
     }
 
     set_clauses = []
@@ -559,6 +584,56 @@ def delete_record(asset_id: str) -> dict | None:
     conn.execute("DELETE FROM records WHERE asset_id = ?", (asset_id,))
     conn.commit()
     return record
+
+
+def delete_record_group(asset_id: str) -> list[dict] | None:
+    """删除整餐：asset_id 所在同餐组的所有行（主+从）。
+    返回被删行列表（主行在前），未找到返回 None。"""
+    conn = _get_conn()
+    root_id = resolve_group_root(asset_id)
+    rows = get_group_rows(root_id)
+    if not rows:
+        return None
+    ids = [r["asset_id"] for r in rows]
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(f"DELETE FROM records WHERE asset_id IN ({placeholders})", ids)
+    conn.commit()
+    prim = [r for r in rows if not r.get("merged_into")]
+    return prim + [r for r in rows if r.get("merged_into")]
+
+
+def delete_record_photo(asset_id: str) -> tuple[dict, str | None] | None:
+    """仅删除一张照片行。若删的是主行且仍有从行，最早从行晋升为主行
+    （形态 A 下晋升行为 0 值，需用户重分析补回数值）。
+    返回 (deleted_row, promoted_asset_id|None)，未找到返回 None。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM records WHERE asset_id = ?", (asset_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    record = _record_from_row(row)
+    promoted = None
+    children: list[str] = []
+    if not record.get("merged_into"):
+        children = [r["asset_id"] for r in conn.execute(
+            "SELECT asset_id FROM records WHERE merged_into = ?"
+            " ORDER BY photo_time", (asset_id,)).fetchall()]
+    conn.execute("DELETE FROM records WHERE asset_id = ?", (asset_id,))
+    if children:
+        promoted = children[0]
+        conn.execute(
+            "UPDATE records SET merged_into = NULL WHERE asset_id = ?",
+            (promoted,))
+        rest = children[1:]
+        if rest:
+            placeholders = ",".join("?" for _ in rest)
+            conn.execute(
+                f"UPDATE records SET merged_into = ?"
+                f" WHERE asset_id IN ({placeholders})",
+                (promoted, *rest))
+    conn.commit()
+    return record, promoted
 
 
 def move_record(asset_id: str, new_date: str, updates: dict | None = None) -> bool:
@@ -771,14 +846,105 @@ def get_available_dates() -> list[str]:
 
 
 def summarize_records(records: list[dict]) -> dict:
-    """Summarize a list of records (same logic as existing _summarize)."""
+    """Summarize a list of records (same logic as existing _summarize).
+
+    数值：所有行直接求和——同餐组的附属行要么是 0 值（状态延续），
+    要么携带自己的数值（独立条目），两种形态求和都正确。
+    餐数：只数主记录（merged_into 为空）。
+    """
     return {
-        "meals": len(records),
+        "meals": sum(1 for r in records if not r.get("merged_into")),
         "calories": sum(r.get("calories", 0) for r in records),
         "protein": sum(r.get("protein_g", 0) for r in records),
         "carbs": sum(r.get("carbs_g", 0) for r in records),
         "fat": sum(r.get("fat_g", 0) for r in records),
     }
+
+
+# ── same-meal grouping (merged_into) ─────────────────────────────────
+
+def resolve_group_root(asset_id: str) -> str:
+    """Walk merged_into to the group's primary asset_id (returns input if
+    already primary / not found)."""
+    conn = _get_conn()
+    current, seen = asset_id, set()
+    while current and current not in seen:
+        seen.add(current)
+        row = conn.execute(
+            "SELECT merged_into FROM records WHERE asset_id = ?", (current,)
+        ).fetchone()
+        if row is None or not row["merged_into"]:
+            return current
+        current = row["merged_into"]
+    return asset_id
+
+
+def get_group_rows(primary_asset_id: str) -> list[dict]:
+    """Primary + merged rows of one meal group, sorted by photo_time."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM records WHERE asset_id = ? OR merged_into = ?"
+        " ORDER BY photo_time",
+        (primary_asset_id, primary_asset_id),
+    ).fetchall()
+    return [_record_from_row(r) for r in rows]
+
+
+def group_meals(records: list[dict]) -> list[dict]:
+    """Group raw record rows into meals: returns only primary records, each
+    with a `photos` array (primary first, then merged rows by photo_time).
+
+    Cross-date safe: merged rows whose photo_time falls outside the queried
+    range (cross-midnight meals) are fetched via one extra query.
+    Orphan merged rows (primary missing) are dropped from top level.
+    """
+    primaries = []
+    by_asset = {}
+    stray: list[dict] = []
+    for r in records:
+        if r.get("merged_into"):
+            stray.append(r)
+        else:
+            r["photos"] = [{
+                "asset_id": r["asset_id"],
+                "thumbnail_url": r.get("thumbnail_url", ""),
+                "photo_time": r.get("photo_time", ""),
+                "meal": r.get("meal", ""),
+                "calories": r.get("calories", 0),
+            }]
+            primaries.append(r)
+            by_asset[r["asset_id"]] = r
+
+    if not primaries:
+        return []
+
+    # Merged rows can live outside the queried date range (cross-midnight)
+    conn = _get_conn()
+    placeholders = ",".join("?" for _ in primaries)
+    extra = conn.execute(
+        f"SELECT * FROM records WHERE merged_into IN ({placeholders})",
+        tuple(r["asset_id"] for r in primaries),
+    ).fetchall()
+    members = [r for r in stray]
+    seen = {r["asset_id"] for r in stray}
+    for row in extra:
+        d = _record_from_row(row)
+        if d["asset_id"] not in seen:
+            members.append(d)
+            seen.add(d["asset_id"])
+
+    for m in sorted(members, key=lambda x: x.get("photo_time") or ""):
+        root = by_asset.get(m["merged_into"])
+        if root is None:
+            continue  # orphan: primary不在本次查询范围，属于另一天的卡片
+        root["photos"].append({
+            "asset_id": m["asset_id"],
+            "thumbnail_url": m.get("thumbnail_url", ""),
+            "photo_time": m.get("photo_time", ""),
+            "meal": m.get("meal", ""),
+            "calories": m.get("calories", 0),
+        })
+    return primaries
 
 
 def get_processed_asset_ids(date_str: str) -> set[str]:
@@ -853,11 +1019,12 @@ def insert_agent_decision(session_date: str, decision: dict, *,
     cur = conn.execute(
         """INSERT INTO agent_decisions
            (session_date, run_id, asset_ids, action, relation, target_asset_id,
-            result, reasoning, prompt_for_gemini, model_used)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            group_with, result, reasoning, prompt_for_gemini, model_used)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (session_date, run_id,
          json.dumps(decision["asset_ids"], ensure_ascii=False),
          decision["action"], decision["relation"], decision.get("target_asset_id"),
+         decision.get("group_with"),
          json.dumps(decision["result"], ensure_ascii=False),
          decision["reasoning"], decision.get("prompt_for_gemini"), model_used),
     )

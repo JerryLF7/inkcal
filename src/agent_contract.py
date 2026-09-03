@@ -105,6 +105,7 @@ class Decision:
     result: dict[str, Any]        # gemini result {meal, calories, protein_g, carbs_g, fat_g, confidence}
     reasoning: str                # Luna 的判断依据（中文）
     prompt_for_gemini: str | None # 传给 Gemini 的提示词（audit）
+    group_with: str | None = None # for "add": 加入同餐组（该组主记录的 asset_id 或同批照片的 asset_id）
 
 
 def validate_decision(data: dict[str, Any]) -> Decision:
@@ -152,6 +153,16 @@ def validate_decision(data: dict[str, Any]) -> Decision:
     if action == "update" and not target:
         raise ValueError("action=update requires target_asset_id")
 
+    group_with = data.get("group_with")
+    if group_with is not None:
+        if action != "add":
+            raise ValueError("group_with is only valid for action=add")
+        if not isinstance(group_with, str) or not group_with.strip():
+            raise ValueError("group_with must be a non-empty asset_id string")
+        group_with = group_with.strip()
+        if group_with in asset_ids:
+            raise ValueError("group_with must not reference this decision's own asset_ids")
+
     reasoning = str(data.get("reasoning", "")).strip()
     if not reasoning:
         raise ValueError("reasoning must be non-empty")
@@ -164,6 +175,7 @@ def validate_decision(data: dict[str, Any]) -> Decision:
         result=result,
         reasoning=reasoning,
         prompt_for_gemini=str(data.get("prompt_for_gemini", "")) or None,
+        group_with=group_with,
     )
 
 
@@ -285,6 +297,18 @@ SYSTEM_PROMPT = """你是 inkcal 的 agent，为待处理的新食物照片做�
    原样作为你的 result，不要自己估算。多张同餐照片一起传。
 3. 照片不是真实食物（截图、包装、海报、画），或 analyze_with_gemini 返回全零 /
    "not real food"：action=skip，relation=rejected，result 全零。
+4. 同餐多照片分两种形态，区别对待：
+   a. 状态延续（同一份食物的吃前/吃后、不同角度）：一条 add 决策覆盖全部照片，
+      一起传 analyze_with_gemini 联合估算（以最终状态评估实际食用量）。
+      系统落地为：一条主记录（带数值）+ 其余照片挂为 0 值附属行。
+   b. 独立条目（同餐但各自完整的食物，如一碗面 + 一杯奶茶分开拍）：
+      每张照片单独一条 add、单独传 analyze_with_gemini 估算各自的数值；
+      第一条作为主记录，其余每条加 group_with=<第一条的 asset_id> 关联成同一餐。
+      系统按组求和，不会重复计数。
+   c. 跨批次追加（已有记录在先，新照片是同餐新增的完整食物，如餐后补拍甜点）：
+      add + group_with=<已有记录的 asset_id>，新照片携带自己的估算数值。
+      注意这与 update 不同：update 是同一食物的新状态（替换旧数值），
+      add+group_with 是新增条目（各自数值相加）。
 
 ## 输出契约（严格遵守：只输出一个 JSON 对象，无 markdown，无解释文字）
 
@@ -294,6 +318,7 @@ SYSTEM_PROMPT = """你是 inkcal 的 agent，为待处理的新食物照片做�
       "asset_ids": ["<本决策覆盖的新照片 asset_id>"],
       "action": "add" | "update" | "skip",
       "target_asset_id": "<仅 update 需要>",
+      "group_with": "<可选，仅 add：加入同餐组的目标 asset_id（同批先决策的照片或已有记录）>",
       "relation": "new_meal" | "same_meal" | "rejected",
       "result": {
         "meal": "简短中文食物描述",

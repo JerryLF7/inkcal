@@ -30,6 +30,7 @@ Immich / PhotoPrism
 - 所有日期边界采用 **Asia/Hong_Kong（UTC+8）**。
 - 写数据库必须经 `inkcal` CLI、`src/db.py` 的既有业务路径或已有 Flask API；不要用 SQLite shell 直接改数据。
 - `asset_id` 是幂等键。删除 Immich 资产对应记录时要进入 `ignored_assets`，避免 cron 重新入库。
+- 同餐组用 `records.merged_into` 表达：`NULL` = 主记录（一餐一卡），非 `NULL` = 附属照片行（指向主记录 asset_id）。两种形态：**状态延续**（同一食物吃前/吃后，Luna 一条 add 覆盖多张照片）从行数值清零，总值只在主行；**独立条目**（同餐不同食物分开拍，Luna 每张照片一条 add + `group_with` 关联）从行携带自己的数值。汇总永远对所有行直接求和（两种形态都正确），餐数只数主行。每张照片必有一行——update 决策覆盖的新照片也要落 0 值从行，否则 `already_processed` 查不到会导致 cron 无限重复处理（2026-08-29 事故：同一照片 6 小时被 update 35 次）。
 - SigLIP2 是隐私门槛；用户从相册明确选择照片或手动上传时，才可绕过食物过滤。`AGENT_ENABLED=1` 时绕过 SigLIP2 的照片仍进入 Luna（skip 契约保留），失败降级直送 Gemini；`AGENT_ENABLED=0` 时直送 Gemini。
 - Gemini 只负责估算，不负责同餐关系；Luna 只负责视觉判断/编排，不应自己编造热量。
 - Luna 写给 Gemini 的 `prompt_for_gemini` 只准描述照片关系（同餐/顺序/以哪张为准），禁止餐次结论、食物内容预判、纳入/排除决定（2026-08-31 晚餐案例：Luna 排除啤酒导致漏算）。食物内容与纳入范围由 Gemini 依照片自行判断。
@@ -55,6 +56,7 @@ npm --prefix web/ui run build
 
 # 现有回归与语法检查
 PYTHONPATH=. venv/bin/python scripts/test_contract_parse.py
+PYTHONPATH=. venv/bin/python scripts/test_merge_groups.py
 venv/bin/python -m compileall -q main.py src web/server.py
 git diff --check
 ```
@@ -76,7 +78,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 | 路径 | 职责 |
 |---|---|
-| `main.py` | CLI 入口：run/view/add/edit/search/stats/delete/label/replace/analyze/reanalyze/explain/events/migrate 等 |
+| `main.py` | CLI 入口：run/view/add/edit/search/stats/delete/label/replace/analyze/reanalyze/explain/events/migrate/merge 等；`_run_agent_batch` 负责 cron 侧 Luna 决策落地（含同餐分组与 update 幂等） |
 | `src/db.py` | SQLite schema 与全部数据访问；WAL、FTS、records、审计、chat 表 |
 | `src/immich_client.py` / `src/photoprism_client.py` | 照片源客户端与时间解析 |
 | `src/food_detector.py` | SigLIP2 本地过滤；可自动加载 `data/finetuned-model/` |
@@ -180,6 +182,10 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ## 6. 下一步：优先任务（不要重复已完成工作）
 
+### Phase 4.5：同餐组 UI（设计待讨论，后端已就绪）
+
+后端已完成：同餐组（`merged_into`）落地、分组 API（主记录 + `photos` 数组）、删除双模式、CLI `merge`。**待定设计**（已与用户对齐方向，细节待聊）：卡片 `×N` 角标 + lightbox 画廊（点击切换 + `1/2` + **每张照片分行明细**，用户明确要求明细，不要只做组级信息）。
+
 ### Phase 5：接通 Luna 聊天 Pane
 
 这是当前第一优先级。复用已有 API 与 `ChatAgent`，不要重写后端或改聊天架构。
@@ -207,11 +213,11 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ### 数据表
 
-- `records`：餐记录。
+- `records`：餐记录；`merged_into` 列表达同餐组（NULL=主记录，非空=附属照片行，详见 §1 绝对边界）。
 - `reanalysis_history`：重分析和手动编辑前的旧值。
 - `ignored_assets`：删除后永远跳过的照片。
 - `classified_non_food`：SigLIP2/Gemini 非食物判定，含 `decided_by`。
-- `agent_decisions`：Luna 批处理的 add/update/skip 决策审计。
+- `agent_decisions`：Luna 批处理的 add/update/skip 决策审计，含 `group_with`（形态 B 入组目标）。
 - `pipeline_events`：运行事件。
 - `records_fts`：餐名全文检索。
 - `chat_sessions`、`chat_messages`、`app_settings`：聊天层。
@@ -260,7 +266,10 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ### 图片来源、上传与展示约定
 
-- 相册选择器查询所有启用源的未处理照片，按日期分页（7 天/页）；用户明确选择图片后不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。选择器支持**多选（≤10 张）**：批量 shape `{items: [...]}` 在 `AGENT_ENABLED=1` 时整批进一次 Luna harness（同餐合并为一条记录），harness 失败逐张降级；单条 shape 保持旧响应契约不变。
+- 相册选择器查询所有启用源的未处理照片，按日期分页（7 天/页）；用户明确选择图片后不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。选择器支持**多选（≤10 张）**：批量 shape `{items: [...]}` 在 `AGENT_ENABLED=1` 时整批进一次 Luna harness（同餐状态延续合并为一组），harness 失败逐张降级；单条 shape 保持旧响应契约不变。
+- 记录读取 API（`/api/records`、`/api/today`、`/api/week`）返回**分组后**的数据：`records` 只含主记录，主记录带 `photos` 数组（组内全部照片，按拍摄时间排序，含 asset_id/thumbnail_url/photo_time/meal/calories）；`summary` 基于原始行求和（形态 A 从行 0 值、形态 B 从行自带数值，都正确）。聊天工具（get_records_in_range/search_meals）同样按组聚合。
+- 删除：`DELETE /api/record` 默认 `mode="meal"`（整餐级联：组内所有行删除 + 全部 asset_id 进 ignored_assets）；`mode="photo"` 仅移除单张照片，删主行时最早从行自动晋升。CLI `inkcal delete` 同理（`--photo` 仅删单张）。`inkcal merge <主> <从>` 把已有记录并入同餐组（默认从行清零=状态延续，`--keep` 保留数值=独立条目）。
+- 已知限制：`reanalyze` 只用主记录的照片重新估算，组内从行照片不参与；如需按全组重估，后续单独设计。
 - `AGENT_ENABLED=1` 时手动路径（相册选择、本地上传、`inkcal analyze`）统一经 `src/pipeline_ops.py::analyze_assets_via_agent` 进 Luna harness：跳过 SigLIP2 但保留 Luna skip 契约（skip → `classified_non_food`，decided_by=agent），决策审计写入 `agent_decisions`；`update` 决策在手动路径降级为 `add`（手动照片无已有记录可并入）。harness 失败或决策未覆盖时逐张降级原直发路径。
 - 手动上传先做 Immich pHash 匹配（幂等键先行，已处理返回 409），再走 Luna 或 Gemini；非食物返回 422。无 EXIF 时需允许后续日期修正，经 `/api/move-record` 重新尝试匹配。
 - EXIF 时间必须用 Immich 的 `asset.exifInfo.dateTimeOriginal` 和 `timeZone`，不要下载缩略图再读 EXIF；缩略图可能没有 EXIF。`UTC+8` 与 IANA 时区均要兼容，未知时区回退 HKT。

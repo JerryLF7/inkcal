@@ -154,11 +154,11 @@ def api_records():
     if date_str:
         if not _valid_date(date_str):
             return jsonify({"error": "invalid date"}), 400
-        records = _load_date(date_str)
+        raw = _load_date(date_str)
         return jsonify({
             "date": date_str,
-            "records": records,
-            "summary": _summarize(records),
+            "records": db.group_meals(raw),
+            "summary": _summarize(raw),
         })
 
     if start and end:
@@ -176,28 +176,29 @@ def api_records():
         return jsonify({
             "start": start,
             "end": end,
-            "records": all_records,
+            # 组内照片挂到主记录的 photos 数组；跨零点组归主记录所在日期
+            "records": db.group_meals(all_records),
             "summary": _summarize(all_records),
         })
 
     # Default: today
     today = datetime.now(HKT).strftime("%Y-%m-%d")
-    records = _load_date(today)
+    raw = _load_date(today)
     return jsonify({
         "date": today,
-        "records": records,
-        "summary": _summarize(records),
+        "records": db.group_meals(raw),
+        "summary": _summarize(raw),
     })
 
 
 @app.route("/api/today")
 def api_today():
     today = datetime.now(HKT).strftime("%Y-%m-%d")
-    records = _load_date(today)
+    raw = _load_date(today)
     return jsonify({
         "date": today,
-        "records": records,
-        "summary": _summarize(records),
+        "records": db.group_meals(raw),
+        "summary": _summarize(raw),
     })
 
 
@@ -345,14 +346,13 @@ def api_week():
         anchor = datetime.now(HKT)
     monday = anchor - timedelta(days=anchor.weekday())
     dates = [(monday + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-    by_day = {}
-    for ds in dates:
-        by_day[ds] = _load_date(ds)
-    all_records = [r for day_recs in by_day.values() for r in day_recs]
+    raw_by_day = {ds: _load_date(ds) for ds in dates}
+    all_records = [r for day_recs in raw_by_day.values() for r in day_recs]
     return jsonify({
         "start": dates[0],
         "end": dates[-1],
-        "by_day": {d: {"records": by_day[d], "summary": _summarize(by_day[d])} for d in dates},
+        "by_day": {d: {"records": db.group_meals(raw_by_day[d]),
+                       "summary": _summarize(raw_by_day[d])} for d in dates},
         "summary": _summarize(all_records),
     })
 
@@ -1016,22 +1016,36 @@ def api_delete_record():
     if not asset_id:
         return jsonify({"error": "missing asset_id"}), 400
 
-    record = db.delete_record(asset_id)
-    if record is None:
-        return jsonify({"error": "record not found"}), 404
+    # mode="meal"（默认）：整餐删除，级联同餐组所有照片；
+    # mode="photo"：仅移除这一张照片（删主行时最早从行晋升）。
+    mode = data.get("mode", "meal")
+    if mode == "photo":
+        result = db.delete_record_photo(asset_id)
+        if result is None:
+            return jsonify({"error": "record not found"}), 404
+        record, promoted = result
+        deleted_rows = [record]
+        deleted_assets = [asset_id]
+    else:
+        deleted_rows = db.delete_record_group(asset_id)
+        if deleted_rows is None:
+            return jsonify({"error": "record not found"}), 404
+        deleted_assets = [r["asset_id"] for r in deleted_rows]
 
-    replacement_image = record.get("replacement_image", "")
-    if replacement_image:
-        try:
-            Path(replacement_image).unlink(missing_ok=True)
-        except Exception:
-            pass
+    for row in deleted_rows:
+        replacement_image = row.get("replacement_image", "")
+        if replacement_image:
+            try:
+                Path(replacement_image).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # Add Immich assets to ignore list so cron won't re-process them
-    if asset_id and not asset_id.startswith("manual-"):
-        db.add_ignored_asset(asset_id)
+    for aid in deleted_assets:
+        if aid and not aid.startswith("manual-"):
+            db.add_ignored_asset(aid)
 
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "deleted": deleted_assets})
 
 
 @app.route("/api/reanalyze", methods=["POST"])
