@@ -21,6 +21,7 @@ const srcLabel = computed(() => {
 });
 const thumb = computed(() => cardImageSrc(r.value));
 const hasMacros = computed(() => r.value.protein_g || r.value.carbs_g || r.value.fat_g);
+const photoCount = computed(() => (r.value.photos || []).length);
 
 // agent 记录的餐：🤖 角标（数据由 DayView/WeekView 按日期预取到 store）
 const agentDecision = computed(() => decisionFor(r.value));
@@ -47,8 +48,11 @@ function onClick() {
 <template>
   <div class="meal-card" :class="{ clickable: interactive }" @click="onClick">
     <div class="conf-indicator" :class="'conf-' + conf" :title="CONF_TITLES[conf] || ''"></div>
-    <img v-if="thumb" class="thumb" :src="thumb" loading="lazy" alt="" @error="retryImg" @click.stop>
-    <div v-else class="thumb thumb-empty">🍽️</div>
+    <div class="thumb-wrap">
+      <img v-if="thumb" class="thumb" :src="thumb" loading="lazy" alt="" @error="retryImg" @click.stop>
+      <div v-else class="thumb thumb-empty">🍽️</div>
+      <span v-if="photoCount > 1" class="photo-badge" :title="photoCount + ' 张照片，已合并为一餐'">×{{ photoCount }}</span>
+    </div>
     <div class="body">
       <div class="meal-name">{{ r.meal }}</div>
       <div class="meal-meta">{{ fmtTimeHM(r.photo_time) }} <span class="source">· {{ srcLabel }}</span><span v-if="agentDecision" class="agent-mark" :title="agentMarkTitle"> · 🤖</span></div>
@@ -82,9 +86,16 @@ function onClick() {
 .conf-medium { background: #ffd43b; }
 .conf-low { background: #ff6b6b; }
 
+.thumb-wrap { position: relative; width: 64px; height: 64px; flex: none; }
 .thumb {
   width: 64px; height: 64px; border-radius: 10px; object-fit: cover;
   flex: none; background: #2a2a2a;
+}
+.photo-badge {
+  position: absolute; bottom: 3px; right: 3px;
+  background: rgba(0,0,0,0.7); color: #fff;
+  font-size: 10px; font-weight: 600; line-height: 1;
+  padding: 2px 5px; border-radius: 6px;
 }
 .thumb-empty {
   display: flex; align-items: center; justify-content: center; font-size: 22px;

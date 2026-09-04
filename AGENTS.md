@@ -182,9 +182,17 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ## 6. 下一步：优先任务（不要重复已完成工作）
 
-### Phase 4.5：同餐组 UI（设计待讨论，后端已就绪）
+### Phase 4.5：同餐组 UI（已实现，2026-09-04）
 
-后端已完成：同餐组（`merged_into`）落地、分组 API（主记录 + `photos` 数组）、删除双模式、CLI `merge`。**待定设计**（已与用户对齐方向，细节待聊）：卡片 `×N` 角标 + lightbox 画廊（点击切换 + `1/2` + **每张照片分行明细**，用户明确要求明细，不要只做组级信息）。
+已实现（设计已与用户确认）：卡片 `×N` 角标 + lightbox 画廊 + **每张照片分行明细**（用户明确要求明细，不是只做组级信息）。要点：
+
+- **桌面端（≥1024px）lightbоx 为左图右栏**（图区自适应 + 右栏固定 400px 独立滚动），`@media` 内只翻转 `.lb-inner` 主轴方向，不给 `.lightbox` 加新直接子元素。手机端维持纵向布局 + 主图左右滑动切换（40px 阈值）+ ←/→/Esc 键盘导航。
+- **photos[] 契约扩展**：条目含 `asset_id / thumbnail_url / photo_time / meal / calories / protein_g / carbs_g / fat_g`，**刻意不含 confidence**（组级置信度在主记录上，逐照片无可操作场景）。
+- **形态 A 从行显示「已并入整餐估算」**（判据：从行且数值全零），绝不在 UI 上显示 0 kcal——防 8-29 式误读。形态 B 从行带自己的 meal/数值，行合计 = 组头。
+- **双删除入口**：行内 ✕ 两步确认（`mode:"photo"`，独立武装态）与「删除整餐」两步确认（`mode:"meal"`）互不干扰。单张移除后**原地刷新**（`DELETE /api/record` photo 分支响应含 `promoted` 字段——删主行时前端按新主行锚点重拉 `/api/records?date=`）；形态 A 删主行晋升 0 值行时 toast 提示需要重估。组不存在时兜底关闭 + touch()。
+- AI 决策区块匹配范围扩到**组内全部 asset_id**（含 target_asset_id）。
+- 回归：`scripts/test_lightbox_smoke.py`（19 checks，隔离库，覆盖 photos 字段/删从行/晋升/整餐删/404）。注意该脚本预置 `INKCAL_USER=""` 空串防 `.env` 被 load_dotenv 注入鉴权变量。
+- 未做（刻意）：lightbox 内重分析入口、形态 B 组头餐名拼接、编辑宏营养素、跨零点组审计聚合。C 类历史数据（同分钟聚类）处理方式仍未讨论。
 
 ### Phase 5：接通 Luna 聊天 Pane
 

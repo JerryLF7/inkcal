@@ -1019,6 +1019,7 @@ def api_delete_record():
     # mode="meal"（默认）：整餐删除，级联同餐组所有照片；
     # mode="photo"：仅移除这一张照片（删主行时最早从行晋升）。
     mode = data.get("mode", "meal")
+    promoted = None
     if mode == "photo":
         result = db.delete_record_photo(asset_id)
         if result is None:
@@ -1045,7 +1046,7 @@ def api_delete_record():
         if aid and not aid.startswith("manual-"):
             db.add_ignored_asset(aid)
 
-    return jsonify({"ok": True, "deleted": deleted_assets})
+    return jsonify({"ok": True, "deleted": deleted_assets, "promoted": promoted})
 
 
 @app.route("/api/reanalyze", methods=["POST"])

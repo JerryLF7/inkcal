@@ -911,6 +911,9 @@ def group_meals(records: list[dict]) -> list[dict]:
                 "photo_time": r.get("photo_time", ""),
                 "meal": r.get("meal", ""),
                 "calories": r.get("calories", 0),
+                "protein_g": r.get("protein_g", 0),
+                "carbs_g": r.get("carbs_g", 0),
+                "fat_g": r.get("fat_g", 0),
             }]
             primaries.append(r)
             by_asset[r["asset_id"]] = r
@@ -943,6 +946,9 @@ def group_meals(records: list[dict]) -> list[dict]:
             "photo_time": m.get("photo_time", ""),
             "meal": m.get("meal", ""),
             "calories": m.get("calories", 0),
+            "protein_g": m.get("protein_g", 0),
+            "carbs_g": m.get("carbs_g", 0),
+            "fat_g": m.get("fat_g", 0),
         })
     return primaries
 
