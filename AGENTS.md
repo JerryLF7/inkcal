@@ -100,7 +100,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 | 路径 / API | 状态与用途 |
 |---|---|
-| `src/chat_agent.py` | 已实现：Luna 长对话 loop、Responses `previous_response_id` 链式追加、重试、链失效后从 SQLite 重建 |
+| `src/chat_agent.py` | 已实现：Luna 长对话 loop、每轮从 SQLite 重建窗口并累积工具往返（**不发送 `previous_response_id`**）、重试、删除确认卡 |
 | `chat_sessions` / `chat_messages` / `app_settings` | 已在 `src/db.py` 的幂等迁移中创建 |
 | `GET/POST /api/chat/sessions` | 历史会话列表 / 创建会话 |
 | `GET /api/chat/messages?session_id=` | 取某会话消息；不传则最新会话 |
@@ -173,10 +173,11 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 ```
 
 - 每个目前的 `chat_sessions` 行是一条会话线程；未来真出现并行主题需求后再引入 `conversation_id`。
-- `previous_response_id` 是上游上下文/缓存优化，不是真相源。
-- 上游链失效、TTL 到期、转发层异常后，从 SQLite 最近 `chat_window * 2` 条消息重建链。
-- 窗口采用无摘要滑动方式，默认 20 轮。业务事实必须通过工具查 SQLite，不依赖语言模型记忆。
-- 缓存实测有效：小前缀约 98% 命中；真实双图工具往返 `31050 / 31047`，约 99.99%。不要为了节省 token 把现有链式机制改回每轮全历史重传。
+- **当前 endpoint 不支持 `previous_response_id`**：`LUNA_BASE_URL` 指向的网关接受该参数但**静默忽略**（返回 200、不回填字段、上下文完全不传递）。实测：带 `previous_response_id` 问上一轮内容，`input_tokens=21`（只有当轮那句），答不出；全量重发则正确。因此代码**已停止发送它**，改为每轮重发累积历史（`agent_harness.py` 与 `chat_agent.py`）。
+- **工具往返必须回放 `function_call` 项本身，再接 `function_call_output`**。只发 output 会被上游 400 拒绝：`No tool call found for function call output with call_id ...`。没有 `previous_response_id` 时这是硬要求，不是优化（实测 r2 回放→200，r3 只发 output→400）。
+- 前缀缓存仍然有效，**且包含图片**：稳定的 `[长 system + 内联图片]` 前缀从第二轮起约 99.9% 命中，历史增长时前缀命中数保持稳定，只按新增尾巴计费。实测 3728 token 中命中 3725（图片占 922 token，全部命中）。硬约束：**前缀须超过约 1024 token**，否则 `cached_tokens=0`（929 token 的前缀实测两遍均为 0）。
+- 窗口采用无摘要滑动方式，默认 20 轮，`chat_window` 可调。业务事实必须通过工具查 SQLite，不依赖语言模型记忆。
+- **换 endpoint 时必须先验证这两点**（`previous_response_id` 是否真的传递上下文、图片是否进缓存），否则表现为静默失忆或批处理静默降级回 Gemini，不会报错。
 
 ---
 
@@ -293,6 +294,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
 7. `inkcal migrate` 检测到已有数据库会拒绝；`--force` 会清空再迁移，只能在确有意图时使用。
 8. `~/Coding/food-classifier/` 是独立的 SigLIP2 微调项目，模型产物写入本项目 `data/finetuned-model/` 并由检测器自动加载。
+9. **Luna 网关静默忽略 `previous_response_id`**（详见 §5）。症状是聊天"失忆"或批处理悄悄降级回 Gemini，**不报错**。换 endpoint 后必须实测：带 `previous_response_id` 问上一轮内容 + 确认图片进缓存，再看 `agent_decisions` 是否有新行。模型 id 也用连字符形式（`gpt-5-6-luna`），点号形式会被上游拒为 `unknown provider for model`。
 
 ---
 

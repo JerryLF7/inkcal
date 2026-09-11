@@ -4,13 +4,16 @@ Chat agent — thin conversational loop around Luna (OpenAI Responses API).
 Same architecture as agent_harness.py (the ONLY layer that changes if we
 swap to fx), but for the long-lived conversational session:
 
-- Business state lives in SQLite (records / chat_* tables). The Responses
-  chain (previous_response_id) is a rebuildable server-side cache, not the
-  source of truth: if the chain breaks (upstream TTL, relay hiccup), we
-  rebuild context from the last N chat_messages and start a fresh chain.
-- Sliding window (chat_window setting, default 20 turns) only applies at
-  rebuild time — while the chain is alive, context lives server-side and
-  prompt cache carries it (measured 98-99.99% hit rate).
+- Business state lives in SQLite (records / chat_* tables). The recent
+  window is rebuilt from chat_messages on every send and the tool
+  round-trips are accumulated on top of it.
+- previous_response_id is deliberately NOT used: the current endpoint
+  accepts it but silently ignores it (HTTP 200, no context carried), which
+  produces a chat that forgets everything after the first turn. Prompt
+  caching still applies to the stable leading bytes of the resent prefix
+  (measured ~99.75% on a repeated prefix).
+- Sliding window (chat_window setting, default 20 turns) bounds how much
+  history is resent.
 - Write tools go through the same audited paths as CLI/web; delete is
   never executed by the agent, only surfaced as a confirmation card.
 """
@@ -70,26 +73,19 @@ class ChatAgent:
         db.add_chat_message(session_id, "user", user_text)
         self._maybe_set_title(session_id, user_text)
 
-        input_items: list[dict[str, Any]] = [
-            {"role": "user", "content": user_text}
-        ]
-        prev_id = db.get_last_response_id(session_id)
-        rebuilt = False
+        # No server-side chaining (previous_response_id is ignored by the
+        # current endpoint), so rebuild the window from SQLite — that call
+        # already includes the message we just stored — and accumulate the
+        # tool round-trips on top of it.
+        input_items: list[dict[str, Any]] = self._rebuild_context(session_id, window)
         tool_log: list[dict[str, Any]] = []
 
         for step in range(1, MAX_STEPS + 1):
             try:
-                resp = self._call_luna(input_items, previous_response_id=prev_id)
+                resp = self._call_luna(input_items)
             except Exception as e:
-                if prev_id and not rebuilt and self._looks_like_stale_chain(e):
-                    logger.info("response chain stale, rebuilding from SQLite: %s", e)
-                    input_items = self._rebuild_context(session_id, window)
-                    prev_id = None
-                    rebuilt = True
-                    continue
                 logger.error("chat Luna call failed at step %d: %s", step, e)
                 return {"error": f"model call failed: {e}", "tool_log": tool_log}
-            prev_id = resp.id
 
             calls = [it for it in resp.output if getattr(it, "type", None) == "function_call"]
             if calls:
@@ -106,12 +102,21 @@ class ChatAgent:
                         result = call_chat_tool(tc.name, args, self._deps)
                     result = _bounded_result(result)
                     tool_log.append({"name": tc.name, "args": args, "result": result})
+                    # Replay the call item itself before its output: with no
+                    # previous_response_id the model has no record of what it
+                    # called, and Responses expects this pairing.
+                    deltas.append({
+                        "type": "function_call",
+                        "call_id": tc.call_id,
+                        "name": tc.name,
+                        "arguments": tc.arguments or "{}",
+                    })
                     deltas.append({
                         "type": "function_call_output",
                         "call_id": tc.call_id,
                         "output": json.dumps(result, ensure_ascii=False),
                     })
-                input_items = deltas
+                input_items += deltas
                 continue
 
             reply = self._extract_output_text(resp)
@@ -148,10 +153,12 @@ class ChatAgent:
         msgs = db.get_chat_messages(session_id, limit=window * 2)
         return [{"role": m["role"], "content": m["content"]} for m in msgs]
 
-    @staticmethod
-    def _looks_like_stale_chain(e: Exception) -> bool:
-        msg = str(e).lower()
-        return "previous_response" in msg or "not found" in msg
+    # commented out: previous_response_id is ignored by the current endpoint,
+    # so there is no server-side chain that can go stale.
+    # @staticmethod
+    # def _looks_like_stale_chain(e: Exception) -> bool:
+    #     msg = str(e).lower()
+    #     return "previous_response" in msg or "not found" in msg
 
     def _instructions(self) -> str:
         now = datetime.now(HKT)
@@ -170,9 +177,13 @@ class ChatAgent:
                     parts.append(p.text or "")
         return "".join(parts).strip()
 
-    def _call_luna(self, input_items: list[dict[str, Any]], *,
-                   previous_response_id: str | None = None):
-        """Single Responses call with retry on transient errors."""
+    def _call_luna(self, input_items: list[dict[str, Any]]):
+        """Single Responses call with retry on transient errors.
+
+        NOTE: previous_response_id is deliberately NOT sent — the current
+        endpoint accepts it but ignores it, so the caller resends the full
+        window plus accumulated tool round-trips instead.
+        """
         last_err: Exception | None = None
         for attempt in range(3):
             try:
@@ -185,15 +196,13 @@ class ChatAgent:
                     "max_output_tokens": MAX_TOKENS_PER_CALL,
                     "timeout": LUNA_TIMEOUT_S,
                 }
-                if previous_response_id:
-                    kwargs["previous_response_id"] = previous_response_id
+                # commented out: ignored by the current endpoint; chaining
+                # here would silently drop the conversation history.
+                # if previous_response_id:
+                #     kwargs["previous_response_id"] = previous_response_id
                 return self._client.responses.create(**kwargs)
             except Exception as e:
                 last_err = e
-                # Stale-chain errors are handled by the caller (rebuild);
-                # retrying them here would be pointless.
-                if self._looks_like_stale_chain(e):
-                    raise
                 msg = str(e).lower()
                 transient = any(k in msg for k in (
                     "429", "503", "502", "504", "rate", "overloaded",

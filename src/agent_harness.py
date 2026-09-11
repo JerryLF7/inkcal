@@ -9,8 +9,14 @@ Transport notes (opencode go upstream, reached via forwarding VPS):
 - Uses client.responses.create(), NOT chat.completions: the upstream's
   chat-completions adapter silently drops image content (hollow 400),
   while /responses passes images through natively.
-- Conversation continues via previous_response_id chaining, so inline
-  images are uploaded once instead of being resent on every tool round.
+- Conversation history is resent in full on every round (accumulated
+  input_items). The current endpoint SILENTLY IGNORES previous_response_id
+  (returns 200, no context carried), so chaining is unsafe here. Prefix
+  caching still covers the stable leading bytes, images included: measured
+  3725/3728 cached on a repeated long-text+image prefix.
+- Tool round-trips must replay the function_call item itself before its
+  function_call_output; output-only is rejected upstream with 400
+  ("No tool call found for function call output with call_id ...").
 - The upstream rejects legacy max_tokens/max_completion_tokens params;
   Responses' max_output_tokens is accepted.
 
@@ -138,20 +144,20 @@ class AgentHarness:
         self._deps["assets"] = assets
         self._deps["image_getter"] = image_getter
 
-        # Each create() call sends ONLY the delta; history lives server-side
-        # behind previous_response_id. This keeps multi-MB originals from
-        # being re-uploaded on every tool round.
+        # Resend the full accumulated history every round: previous_response_id
+        # is IGNORED by the current endpoint (HTTP 200, no context carried), so
+        # sending only the delta would drop the images and the original prompt
+        # after the first tool call. Multi-MB originals are re-uploaded per
+        # round as a result; prefix caching still covers them (see module doc).
         input_items: list[dict[str, Any]] = [self._build_user_message(assets)]
-        prev_resp_id: str | None = None
 
         for step in range(1, MAX_STEPS + 1):
             logger.info("Luna step %d/%d", step, MAX_STEPS)
             try:
-                resp = self._call_luna(input_items, previous_response_id=prev_resp_id)
+                resp = self._call_luna(input_items)
             except Exception as e:
                 logger.error("Luna call failed at step %d: %s", step, e)
                 return None  # caller falls back
-            prev_resp_id = resp.id
 
             # ── function calls → execute and feed back ──
             calls = [it for it in resp.output if getattr(it, "type", None) == "function_call"]
@@ -159,12 +165,21 @@ class AgentHarness:
                 deltas: list[dict[str, Any]] = []
                 for tc in calls:
                     result = self._execute_tool(tc.call_id, tc.name, tc.arguments)
+                    # Without previous_response_id the model has no record of
+                    # what it called, so replay the call item itself right
+                    # before its output (Responses expects this pairing).
+                    deltas.append({
+                        "type": "function_call",
+                        "call_id": tc.call_id,
+                        "name": tc.name,
+                        "arguments": tc.arguments or "{}",
+                    })
                     deltas.append({
                         "type": "function_call_output",
                         "call_id": tc.call_id,
                         "output": json.dumps(result, ensure_ascii=False),
                     })
-                input_items = deltas
+                input_items += deltas
                 continue
 
             # ── final text → try to parse as decision ──
@@ -192,8 +207,8 @@ class AgentHarness:
                 return decisions
             except ValueError as e:
                 logger.warning("Luna output not a valid decision at step %d: %s", step, e)
-                # Give Luna one chance to correct itself (send only the delta)
-                input_items = [{
+                # Give Luna one chance to correct itself (append, do not reset)
+                input_items += [{
                     "role": "user",
                     "content": (
                         "你的输出不符合契约。请只输出一个符合契约的 JSON 对象，"
@@ -234,9 +249,14 @@ class AgentHarness:
                     parts.append(p.text or "")
         return "".join(parts).strip()
 
-    def _call_luna(self, input_items: list[dict[str, Any]], *,
-                   previous_response_id: str | None = None):
-        """Single Luna Responses-API call with retry on transient errors."""
+    def _call_luna(self, input_items: list[dict[str, Any]]):
+        """Single Luna Responses-API call with retry on transient errors.
+
+        NOTE: previous_response_id is deliberately NOT sent. The current
+        endpoint accepts it but ignores it (HTTP 200, no context carried),
+        which silently drops all history after the first tool round. The
+        caller accumulates the full input instead.
+        """
         last_err: Exception | None = None
         for attempt in range(3):
             try:
@@ -251,8 +271,10 @@ class AgentHarness:
                     "max_output_tokens": MAX_TOKENS_PER_CALL,
                     "timeout": LUNA_TIMEOUT_S,
                 }
-                if previous_response_id:
-                    kwargs["previous_response_id"] = previous_response_id
+                # commented out: previous_response_id is ignored by the
+                # current endpoint, so chaining would lose the history.
+                # if previous_response_id:
+                #     kwargs["previous_response_id"] = previous_response_id
                 return self._client.responses.create(**kwargs)
             except Exception as e:
                 last_err = e
