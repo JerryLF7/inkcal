@@ -52,7 +52,7 @@ venv/bin/python web/server.py
 # 推荐 Web 启动方式（从项目根目录）
 INKCAL_PORT=5800 venv/bin/python web/server.py
 
-# 构建 Vue 前端；产物会写入 web/static/app/
+# 构建 Vue 前端；产物会写入 web/static/
 npm --prefix web/ui run build
 
 # 现有回归与语法检查
@@ -62,8 +62,7 @@ venv/bin/python -m compileall -q main.py src web/server.py
 git diff --check
 ```
 
-- 旧 Web UI：`/`，仍保留用于回归，暂不删除。
-- 新 Vue UI：`/app/`，由 `web/server.py::app_index()` 提供 `web/static/app/index.html`。
+- Web UI：根路由 `/` 直接提供 Vue 前端；`/app/` 重定向到 `/`。原旧版原生 JS UI 已彻底停用并移除。
 - Flask 默认仅监听本机；通过 FRP/反向代理访问时，必须保留既有鉴权与可信代理逻辑。
 - 若 5800 被占用，用 `fuser -k 5800/tcp`，不要依赖 `pkill -f web/server.py`。
 
@@ -116,10 +115,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 | 路径 | 职责 |
 |---|---|
-| `web/server.py` | Flask API、可选认证、图片代理、手动上传、相册选择、聊天 API；`/` 为旧 UI、`/app/` 为新 UI |
-| `web/static/index.html` | 旧版原生 JS UI；冻结但保留为功能参考/回归基线 |
+| `web/server.py` | Flask API、可选认证、图片代理、手动上传、相册选择、聊天 API；根路由 `/` 提供 Vue UI，`/app/` 重定向到 `/` |
 | `web/ui/` | 新 Vue 3 + Vite 源码 |
-| `web/static/app/` | Vue 生产构建产物；**需要与源码一同提交** |
+| `web/static/` | Vue 生产构建产物（`index.html` + `assets/`）；**需要与源码一同提交** |
 | `docs/prototypes/two-tab-proto.html` | 已交付、已确认的 UI 原型；不要再重画 |
 
 ---
@@ -217,7 +215,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 主动确认队列：`/api/data-version` 已有 `pending: 0` 占位；在设计确认前不要自造 schema。
 - SSE：后端当前刻意是非流式，因为 relay SSE 能力未验证。先完成可靠同步模式，再决定流式和降级策略。
 - 聊天传图、同餐分组缩略图可视化、时间轴 skip 卡均不在一期。
-- 新旧 UI 切换和完整 Web 回归放到聊天主路径完成后。
+- 新旧 UI 切换已完成（2026-09-13：扶正 Vue 为根目录应用 `/`，旧原生单文件 UI 彻底移除，`/app/` 重定向到 `/`）。完整 Web 回归放到聊天主路径完成后。
 
 ---
 
@@ -306,7 +304,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 - 只按文件名 `git add`；**绝不** `git add .` / `git add -A`。
 - 不提交 `.env`、`data/`、`web/ui/node_modules/`。
-- Vue 源码变更后必须运行构建并同时提交 `web/static/app/` 产物，否则 `/app/` 不会更新。
+- Vue 源码变更后必须运行构建并同时提交 `web/static/` 产物（`index.html` 与 `assets/`），否则生产页面不会更新。
 - **每次完成代码、配置、产品决策或实施状态的修改后，都必须在同一工作单元内更新本 `AGENTS.md`。** 状态、当前优先级、已完成/未完成项、接口或运行方式发生变化时必须同步；若确认无需更新，也应在交付前明确复核其内容仍与当前 HEAD 一致。不要把交接文档更新留给下一位 agent。
 - 提交信息使用简短祈使句；追加：
 
@@ -323,7 +321,7 @@ npm --prefix web/ui run build
 venv/bin/python -m compileall -q main.py src web/server.py
 ```
 
-涉及 Web 路由时，使用 Flask `test_client()`（在已认证 session 中）确认 `/app/`、相关 `/api/*` 返回预期；不要把项目 API key 或登录密码打印进日志/聊天。
+涉及 Web 路由时，使用 Flask `test_client()`（在已认证 session 中）确认 `/`、`/app/` 重定向、相关 `/api/*` 返回预期；不要把项目 API key 或登录密码打印进日志/聊天。
 
 ---
 

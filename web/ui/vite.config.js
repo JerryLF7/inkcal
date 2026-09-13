@@ -2,11 +2,11 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
-  base: '/app/',
+  base: '/',
   plugins: [vue()],
   build: {
-    outDir: '../static/app',
-    emptyOutDir: true,
+    outDir: '../static',
+    emptyOutDir: false,
   },
   server: {
     proxy: {

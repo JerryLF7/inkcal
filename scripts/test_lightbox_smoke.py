@@ -61,6 +61,17 @@ def main():
         assert cond, name
         ok += 1
 
+    # ── 0. 根路由提供 Vue UI，/app 重定向到 / ──
+    r_root = client.get("/")
+    check("根路由 200 返回 Vue HTML",
+          r_root.status_code == 200 and b'<div id="app"></div>' in r_root.data)
+    r_app = client.get("/app/")
+    check("/app/ 重定向到 /",
+          r_app.status_code in (301, 302) and r_app.location.endswith("/"))
+    r_app_nobar = client.get("/app")
+    check("/app 重定向到 /",
+          r_app_nobar.status_code in (301, 302) and r_app_nobar.location.endswith("/"))
+
     # ── 1. /api/records photos 带 P/C/F ──
     d = client.get("/api/records?date=2026-08-29").get_json()
     groups = {g["asset_id"]: g for g in d["records"]}

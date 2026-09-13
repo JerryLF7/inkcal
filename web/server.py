@@ -135,9 +135,10 @@ def index():
 
 
 @app.route("/app/")
+@app.route("/app")
 def app_index():
-    """Serve the Vue rebuild while the legacy root UI remains available."""
-    return send_from_directory(app.static_folder, "app/index.html")
+    """Redirect legacy /app/ route to root UI."""
+    return redirect("/")
 
 
 @app.route("/api/dates")
