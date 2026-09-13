@@ -295,6 +295,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。
 5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
 6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
+6b. **变更 FTS 虚拟表结构（重建 `records_fts`、改触发器）必须先停 Flask server 再迁移**。2026-09-13 在 server 运行中重建 FTS5 虚拟表，导致跨表写入触发器损坏（UPDATE 触发 FTS 写入报 `database disk image is malformed`，表本身 quick_check 却 OK，热修无效）。最终走「干净导出业务表 → 全新 init_db → 导入 → 重建 FTS」无损恢复。加列（`ALTER TABLE ADD COLUMN`）类迁移可在线做，重建虚拟表/触发器不行。
 7. `inkcal migrate` 检测到已有数据库会拒绝；`--force` 会清空再迁移，只能在确有意图时使用。
 8. `~/Coding/food-classifier/` 是独立的 SigLIP2 微调项目，模型产物写入本项目 `data/finetuned-model/` 并由检测器自动加载。
 9. **Luna 网关静默忽略 `previous_response_id`**（详见 §5）。症状是聊天"失忆"或批处理悄悄降级回 Gemini，**不报错**。换 endpoint 后必须实测：带 `previous_response_id` 问上一轮内容 + 确认图片进缓存，再看 `agent_decisions` 是否有新行。模型 id 也用连字符形式（`gpt-5-6-luna`），点号形式会被上游拒为 `unknown provider for model`。
