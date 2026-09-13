@@ -75,13 +75,19 @@ const weekStats = computed(() => {
   };
 });
 
-// 餐卡时间轴：新日期在前
+// 餐卡时间轴：新日期在前，每日内最新记录在前
 const timeline = computed(() => {
   if (!data.value) return [];
   return Object.keys(data.value.by_day)
     .filter(d => data.value.by_day[d].records.length > 0)
     .sort((a, b) => (a < b ? 1 : -1))
-    .map(d => ({ date: d, records: data.value.by_day[d].records }));
+    .map(d => ({
+      date: d,
+      records: [...data.value.by_day[d].records].sort((a, b) =>
+        (b.photo_time || '').localeCompare(a.photo_time || '') ||
+        (b.asset_id || '').localeCompare(a.asset_id || '')
+      ),
+    }));
 });
 
 onMounted(load);

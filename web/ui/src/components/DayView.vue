@@ -33,7 +33,10 @@ function groupRecords(recordList) {
   return [...byDate.entries()]
     .map(([date, records]) => ({
       date,
-      records,
+      records: records.sort((a, b) =>
+        (b.photo_time || '').localeCompare(a.photo_time || '') ||
+        (b.asset_id || '').localeCompare(a.asset_id || '')
+      ),
       summary: records.reduce((s, r) => s + (r.calories || 0), 0),
     }))
     .sort((a, b) => (a.date < b.date ? 1 : -1));

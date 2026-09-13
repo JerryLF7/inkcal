@@ -216,7 +216,13 @@ async function refreshGroup(promoted) {
 
 <template>
   <div v-if="rec" class="lightbox" @click="emit('close')">
-    <div class="lb-close" @click="emit('close')">✕</div>
+    <button class="lb-close" type="button" aria-label="关闭" @click="emit('close')">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="6" y1="6" x2="18" y2="18"/>
+        <line x1="18" y1="6" x2="6" y2="18"/>
+      </svg>
+    </button>
     <div class="lb-inner" @click.stop>
 
       <!-- 图区：移动端在上，桌面端在左 -->
@@ -312,10 +318,13 @@ async function refreshGroup(promoted) {
   padding: 20px;
 }
 .lb-close {
-  position: fixed; top: 14px; right: 16px;
-  color: #aaa; font-size: 22px; cursor: pointer; padding: 6px;
-  z-index: 1;
+  position: fixed; top: 14px; right: 16px; z-index: 1;
+  width: 34px; height: 34px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid #2a2a2a; background: rgba(26,26,26,0.85);
+  color: #999; cursor: pointer; padding: 0; font: inherit;
 }
+.lb-close:hover { color: #e0e0e0; background: #222; }
 .lb-inner {
   width: 100%; max-width: 420px;
   display: flex; flex-direction: column; gap: 14px;

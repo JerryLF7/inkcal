@@ -70,9 +70,9 @@ function onClick() {
 
 <style scoped>
 .meal-card {
-  display: flex; gap: 12px; align-items: center;
+  display: flex; gap: 14px; align-items: center;
   background: #1a1a1a; border: 1px solid #242424;
-  border-radius: 14px; padding: 10px; margin-bottom: 10px;
+  border-radius: 14px; padding: 12px; margin-bottom: 10px;
   position: relative;
 }
 .meal-card.clickable { cursor: pointer; }
@@ -86,9 +86,9 @@ function onClick() {
 .conf-medium { background: #ffd43b; }
 .conf-low { background: #ff6b6b; }
 
-.thumb-wrap { position: relative; width: 64px; height: 64px; flex: none; }
+.thumb-wrap { position: relative; width: 96px; height: 96px; flex: none; }
 .thumb {
-  width: 64px; height: 64px; border-radius: 10px; object-fit: cover;
+  width: 96px; height: 96px; border-radius: 10px; object-fit: cover;
   flex: none; background: #2a2a2a;
 }
 .photo-badge {
@@ -98,12 +98,12 @@ function onClick() {
   padding: 2px 5px; border-radius: 6px;
 }
 .thumb-empty {
-  display: flex; align-items: center; justify-content: center; font-size: 22px;
+  display: flex; align-items: center; justify-content: center; font-size: 30px;
 }
 
 .body { flex: 1; min-width: 0; }
 .meal-name {
-  font-size: 14px; font-weight: 600; margin-bottom: 2px; color: #e0e0e0;
+  font-size: 15px; font-weight: 600; margin-bottom: 3px; color: #e0e0e0;
   white-space: normal; word-break: break-word;
 }
 .meal-meta { font-size: 11px; color: #666; }
