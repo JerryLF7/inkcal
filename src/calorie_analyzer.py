@@ -135,6 +135,7 @@ class CalorieAnalyzer:
 
         prompt = get_reanalyze_prompt().format(
             meal=current_result.get("meal", "unknown"),
+            meal_detail=current_result.get("meal_detail", ""),
             calories=current_result.get("calories", 0),
             protein_g=current_result.get("protein_g", 0),
             carbs_g=current_result.get("carbs_g", 0),

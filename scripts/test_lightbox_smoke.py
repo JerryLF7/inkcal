@@ -18,11 +18,13 @@ os.environ["INKCAL_PASS"] = ""
 from src import db  # noqa: E402
 
 
-def insert(aid, photo_time, meal, kcal, p=0, c=0, f=0, merged_into=None):
+def insert(aid, photo_time, meal, kcal, p=0, c=0, f=0, merged_into=None,
+           meal_detail=""):
     db.insert_record({
         "asset_id": aid, "source_type": "immich", "source_id": aid,
         "photo_time": photo_time, "thumbnail_url": f"https://x/{aid}",
-        "meal": meal, "calories": kcal, "protein_g": p, "carbs_g": c,
+        "meal": meal, "meal_detail": meal_detail, "calories": kcal,
+        "protein_g": p, "carbs_g": c,
         "fat_g": f, "confidence": "medium",
         "analyzed_at": photo_time, "merged_into": merged_into,
     })
@@ -36,7 +38,8 @@ def main():
     conn.commit()
 
     # ── fixture: 形态 A 组（主行 845，从行 0）+ 形态 B 组（主 720，从行带自己数值）──
-    insert("a-primary", "2026-08-29T12:20:00+08:00", "红烧肉套餐", 845, 32, 90, 28)
+    insert("a-primary", "2026-08-29T12:20:00+08:00", "红烧肉套餐", 845, 32, 90, 28,
+           meal_detail="红烧肉，白米饭，炒青菜")
     insert("a-follow",  "2026-08-29T12:35:00+08:00", "红烧肉套餐", 0, 0, 0, 0,
            merged_into="a-primary")
     insert("b-primary", "2026-08-29T18:00:00+08:00", "轻食三明治", 720, 28, 74, 22)
@@ -70,6 +73,14 @@ def main():
     check("B 组 3 张", len(pb) == 3)
     check("B 从行 photos 自带数值", pb[1]["calories"] == 125 and pb[1]["fat_g"] == 0)
     check("photos 无 confidence 字段（按设计省略）", "confidence" not in pa[0])
+
+    # ── 1b. meal_detail 贯穿：API 返回 + photos 条目 + 按明细可搜索 ──
+    check("主记录带 meal_detail",
+          groups["a-primary"]["meal_detail"] == "红烧肉，白米饭，炒青菜")
+    check("photos 条目带 meal_detail",
+          pa[0]["meal_detail"] == "红烧肉，白米饭，炒青菜")
+    check("按明细关键词可搜到",
+          any(r["asset_id"] == "a-primary" for r in db.search_records("炒青菜")))
 
     # ── 2. 删从行 → promoted null，原地刷新锚点不变 ──
     r = client.delete("/api/record", json={"asset_id": "b-beer", "mode": "photo"})

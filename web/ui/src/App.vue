@@ -164,7 +164,8 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
             <div class="artifact-card">
               <div class="artifact-thumb"></div>
               <div class="artifact-body">
-                <div class="artifact-meal">轻食三明治（两张合并）</div>
+                <div class="artifact-meal">轻食便当</div>
+                <div class="artifact-detail">鸡胸肉三明治、蔬菜沙拉（两张合并）</div>
                 <div class="artifact-calories">720 <small>kcal</small></div>
                 <div class="artifact-macros"><span class="p">P 28g</span> · <span class="c">C 74g</span> · <span class="f">F 22g</span></div>
               </div>
@@ -290,6 +291,10 @@ html, body {
 .artifact-thumb { width: 60px; height: 60px; flex: none; border-radius: 6px; background: #30445f; }
 .artifact-body { min-width: 0; }
 .artifact-meal { color: #e4e4e4; font-size: 13px; font-weight: 600; }
+.artifact-detail {
+  color: #888; font-size: 11px; margin-top: 2px; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .artifact-calories { color: #fff; font-size: 18px; font-weight: 700; margin-top: 3px; }
 .artifact-calories small { color: #888; font-size: 11px; font-weight: 400; }
 .artifact-macros { color: #777; font-size: 11px; margin-top: 3px; }

@@ -68,6 +68,7 @@ def _create_schema(conn: sqlite3.Connection):
             thumbnail_url TEXT,
             original_url TEXT,
             meal TEXT NOT NULL,
+            meal_detail TEXT NOT NULL DEFAULT '',
             calories REAL NOT NULL DEFAULT 0,
             protein_g REAL NOT NULL DEFAULT 0,
             carbs_g REAL NOT NULL DEFAULT 0,
@@ -91,6 +92,7 @@ def _create_schema(conn: sqlite3.Connection):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
             meal TEXT NOT NULL,
+            meal_detail TEXT NOT NULL DEFAULT '',
             calories REAL NOT NULL DEFAULT 0,
             protein_g REAL NOT NULL DEFAULT 0,
             carbs_g REAL NOT NULL DEFAULT 0,
@@ -138,25 +140,31 @@ def _create_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_agent_decisions_date
             ON agent_decisions(session_date);
 
-        -- Full-text search over meal descriptions for quick retrieval
+        -- Full-text search over meal title + detail for quick retrieval
         CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
             meal,
+            meal_detail,
             content='records',
             content_rowid='id'
         );
 
         -- Triggers keep the FTS index in sync with records writes
         CREATE TRIGGER IF NOT EXISTS records_fts_insert AFTER INSERT ON records BEGIN
-            INSERT INTO records_fts(rowid, meal) VALUES (new.id, new.meal);
+            INSERT INTO records_fts(rowid, meal, meal_detail)
+                VALUES (new.id, new.meal, new.meal_detail);
         END;
 
         CREATE TRIGGER IF NOT EXISTS records_fts_delete AFTER DELETE ON records BEGIN
-            INSERT INTO records_fts(records_fts, rowid, meal) VALUES ('delete', old.id, old.meal);
+            INSERT INTO records_fts(records_fts, rowid, meal, meal_detail)
+                VALUES ('delete', old.id, old.meal, old.meal_detail);
         END;
 
-        CREATE TRIGGER IF NOT EXISTS records_fts_update AFTER UPDATE OF meal ON records BEGIN
-            INSERT INTO records_fts(records_fts, rowid, meal) VALUES ('delete', old.id, old.meal);
-            INSERT INTO records_fts(rowid, meal) VALUES (new.id, new.meal);
+        CREATE TRIGGER IF NOT EXISTS records_fts_update
+            AFTER UPDATE OF meal, meal_detail ON records BEGIN
+            INSERT INTO records_fts(records_fts, rowid, meal, meal_detail)
+                VALUES ('delete', old.id, old.meal, old.meal_detail);
+            INSERT INTO records_fts(rowid, meal, meal_detail)
+                VALUES (new.id, new.meal, new.meal_detail);
         END;
         """
     )
@@ -185,6 +193,50 @@ def _migrate_schema(conn: sqlite3.Connection):
         #   状态延续（同一食物吃前/吃后）→ 数值为 0，总值只在主行；
         #   独立条目（同餐不同食物分开拍）→ 携带自己的数值，组内求和。
         conn.execute("ALTER TABLE records ADD COLUMN merged_into TEXT")
+        conn.commit()
+
+    if "meal_detail" not in rcols:
+        # 主标题/副标题拆分（2026-09-13）：meal = 短标题（餐型概括），
+        # meal_detail = 菜品明细。旧记录不回填，meal 保持整句话、detail 为空。
+        conn.execute(
+            "ALTER TABLE records ADD COLUMN meal_detail TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+
+    hcols = {r["name"] for r in conn.execute("PRAGMA table_info(reanalysis_history)")}
+    if "meal_detail" not in hcols:
+        conn.execute(
+            "ALTER TABLE reanalysis_history "
+            "ADD COLUMN meal_detail TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+
+    # FTS 表加 meal_detail 列：fts5 不支持 ALTER，整表重建（触发器一并换新），
+    # 随后由 _backfill_fts 重新索引。
+    fcols = {r["name"] for r in conn.execute("PRAGMA table_info(records_fts)")}
+    if "meal_detail" not in fcols:
+        conn.executescript("""
+            DROP TRIGGER IF EXISTS records_fts_insert;
+            DROP TRIGGER IF EXISTS records_fts_delete;
+            DROP TRIGGER IF EXISTS records_fts_update;
+            DROP TABLE IF EXISTS records_fts;
+            CREATE VIRTUAL TABLE records_fts USING fts5(
+                meal, meal_detail, content='records', content_rowid='id'
+            );
+            CREATE TRIGGER records_fts_insert AFTER INSERT ON records BEGIN
+                INSERT INTO records_fts(rowid, meal, meal_detail)
+                    VALUES (new.id, new.meal, new.meal_detail);
+            END;
+            CREATE TRIGGER records_fts_delete AFTER DELETE ON records BEGIN
+                INSERT INTO records_fts(records_fts, rowid, meal, meal_detail)
+                    VALUES ('delete', old.id, old.meal, old.meal_detail);
+            END;
+            CREATE TRIGGER records_fts_update
+                AFTER UPDATE OF meal, meal_detail ON records BEGIN
+                INSERT INTO records_fts(records_fts, rowid, meal, meal_detail)
+                    VALUES ('delete', old.id, old.meal, old.meal_detail);
+                INSERT INTO records_fts(rowid, meal, meal_detail)
+                    VALUES (new.id, new.meal, new.meal_detail);
+            END;
+        """)
         conn.commit()
 
     dcols = {r["name"] for r in conn.execute("PRAGMA table_info(agent_decisions)")}
@@ -244,7 +296,9 @@ def _backfill_fts(conn: sqlite3.Connection):
         return
     logger.info("Backfilling FTS index for %d records...", total - indexed)
     conn.execute("DELETE FROM records_fts")
-    conn.execute("INSERT INTO records_fts(rowid, meal) SELECT id, meal FROM records")
+    conn.execute(
+        "INSERT INTO records_fts(rowid, meal, meal_detail) "
+        "SELECT id, meal, meal_detail FROM records")
     conn.commit()
 
 
@@ -285,6 +339,10 @@ def _record_from_row(row: sqlite3.Row, history: list[dict] | None = None) -> dic
         "confidence": row["confidence"],
         "analyzed_at": row["analyzed_at"],
     }
+    try:
+        record["meal_detail"] = row["meal_detail"] or ""
+    except (KeyError, IndexError):
+        record["meal_detail"] = ""  # SELECT 子集不带该列
     if row["model_used"]:
         record["model_used"] = row["model_used"]
     if row["user_label"]:
@@ -313,10 +371,10 @@ def insert_record(record: dict) -> dict:
         """
         INSERT INTO records (
             asset_id, source_type, source_id, photo_time, thumbnail_url,
-            original_url, meal, calories, protein_g, carbs_g, fat_g,
+            original_url, meal, meal_detail, calories, protein_g, carbs_g, fat_g,
             confidence, analyzed_at, model_used, user_label, replacement_image,
             merged_into
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             asset_id,
@@ -326,6 +384,7 @@ def insert_record(record: dict) -> dict:
             record.get("thumbnail_url", ""),
             record.get("original_url", ""),
             record.get("meal", "unknown"),
+            record.get("meal_detail", ""),
             record.get("calories", 0),
             record.get("protein_g", 0),
             record.get("carbs_g", 0),
@@ -415,6 +474,7 @@ def get_records_by_date(date_str: str) -> list[dict]:
                 history_map[rid] = []
             history_map[rid].append({
                 "meal": h["meal"],
+                "meal_detail": h["meal_detail"] or "",
                 "calories": h["calories"],
                 "protein_g": h["protein_g"],
                 "carbs_g": h["carbs_g"],
@@ -487,11 +547,11 @@ def search_records(
         rows = conn.execute(
             f"""
             SELECT * FROM records
-            WHERE meal LIKE ? {date_filter}
+            WHERE (meal LIKE ? OR meal_detail LIKE ?) {date_filter}
             ORDER BY photo_time DESC
             LIMIT ?
             """,
-            (like_pattern, *params, limit),
+            (like_pattern, like_pattern, *params, limit),
         ).fetchall()
 
     return [_record_from_row(r) for r in rows]
@@ -532,6 +592,7 @@ def update_record(asset_id: str, updates: dict) -> bool:
         "photo_time": "photo_time",
         "original_url": "original_url",
         "meal": "meal",
+        "meal_detail": "meal_detail",
         "calories": "calories",
         "protein_g": "protein_g",
         "carbs_g": "carbs_g",
@@ -669,6 +730,7 @@ def move_record(asset_id: str, new_date: str, updates: dict | None = None) -> bo
             "photo_time": "photo_time",
             "original_url": "original_url",
             "meal": "meal",
+            "meal_detail": "meal_detail",
             "calories": "calories",
             "protein_g": "protein_g",
             "carbs_g": "carbs_g",
@@ -719,13 +781,14 @@ def append_reanalysis_history(asset_id: str, entry: dict) -> bool:
     conn.execute(
         """
         INSERT INTO reanalysis_history (
-            record_id, meal, calories, protein_g, carbs_g, fat_g,
+            record_id, meal, meal_detail, calories, protein_g, carbs_g, fat_g,
             confidence, notes, reanalyzed_at, history_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record_id,
             entry.get("meal", "unknown"),
+            entry.get("meal_detail", ""),
             entry.get("calories", 0),
             entry.get("protein_g", 0),
             entry.get("carbs_g", 0),
@@ -910,6 +973,7 @@ def group_meals(records: list[dict]) -> list[dict]:
                 "thumbnail_url": r.get("thumbnail_url", ""),
                 "photo_time": r.get("photo_time", ""),
                 "meal": r.get("meal", ""),
+                "meal_detail": r.get("meal_detail", ""),
                 "calories": r.get("calories", 0),
                 "protein_g": r.get("protein_g", 0),
                 "carbs_g": r.get("carbs_g", 0),
@@ -945,6 +1009,7 @@ def group_meals(records: list[dict]) -> list[dict]:
             "thumbnail_url": m.get("thumbnail_url", ""),
             "photo_time": m.get("photo_time", ""),
             "meal": m.get("meal", ""),
+            "meal_detail": m.get("meal_detail", ""),
             "calories": m.get("calories", 0),
             "protein_g": m.get("protein_g", 0),
             "carbs_g": m.get("carbs_g", 0),

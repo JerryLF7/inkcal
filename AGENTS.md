@@ -36,6 +36,7 @@ Immich / PhotoPrism
 - Luna 写给 Gemini 的 `prompt_for_gemini` 只准描述照片关系（同餐/顺序/以哪张为准），禁止餐次结论、食物内容预判、纳入/排除决定（2026-08-31 晚餐案例：Luna 排除啤酒导致漏算）。食物内容与纳入范围由 Gemini 依照片自行判断。
 - `analyze_with_gemini` 单张照片时不经 Luna 提示词：Gemini 收到 固定 task_frame（全摄入基准等）+ 打包版 `analyze.md` + JSON 锚点，Luna 传入的任何文本被忽略。多张照片时 Luna 才必填 `prompt_for_gemini`（只写照片关系）。
 - `analyze_with_gemini` 的份量估算规则由系统固定注入（`agent_tools.py::_gemini_multi_image` 的 task_frame）：全摄入基准（饮品一律计入）、拿不准时计入并降 confidence（宁可多算可纠错，不可漏算无感知）、非真实食物全零。该框架在 Luna 文本之前发送；不要把它合并回 prompt 或删除。
+- **Gemini 输出标题化（2026-09-13 起）**：`meal` = 短标题（≤10 字餐型概括，如「中式外卖盒饭」，不堆菜品清单），`meal_detail` = 菜品明细与份量说明。两条 Gemini 路径（`prompts/analyze.md`、`agent_tools` 的 task_frame/format_anchor）与 `reanalyze.md` 都输出这两个字段；落库为 `records.meal_detail` 列，FTS 同时索引两列。**旧记录不回填**（meal 保持整句话、detail 为空，已拍板）。
 
 ---
 
@@ -147,7 +148,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 顶栏/左栏的 **选择照片** 必须保留两条既有路径：Immich/PhotoPrism 相册未处理照片与本地上传（Vue 端为 `PhotoPicker.vue`）。
 - 记录卡使用 `P / C / F` 字母，而非“蛋白/碳水/脂肪”的中文文字提示，以保持旧版表达。
 - 卡片缩略图为 **96px**（Immich `size=thumbnail` 250px 足够清晰，不要换更大尺寸）；卡片 padding 12px。
-- PC 端日/周时间轴卡片为**双列网格、固定列宽**；餐名超长时折行显示（`MealCard` 的 `meal-name` 为 `white-space: normal` + `word-break: break-word`），不做省略号截断。
+- PC 端日/周时间轴卡片为**双列网格、固定列宽**；主标题（`meal`）超长时折行显示（`MealCard` 的 `meal-name` 为 `white-space: normal` + `word-break: break-word`），不做省略号截断。
+- 卡片标题区为**主标题 + 副标题**两级：`meal-name`（15px 粗）+ `meal-detail`（12px 灰，**最多 2 行 `-webkit-line-clamp` 省略**，已拍板；完整明细在 lightbox 全文展示）。旧记录无副标题时不渲染该行。lightbox 主记录明细全文展示（`.lb-meal-detail`），形态 B 分行各带 2 行省略的 `.row-detail`。
 - `MealCard` 与 `MealLightbox` 是可复用组件；lightbox 已可展示 AI 决策审计和执行两步删除确认；lightbox 右上角关闭按钮为 SVG 细线 X + 圆形幽灵按钮样式（与 `.chat-plus` 同一视觉语言），不要退回裸文本 `✕`。
 - 已决定：**不在时间轴显示 SigLIP2/Luna 判为非食物的 skip 照片**。`/api/skipped` 可以为未来纠错留着，但不是一期 UI。
 
@@ -189,7 +191,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 已实现（设计已与用户确认）：卡片 `×N` 角标 + lightbox 画廊 + **每张照片分行明细**（用户明确要求明细，不是只做组级信息）。要点：
 
 - **桌面端（≥1024px）lightbоx 为左图右栏**（图区自适应 + 右栏固定 400px 独立滚动），`@media` 内只翻转 `.lb-inner` 主轴方向，不给 `.lightbox` 加新直接子元素。手机端维持纵向布局 + 主图左右滑动切换（40px 阈值）+ ←/→/Esc 键盘导航。
-- **photos[] 契约扩展**：条目含 `asset_id / thumbnail_url / photo_time / meal / calories / protein_g / carbs_g / fat_g`，**刻意不含 confidence**（组级置信度在主记录上，逐照片无可操作场景）。
+- **photos[] 契约扩展**：条目含 `asset_id / thumbnail_url / photo_time / meal / meal_detail / calories / protein_g / carbs_g / fat_g`，**刻意不含 confidence**（组级置信度在主记录上，逐照片无可操作场景）。
 - **形态 A 从行显示「已并入整餐估算」**（判据：从行且数值全零），绝不在 UI 上显示 0 kcal——防 8-29 式误读。形态 B 从行带自己的 meal/数值，行合计 = 组头。
 - **双删除入口**：行内 ✕ 两步确认（`mode:"photo"`，独立武装态）与「删除整餐」两步确认（`mode:"meal"`）互不干扰。单张移除后**原地刷新**（`DELETE /api/record` photo 分支响应含 `promoted` 字段——删主行时前端按新主行锚点重拉 `/api/records?date=`）；形态 A 删主行晋升 0 值行时 toast 提示需要重估。组不存在时兜底关闭 + touch()。
 - AI 决策区块匹配范围扩到**组内全部 asset_id**（含 target_asset_id）。
@@ -223,13 +225,13 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ### 数据表
 
-- `records`：餐记录；`merged_into` 列表达同餐组（NULL=主记录，非空=附属照片行，详见 §1 绝对边界）。
+- `records`：餐记录；`merged_into` 列表达同餐组（NULL=主记录，非空=附属照片行，详见 §1 绝对边界）；`meal` 为短标题、`meal_detail` 为菜品明细（2026-09-13 起，旧记录 detail 为空、不回填）。
+- `records_fts`：标题 + 明细两列全文检索（meal / meal_detail）。
 - `reanalysis_history`：重分析和手动编辑前的旧值。
 - `ignored_assets`：删除后永远跳过的照片。
 - `classified_non_food`：SigLIP2/Gemini 非食物判定，含 `decided_by`。
 - `agent_decisions`：Luna 批处理的 add/update/skip 决策审计，含 `group_with`（形态 B 入组目标）。
 - `pipeline_events`：运行事件。
-- `records_fts`：餐名全文检索。
 - `chat_sessions`、`chat_messages`、`app_settings`：聊天层。
 
 ### 鉴权与图片

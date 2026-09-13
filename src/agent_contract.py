@@ -71,7 +71,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "纳入或排除某种食物/饮品的决定（如'不要把啤酒算进去'）——"
                 "吃什么、算什么由 Gemini 依照片自行判断；单张照片时不写此参数，"
                 "系统会使用内置分析模板。"
-                "返回 {meal, calories, protein_g, carbs_g, fat_g, confidence}。"
+                "返回 {meal, meal_detail, calories, protein_g, carbs_g, fat_g, confidence}。"
             ),
             "parameters": {
                 "type": "object",
@@ -102,7 +102,7 @@ class Decision:
     action: str                   # "add" | "update" | "skip"
     target_asset_id: str | None   # for "update": the existing record's asset_id
     relation: str                 # "new_meal" | "same_meal" | "rejected"
-    result: dict[str, Any]        # gemini result {meal, calories, protein_g, carbs_g, fat_g, confidence}
+    result: dict[str, Any]        # gemini result {meal, meal_detail, calories, protein_g, carbs_g, fat_g, confidence}
     reasoning: str                # Luna 的判断依据（中文）
     prompt_for_gemini: str | None # 传给 Gemini 的提示词（audit）
     group_with: str | None = None # for "add": 加入同餐组（该组主记录的 asset_id 或同批照片的 asset_id）
@@ -321,7 +321,8 @@ SYSTEM_PROMPT = """你是 inkcal 的 agent，为待处理的新食物照片做�
       "group_with": "<可选，仅 add：加入同餐组的目标 asset_id（同批先决策的照片或已有记录）>",
       "relation": "new_meal" | "same_meal" | "rejected",
       "result": {
-        "meal": "简短中文食物描述",
+        "meal": "10字内中文标题（餐型概括，不列菜品清单）",
+        "meal_detail": "中文菜品明细与份量",
         "calories": <数字>, "protein_g": <数字>,
         "carbs_g": <数字>, "fat_g": <数字>,
         "confidence": "high" | "medium" | "low"
@@ -369,7 +370,8 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "get_records_in_range",
             "description": (
                 "查询日期范围内的餐食记录（闭区间，HKT 日期 YYYY-MM-DD）。"
-                "返回每条记录的 id、asset_id、photo_time、meal、calories、"
+                "返回每条记录的 id、asset_id、photo_time、meal（短标题）、"
+                "meal_detail（菜品明细）、calories、"
                 "protein_g、carbs_g、fat_g、confidence。相对日期（昨天/前天/"
                 "本周）请先换算成具体日期再调用。"
             ),
@@ -445,7 +447,8 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "直接修改一条餐食记录的字段（旧值自动留痕）。参数 record_id "
                 "为记录 id（由 get_records_in_range / search_meals 返回），"
-                "updates 为要改的字段子集：meal/calories/protein_g/carbs_g/fat_g。"
+                "updates 为要改的字段子集：meal（短标题）/meal_detail（菜品明细）/"
+                "calories/protein_g/carbs_g/fat_g。"
                 "修改前先向用户确认理解无误。"
             ),
             "parameters": {
@@ -457,6 +460,7 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": "要修改的字段，如 {\"calories\": 300}",
                         "properties": {
                             "meal": {"type": "string"},
+                            "meal_detail": {"type": "string"},
                             "calories": {"type": "number"},
                             "protein_g": {"type": "number"},
                             "carbs_g": {"type": "number"},

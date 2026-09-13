@@ -127,6 +127,7 @@ def append_log(date_str: str, asset_id: str, photo_time: str,
         "photo_time": photo_time,
         "thumbnail_url": thumbnail_url,
         "meal": result.get("meal", "unknown"),
+        "meal_detail": result.get("meal_detail", ""),
         "calories": result.get("calories", 0),
         "protein_g": result.get("protein_g", 0),
         "carbs_g": result.get("carbs_g", 0),
@@ -418,6 +419,7 @@ def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
             if root:
                 ok = db.update_record(root, {
                     "meal": dec.result.get("meal"),
+                    "meal_detail": dec.result.get("meal_detail", ""),
                     "calories": dec.result.get("calories"),
                     "protein_g": dec.result.get("protein_g"),
                     "carbs_g": dec.result.get("carbs_g"),
@@ -719,6 +721,7 @@ def cmd_add(args):
 
     result = {
         "meal": args.meal,
+        "meal_detail": args.detail,
         "calories": args.calories,
         "protein_g": args.protein,
         "carbs_g": args.carbs,
@@ -748,6 +751,7 @@ def cmd_edit(args):
 
     updates = {k: v for k, v in {
         "meal": args.new_meal,
+        "meal_detail": args.new_detail,
         "calories": args.calories,
         "protein_g": args.protein,
         "carbs_g": args.carbs,
@@ -780,14 +784,14 @@ def cmd_edit(args):
 
     if not updates and not args.note:
         fail("invalid_args",
-             "没有要修改的字段（--new-meal/--calories/--protein/--carbs/--fat/"
+             "没有要修改的字段（--new-meal/--new-detail/--calories/--protein/--carbs/--fat/"
              "--date/--time/--confidence/--note）")
 
     # Preserve old values for traceability/rollback before mutating
     note = args.note or ("manual edit" if updates else "note only")
     db.append_reanalysis_history(aid, {
         **{k: record.get(k) for k in
-           ("meal", "calories", "protein_g", "carbs_g", "fat_g", "confidence")},
+           ("meal", "meal_detail", "calories", "protein_g", "carbs_g", "fat_g", "confidence")},
         "notes": note,
     })
     if updates:
@@ -1600,7 +1604,8 @@ def main():
     add_json_flag(p_view)
 
     p_add = sub.add_parser("add", help="Manually record a meal")
-    p_add.add_argument("--meal", required=True, help="Meal description")
+    p_add.add_argument("--meal", required=True, help="Meal title (short)")
+    p_add.add_argument("--detail", default="", help="Meal detail (dishes/portions)")
     p_add.add_argument("--calories", type=int, required=True, help="Calories (kcal)")
     p_add.add_argument("--protein", type=int, default=0, help="Protein (g)")
     p_add.add_argument("--carbs", type=int, default=0, help="Carbs (g)")
@@ -1613,7 +1618,8 @@ def main():
 
     p_edit = sub.add_parser("edit", help="Edit a record's meal/macros/date directly")
     add_locator_args(p_edit)
-    p_edit.add_argument("--new-meal", help="New meal description")
+    p_edit.add_argument("--new-meal", help="New meal title (short)")
+    p_edit.add_argument("--new-detail", help="New meal detail (dishes/portions)")
     p_edit.add_argument("--calories", type=int, help="New calories (kcal)")
     p_edit.add_argument("--protein", type=int, help="New protein (g)")
     p_edit.add_argument("--carbs", type=int, help="New carbs (g)")

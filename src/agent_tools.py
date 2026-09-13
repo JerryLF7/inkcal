@@ -228,7 +228,12 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
         "未动过的重复出镜物品只算一次。\n"
         "5. 估算保持保守：按常见份量常识，不放大也不缩小。\n"
         "6. 若发现是截图、包装、菜单、海报、绘画、屏幕里的食物等非真实食物，"
-        "所有数值置 0 且 meal=\"not real food\"。"
+        "所有数值置 0 且 meal=\"not real food\"、meal_detail=\"\"。"
+        "\n"
+        "标题规则（必须遵守）：meal 是卡片标题——10 字以内的餐型/形态概括"
+        "（如「中式外卖盒饭」「海带猪蹄汤配米饭」），不要把菜品清单堆进去；"
+        "meal_detail 写具体菜品明细与大致份量/食用比例（如「白米饭，炸鸡块，"
+        "青椒炒肉丝（食用约四分之三）」）。"
     )
 
     # Pin the output contract at the very end, closest to generation:
@@ -237,9 +242,10 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
     format_anchor = (
         "\n\n重要：无论上面的分析要求是什么，最终只返回一个 JSON 对象，"
         "不要输出任何解释文字或 markdown 代码块。字段必须严格为："
-        '{"meal": "中文简述", "calories": <数字>, "protein_g": <数字>, '
+        '{"meal": "10字内中文标题", "meal_detail": "中文菜品明细", '
+        '"calories": <数字>, "protein_g": <数字>, '
         '"carbs_g": <数字>, "fat_g": <数字>, "confidence": "high|medium|low"}。'
-        '若不是真实食物，所有数值置 0 且 meal="not real food"、confidence="low"。'
+        '若不是真实食物，所有数值置 0 且 meal="not real food"、meal_detail=""、confidence="low"。'
     )
 
     # Single photo: use the shipped analyze.md template so the loop path and
@@ -303,7 +309,7 @@ def call_tool(name: str, args: dict, deps: dict) -> dict:
 def _record_brief(r: dict) -> dict:
     """Trim a db record to the fields useful in conversation context."""
     return {k: r.get(k) for k in (
-        "id", "asset_id", "photo_time", "meal", "calories",
+        "id", "asset_id", "photo_time", "meal", "meal_detail", "calories",
         "protein_g", "carbs_g", "fat_g", "confidence",
     )}
 
@@ -316,7 +322,7 @@ def _group_brief(r: dict) -> dict:
     """
     b = _record_brief(r)
     b["photos"] = [{k: p.get(k) for k in
-                    ("asset_id", "photo_time", "meal", "calories")}
+                    ("asset_id", "photo_time", "meal", "meal_detail", "calories")}
                    for p in r.get("photos", [])]
     return b
 
@@ -419,7 +425,7 @@ def edit_record(args: dict, deps: dict) -> dict:
         return {"ok": False, "error": f"record {record_id} not found"}
     rec = _resolve_primary(rec)
 
-    allowed = {"meal", "calories", "protein_g", "carbs_g", "fat_g"}
+    allowed = {"meal", "meal_detail", "calories", "protein_g", "carbs_g", "fat_g"}
     clean = {k: v for k, v in updates.items() if k in allowed}
     if not clean:
         return {"ok": False, "error": f"no editable fields in updates (allowed: {sorted(allowed)})"}

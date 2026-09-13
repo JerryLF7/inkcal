@@ -246,6 +246,7 @@ async function refreshGroup(promoted) {
       <!-- 信息栏：移动端在下，桌面端在右 400px -->
       <div class="lb-panel">
         <div class="lb-meal">{{ rec.meal }}</div>
+        <div v-if="rec.meal_detail" class="lb-meal-detail">{{ rec.meal_detail }}</div>
         <div class="lb-stats">
           <span class="lb-cal">{{ rec.calories || 0 }}<small> kcal</small></span>
           <span class="p">P {{ rec.protein_g || 0 }}g</span>
@@ -266,6 +267,7 @@ async function refreshGroup(promoted) {
               <div v-if="isFormA(p)" class="row-merged">已并入整餐估算</div>
               <template v-else>
                 <div class="row-name">{{ p.meal || '?' }}</div>
+                <div v-if="p.meal_detail" class="row-detail">{{ p.meal_detail }}</div>
                 <div class="row-values">
                   {{ p.calories || 0 }} kcal ·
                   <span class="p">P{{ p.protein_g || 0 }}</span>
@@ -351,6 +353,10 @@ async function refreshGroup(promoted) {
 
 /* ── 信息栏 ── */
 .lb-meal { font-size: 17px; font-weight: 600; color: #e0e0e0; margin-bottom: 6px; }
+.lb-meal-detail {
+  font-size: 13px; color: #999; line-height: 1.55;
+  margin: -2px 0 8px; word-break: break-word;
+}
 .lb-stats { display: flex; gap: 12px; align-items: baseline; font-size: 13px; }
 .lb-cal { font-size: 22px; font-weight: 700; color: #fff; }
 .lb-cal small { font-size: 12px; font-weight: 400; color: #888; }
@@ -375,6 +381,11 @@ async function refreshGroup(promoted) {
 .row-body { flex: 1; min-width: 0; }
 .row-time { font-size: 10px; color: #777; margin-bottom: 2px; }
 .row-name { font-size: 13px; color: #ddd; }
+.row-detail {
+  font-size: 11px; color: #888; line-height: 1.4; margin-top: 1px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
 .row-merged { font-size: 12px; color: #888; }
 .row-values { font-size: 11px; color: #999; margin-top: 2px; }
 .row-values .p { color: #51cf66; }

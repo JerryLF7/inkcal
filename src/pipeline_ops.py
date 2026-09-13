@@ -87,6 +87,7 @@ def analyze_asset(
         "photo_time": photo_time or datetime.now(HKT).isoformat(),
         "thumbnail_url": thumbnail_url,
         "meal": result.get("meal", "unknown"),
+        "meal_detail": result.get("meal_detail", ""),
         "calories": result.get("calories", 0),
         "protein_g": result.get("protein_g", 0),
         "carbs_g": result.get("carbs_g", 0),
@@ -318,6 +319,7 @@ def _build_record(asset_id: str, source: str, photo_time: str,
         "photo_time": photo_time or datetime.now(HKT).isoformat(),
         "thumbnail_url": thumbnail_url,
         "meal": result.get("meal", "unknown"),
+        "meal_detail": result.get("meal_detail", ""),
         "calories": 0 if zero else result.get("calories", 0),
         "protein_g": 0 if zero else result.get("protein_g", 0),
         "carbs_g": 0 if zero else result.get("carbs_g", 0),
@@ -365,6 +367,7 @@ def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
 
     current_result = {
         "meal": found.get("meal", "unknown"),
+        "meal_detail": found.get("meal_detail", ""),
         "calories": found.get("calories", 0),
         "protein_g": found.get("protein_g", 0),
         "carbs_g": found.get("carbs_g", 0),
@@ -378,6 +381,7 @@ def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
     # Preserve current values in history before overwriting
     db.append_reanalysis_history(asset_id, {
         "meal": found.get("meal"),
+        "meal_detail": found.get("meal_detail", ""),
         "calories": found.get("calories"),
         "protein_g": found.get("protein_g"),
         "carbs_g": found.get("carbs_g"),
@@ -390,6 +394,7 @@ def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
     # Update record with new values
     db.update_record(asset_id, {
         "meal": result.get("meal", found["meal"]),
+        "meal_detail": result.get("meal_detail", found.get("meal_detail", "")),
         "calories": result.get("calories", found["calories"]),
         "protein_g": result.get("protein_g", found["protein_g"]),
         "carbs_g": result.get("carbs_g", found["carbs_g"]),

@@ -2,6 +2,7 @@ You are a nutritionist re-evaluating a food photo based on additional user-provi
 
 PREVIOUS ANALYSIS (for reference only — may be incorrect):
 - Meal: {meal}
+- Meal detail: {meal_detail}
 - Calories: {calories} kcal
 - Protein: {protein_g}g
 - Carbs: {carbs_g}g
@@ -18,7 +19,8 @@ INSTRUCTIONS:
 4. Be conservative with estimates. Use common sense portion sizes unless the user specifies otherwise.
 5. Return a JSON object with EXACTLY these fields:
    {{
-     "meal": "brief description of the food in Chinese",
+     "meal": "short Chinese title, at most 10 characters, naming the meal type or form — do NOT list every dish here",
+     "meal_detail": "Chinese detail line: concrete dishes/items and rough portions",
      "calories": <estimated number>,
      "protein_g": <estimated grams>,
      "carbs_g": <estimated grams>,
@@ -26,4 +28,4 @@ INSTRUCTIONS:
      "confidence": "high|medium|low"
    }}
 
-IMPORTANT — reject non-real-food images. Return all-zero values (calories=0, protein_g=0, carbs_g=0, fat_g=0, meal="not real food", confidence="low") if the image contains screenshots, packaging, drawings, or other non-real food content.
+IMPORTANT — reject non-real-food images. Return all-zero values (calories=0, protein_g=0, carbs_g=0, fat_g=0, meal="not real food", meal_detail="", confidence="low") if the image contains screenshots, packaging, drawings, or other non-real food content.

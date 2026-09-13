@@ -55,6 +55,7 @@ function onClick() {
     </div>
     <div class="body">
       <div class="meal-name">{{ r.meal }}</div>
+      <div v-if="r.meal_detail" class="meal-detail">{{ r.meal_detail }}</div>
       <div class="meal-meta">{{ fmtTimeHM(r.photo_time) }} <span class="source">· {{ srcLabel }}</span><span v-if="agentDecision" class="agent-mark" :title="agentMarkTitle"> · 🤖</span></div>
       <div v-if="hasMacros" class="macros">
         <span class="p">P {{ r.protein_g || 0 }}g</span> ·
@@ -105,6 +106,11 @@ function onClick() {
 .meal-name {
   font-size: 15px; font-weight: 600; margin-bottom: 3px; color: #e0e0e0;
   white-space: normal; word-break: break-word;
+}
+.meal-detail {
+  font-size: 12px; color: #999; line-height: 1.45; margin-bottom: 3px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
 }
 .meal-meta { font-size: 11px; color: #666; }
 .meal-meta .source { color: #555; }
