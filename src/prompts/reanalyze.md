@@ -20,7 +20,7 @@ INSTRUCTIONS:
 5. Return a JSON object with EXACTLY these fields:
    {{
      "meal": "short Chinese title, at most 10 characters, naming the meal type or form — do NOT list every dish here",
-     "meal_detail": "Chinese detail line: concrete dishes/items and rough portions",
+     "meal_detail": "Chinese detail line: concrete dishes/items and rough portions, EXCLUDING any dish already named in \"meal\"",
      "calories": <estimated number>,
      "protein_g": <estimated grams>,
      "carbs_g": <estimated grams>,

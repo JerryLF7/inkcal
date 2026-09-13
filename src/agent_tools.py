@@ -233,7 +233,7 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
         "标题规则（必须遵守）：meal 是卡片标题——10 字以内的餐型/形态概括"
         "（如「中式外卖盒饭」「海带猪蹄汤配米饭」），不要把菜品清单堆进去；"
         "meal_detail 写具体菜品明细与大致份量/食用比例（如「白米饭，炸鸡块，"
-        "青椒炒肉丝（食用约四分之三）」）。"
+        "青椒炒肉丝（食用约四分之三）」），但不重复 meal 已点名的主菜。"
     )
 
     # Pin the output contract at the very end, closest to generation:
@@ -242,7 +242,7 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
     format_anchor = (
         "\n\n重要：无论上面的分析要求是什么，最终只返回一个 JSON 对象，"
         "不要输出任何解释文字或 markdown 代码块。字段必须严格为："
-        '{"meal": "10字内中文标题", "meal_detail": "中文菜品明细", '
+        '{"meal": "10字内中文标题", "meal_detail": "中文菜品明细（不重复标题已点名的菜）", '
         '"calories": <数字>, "protein_g": <数字>, '
         '"carbs_g": <数字>, "fat_g": <数字>, "confidence": "high|medium|low"}。'
         '若不是真实食物，所有数值置 0 且 meal="not real food"、meal_detail=""、confidence="low"。'

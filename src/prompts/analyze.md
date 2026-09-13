@@ -13,7 +13,7 @@ Only analyze REAL food that was directly photographed with a camera — a meal, 
 If it IS real food, return a JSON object with EXACTLY these fields:
 {
   "meal": "short Chinese title, at most 10 characters, naming the meal type or form (e.g. 中式外卖盒饭, 海带猪蹄汤配米饭, 汤面) — do NOT list every dish here",
-  "meal_detail": "Chinese detail line: the concrete dishes/items and rough portions (e.g. 白米饭，炸鸡块，青椒炒肉丝，切片卤肉，炒西兰花)",
+  "meal_detail": "Chinese detail line: the concrete dishes/items and rough portions, EXCLUDING any dish already named in \"meal\" (e.g. 白米饭，炸鸡块，青椒炒肉丝，切片卤肉，炒西兰花)",
   "calories": <estimated number>,
   "protein_g": <estimated grams>,
   "carbs_g": <estimated grams>,
@@ -21,6 +21,6 @@ If it IS real food, return a JSON object with EXACTLY these fields:
   "confidence": "high|medium|low"
 }
 
-The split matters: "meal" is a card title and must stay a short label; everything specific (dishes, portion caveats like 食用约四分之三) goes into "meal_detail". For a simple single-dish meal with nothing more to say, "meal_detail" may repeat the essentials briefly but never omit it.
+The split matters: "meal" is a card title and must stay a short label; everything specific (dishes, portion caveats like 食用约四分之三) goes into "meal_detail", but never repeat what "meal" already says. For a simple single-dish meal with nothing more to add, "meal_detail" may be empty.
 
 Be conservative with calorie estimates. Use common sense portion sizes.
