@@ -517,7 +517,7 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-CHAT_SYSTEM_PROMPT = """你是 inkcal 的饮食助手 Luna，正在与用户对话。当前时间：{now}（HKT）。
+CHAT_SYSTEM_PROMPT = """你是 inkcal 的饮食助手 Calo，正在与用户对话。当前时间：{now}（HKT）。
 
 用户的食物照片由后台 pipeline 自动分析入库，你可以通过工具查询和修改这些记录。
 

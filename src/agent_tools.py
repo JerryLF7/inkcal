@@ -312,6 +312,7 @@ def _record_brief(r: dict) -> dict:
     return {k: r.get(k) for k in (
         "id", "asset_id", "photo_time", "meal", "meal_detail", "calories",
         "protein_g", "carbs_g", "fat_g", "confidence",
+        "thumbnail_url", "replacement_image",
     )}
 
 
@@ -323,7 +324,8 @@ def _group_brief(r: dict) -> dict:
     """
     b = _record_brief(r)
     b["photos"] = [{k: p.get(k) for k in
-                    ("asset_id", "photo_time", "meal", "meal_detail", "calories")}
+                    ("asset_id", "photo_time", "meal", "meal_detail", "calories",
+                     "thumbnail_url", "replacement_image")}
                    for p in r.get("photos", [])]
     return b
 

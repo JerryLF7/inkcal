@@ -59,6 +59,8 @@ npm --prefix web/ui run build
 # 现有回归与语法检查
 PYTHONPATH=. venv/bin/python scripts/test_contract_parse.py
 PYTHONPATH=. venv/bin/python scripts/test_merge_groups.py
+PYTHONPATH=. venv/bin/python scripts/test_lightbox_smoke.py
+PYTHONPATH=. venv/bin/python scripts/test_chat_smoke.py
 venv/bin/python -m compileall -q main.py src web/server.py
 git diff --check
 ```
@@ -152,16 +154,19 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - `MealCard` 与 `MealLightbox` 是可复用组件；lightbox 已可展示 AI 决策审计和执行两步删除确认；lightbox 右上角关闭按钮为 SVG 细线 X + 圆形幽灵按钮样式（与 `.chat-plus` 同一视觉语言），不要退回裸文本 `✕`。
 - 已决定：**不在时间轴显示 SigLIP2/Luna 判为非食物的 skip 照片**。`/api/skipped` 可以为未来纠错留着，但不是一期 UI。
 
-### Luna Tab（当前只完成静态外观）
+### Calo Tab（已接通聊天后端与完整交互，2026-09-16）
 
-已按原型实现消息气泡、餐记录 artifact、删除确认卡、输入栏、历史/新建会话图标。**目前刻意未接聊天后端**，图标、输入框、确认卡均不可产生真实行为。
+前端 Tab 与助手形象正式确定为 **Calo**（取自 inkcal / calor，后半截 Cal 的演化），后端系统提示对应更新为「你是 inkcal 的饮食助手 Calo」。
+`web/ui/src/components/ChatPane.vue` 完整接通聊天后端：
 
-最终 Luna 页面应：
-
-- 默认恢复最新聊天 session；支持历史选择和手动新建。
-- 渲染普通消息、查询/统计结果、餐食 artifact、工具执行状态、删除确认卡。
-- 可自然语言查、改、重分析饮食记录；不是只读对话。
-- 未来可给 `+` 入口接入相册/本地上传或聊天传图，但**一期不做聊天传图**。
+- 默认恢复最新聊天 session；支持历史抽屉选择（`GET /api/chat/sessions`）和手动新建（`POST /api/chat/sessions`）。
+- 渲染普通消息、摄入汇总统计卡（`get_intake_stats`）、餐记录 artifact（`MealCard` 结构化展示，可点击直接唤出 `MealLightbox`）、工具执行状态、安全删除确认卡。
+- 可通过自然语言查、改、重分析饮食记录；写操作完成后自动触发 `touch()` 联动更新时间轴。
+- 删除安全契约：`request_delete_record` 的 `confirm_card` 真实渲染为二次确认卡；只有用户显式点击「确认删除」后才调用既有 `DELETE /api/record`，取消仅关闭卡片。**严禁让模型或前端直接绕过确认删除。**
+- 聊天设置：支持通过 `⚙️` 弹窗读写 `/api/settings` 的 `chat_window`（5～50 轮）。
+- 工具层数据流：`_record_brief` 与 `_group_brief` 补充 `thumbnail_url` 与 `replacement_image`，使聊天 artifact 能够直接渲染缩略图。
+- 回归测试：`scripts/test_chat_smoke.py`。
+- 一期不做聊天传图（未来可从 `+` 入口扩展）。
 
 ---
 
@@ -197,26 +202,25 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 回归：`scripts/test_lightbox_smoke.py`（26 checks，隔离库，覆盖 photos 字段/形态 B 组头累加与餐名拼接/删从行/晋升/整餐删/404）。注意该脚本预置 `INKCAL_USER=""` 空串防 `.env` 被 load_dotenv 注入鉴权变量。
 - 未做（刻意）：lightbox 内重分析入口、编辑宏营养素、跨零点组审计聚合。C 类历史数据（同分钟聚类）处理方式仍未讨论。
 
-### Phase 5：接通 Luna 聊天 Pane
+### Phase 5：接通 Calo 聊天 Pane（已实现，2026-09-16）
 
-这是当前第一优先级。复用已有 API 与 `ChatAgent`，不要重写后端或改聊天架构。
+已完整实现并接通后端 `ChatAgent`：
+- **名称与定位**：前端界面与助手正式命名为 **Calo**（从 inkcal / calor 演化而来），系统提示词（`CHAT_SYSTEM_PROMPT`）同步更新为「你是 inkcal 的饮食助手 Calo」。
+- **组件架构**：新建 `web/ui/src/components/ChatPane.vue`，实现手机端第二 Pane 与 PC 端右侧三栏常驻/可折叠交互。
+- **会话持久化与切换**：进入时默认恢复最新 session，点击 `◷` 打开历史会话抽屉（`GET /api/chat/sessions`），点击 `＋` 即时新建会话（`POST /api/chat/sessions`）。
+- **发送与状态反馈**：非流式 `POST /api/chat/send`，发送中禁用输入并呈现思考脉冲动画；异常时友好 Toast 并保留用户输入以便重试。
+- **结构化 Artifact**：`get_records_in_range` 与 `search_meals` 查出的记录、`edit_record` 与 `reanalyze_record` 变更结果均渲染为可复用 `MealCard`，并支持直接点击唤出 `MealLightbox` 展开详情；`get_intake_stats` 结构化呈现摄入总热量与 P/C/F 营养素。
+- **两步安全删除**：`request_delete_record` 产生的 `confirm_card` 真实渲染为二次确认卡，仅在用户点击「确认删除」后调用既有 `DELETE /api/record` 并触发 `touch()` 联动更新时间轴，取消仅关闭卡片，绝不让模型或前端越权直接删除。
+- **设置入口**：通过顶部 `⚙️` 图标可直接读取并调节 `/api/settings` 的 `chat_window`（5～50 轮）。
+- **工具数据流补全**：`_record_brief` 与 `_group_brief` 补充 `thumbnail_url` 与 `replacement_image` 字段，使聊天 artifact 能够直接展示照片缩略图。
+- **回归测试**：`scripts/test_chat_smoke.py`。
 
-建议顺序：
-
-1. 在 Vue 中创建聊天状态/组件，进入 Luna Tab 时 `GET /api/chat/messages` 恢复最新会话。
-2. 接通“历史 session”图标：`GET /api/chat/sessions`，选择后加载对应消息。
-3. 接通“新建 session”图标：`POST /api/chat/sessions`，清空本地消息并切换当前 session。
-4. 接通输入栏：`POST /api/chat/send`；发送期间禁用重复提交，显示处理中状态；失败保留用户输入并提供可重试信息。
-5. 按 `tool_log` 渲染最低必要的工具状态；把包含记录的查询结果渲染成可复用 `MealCard` artifact（可先从稳定格式做起，不要假装模型输出总是结构化）。
-6. `request_delete_record` 的 `confirm_card` 要渲染为真实确认 UI；确认调用 `DELETE /api/record`，取消仅关闭卡片。**严禁让模型或前端直接绕过确认删除。**
-7. 做一个最轻量设置入口，读写 `/api/settings` 的 `chat_window`。
-
-### 后续，不要抢跑
+### 后续任务
 
 - 主动确认队列：`/api/data-version` 已有 `pending: 0` 占位；在设计确认前不要自造 schema。
+- Lightbox 内部能力扩展：重分析入口、宏营养素手动编辑。
 - SSE：后端当前刻意是非流式，因为 relay SSE 能力未验证。先完成可靠同步模式，再决定流式和降级策略。
 - 聊天传图、同餐分组缩略图可视化、时间轴 skip 卡均不在一期。
-- 新旧 UI 切换已完成（2026-09-13：扶正 Vue 为根目录应用 `/`，旧原生单文件 UI 彻底移除，`/app/` 重定向到 `/`）。完整 Web 回归放到聊天主路径完成后。
 
 ---
 

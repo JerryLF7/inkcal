@@ -206,7 +206,7 @@ async function refreshGroup(promoted) {
     // 形态 A 删主行 → 晋升行是 0 值，这餐变 0 kcal，提示用户重估
     const zeroed = promoted && !(g.calories || g.protein_g || g.carbs_g || g.fat_g);
     toast(zeroed
-      ? '已移除主照片，这餐数值需要重新估算（可让 Luna 重分析）'
+      ? '已移除主照片，这餐数值需要重新估算（可让 Calo 重分析）'
       : '已移除照片，记录已更新');
   } catch {
     toast('已移除，但刷新失败——关闭后页面会自动更新', 'error');

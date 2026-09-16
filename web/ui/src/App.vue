@@ -5,10 +5,11 @@ import WeekView from './components/WeekView.vue';
 import MonthView from './components/MonthView.vue';
 import MealLightbox from './components/MealLightbox.vue';
 import PhotoPicker from './components/PhotoPicker.vue';
+import ChatPane from './components/ChatPane.vue';
 import { store, startDataVersionPolling } from './store.js';
 import { fmtDate, addDays, hktNow } from './utils/format.js';
 
-// 双 pane：记录 / Luna 对话（原型 docs/prototypes/two-tab-proto.html）
+// 双 pane：记录 / Calo 对话（原型 docs/prototypes/two-tab-proto.html）
 const pane = ref('records');           // 'records' | 'chat'
 const view = ref('day');               // 'day' | 'week'（PC 端月历常驻左栏，无月视图页）
 
@@ -147,56 +148,24 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
         />
       </section>
 
-      <!-- Luna 对话：手机端为第二 pane；PC 端为右侧栏（可折叠；后端接线留待 Phase 5） -->
-      <section class="pane chat-pane">
-        <div class="chat-top">
-          <div class="sticky-date">Luna</div>
-          <div class="chat-actions">
-            <button type="button" aria-label="历史会话" title="历史会话">◷</button>
-            <button type="button" aria-label="新建会话" title="新建会话">＋</button>
-            <button v-if="isDesktop" type="button" class="collapse-btn" :aria-label="chatCollapsed ? '展开侧栏' : '收起侧栏'" :title="chatCollapsed ? '展开侧栏' : '收起侧栏'" @click="toggleChat">{{ chatCollapsed ? '◂' : '▸' }}</button>
-          </div>
-        </div>
-        <div class="chat-scroll">
-          <div class="message luna">早。昨天中午的两张照片我判断为同一餐，已经合并记录：</div>
-          <div class="meal-artifact">
-            <div class="artifact-caption">8月26日 · 午餐</div>
-            <div class="artifact-card">
-              <div class="artifact-thumb"></div>
-              <div class="artifact-body">
-                <div class="artifact-meal">轻食便当</div>
-                <div class="artifact-detail">鸡胸肉三明治、蔬菜沙拉（两张合并）</div>
-                <div class="artifact-calories">720 <small>kcal</small></div>
-                <div class="artifact-macros"><span class="p">P 28g</span> · <span class="c">C 74g</span> · <span class="f">F 22g</span></div>
-              </div>
-            </div>
-          </div>
-          <div class="message user">比我前天中午吃的呢？</div>
-          <div class="message luna">前天午餐是麻辣烫，约 680 kcal。昨天这餐碳水更高、脂肪更低，总热量接近。</div>
-          <div class="confirm-card">
-            <p>你说“删掉周一那顿麻辣烫”。确认删除 8月25日 19:10 的记录吗？</p>
-            <div class="confirm-actions">
-              <button type="button" class="confirm">确认删除</button>
-              <button type="button">取消</button>
-            </div>
-          </div>
-        </div>
-        <form class="chat-input" @submit.prevent>
-          <button class="chat-plus" type="button" aria-label="添加照片或附件">＋</button>
-          <input aria-label="和 Luna 对话" placeholder="和 Luna 说说这顿吃了什么…">
-        </form>
-      </section>
+      <!-- Calo 对话：手机端为第二 pane；PC 端为右侧栏（可折叠） -->
+      <ChatPane
+        :is-desktop="isDesktop"
+        :chat-collapsed="chatCollapsed"
+        @toggle-chat="toggleChat"
+        @open="openLightbox"
+      />
     </div>
 
     <!-- PC 折叠后的唤出把手 -->
-    <button v-if="isDesktop && chatCollapsed" class="chat-restorer" type="button" aria-label="打开 Luna 侧栏" title="打开 Luna 侧栏" @click="toggleChat">◂</button>
+    <button v-if="isDesktop && chatCollapsed" class="chat-restorer" type="button" aria-label="打开 Calo 侧栏" title="打开 Calo 侧栏" @click="toggleChat">◂</button>
 
     <nav v-if="!isDesktop" class="tabbar">
       <button :class="{ active: pane === 'records' }" @click="go('records')">
         <span class="ico">📖</span>记录
       </button>
       <button :class="{ active: pane === 'chat' }" @click="go('chat')">
-        <span class="ico">💬</span>Luna
+        <span class="ico">💬</span>Calo
       </button>
     </nav>
 
@@ -261,59 +230,6 @@ html, body {
 }
 .seg button.active { background: #2a6eff22; color: #2a6eff; }
 
-.chat-top {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px; border-bottom: 1px solid #1c1c1c; flex: none;
-}
-.chat-actions { display: flex; gap: 4px; align-items: center; }
-.collapse-btn { font-size: 15px !important; }
-.chat-actions button, .chat-plus {
-  border: 0; background: transparent; color: #999; cursor: pointer; font: inherit;
-}
-.chat-actions button { width: 32px; height: 32px; font-size: 19px; }
-.chat-scroll {
-  flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
-  gap: 12px; padding: 14px; scrollbar-width: none;
-}
-.chat-scroll::-webkit-scrollbar { display: none; }
-.message {
-  max-width: 82%; padding: 10px 13px; border-radius: 8px;
-  font-size: 14px; line-height: 1.55;
-}
-.message.luna { align-self: flex-start; color: #dedede; background: #1a1a1a; border: 1px solid #242424; }
-.message.user { align-self: flex-end; color: #fff; background: #2a6eff; }
-.meal-artifact, .confirm-card {
-  align-self: flex-start; width: min(88%, 360px); border: 1px solid #303030;
-  border-radius: 8px; background: #1a1a1a; padding: 10px;
-}
-.artifact-caption { color: #777; font-size: 11px; margin-bottom: 8px; }
-.artifact-card { display: flex; gap: 10px; }
-.artifact-thumb { width: 60px; height: 60px; flex: none; border-radius: 6px; background: #30445f; }
-.artifact-body { min-width: 0; }
-.artifact-meal { color: #e4e4e4; font-size: 13px; font-weight: 600; }
-.artifact-detail {
-  color: #888; font-size: 11px; margin-top: 2px; line-height: 1.4;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.artifact-calories { color: #fff; font-size: 18px; font-weight: 700; margin-top: 3px; }
-.artifact-calories small { color: #888; font-size: 11px; font-weight: 400; }
-.artifact-macros { color: #777; font-size: 11px; margin-top: 3px; }
-.p { color: #51cf66; } .c { color: #ffd43b; } .f { color: #ff922b; }
-.confirm-card { border-color: #3a3a2a; }
-.confirm-card p { margin: 0 0 10px; color: #d6d6d6; font-size: 13px; line-height: 1.5; }
-.confirm-actions { display: flex; gap: 8px; }
-.confirm-actions button {
-  flex: 1; padding: 7px; border: 1px solid #3a3a3a; border-radius: 6px;
-  background: #252525; color: #d0d0d0; font: inherit; font-size: 12px;
-}
-.confirm-actions .confirm { color: #fff; background: #2a6eff; border-color: #2a6eff; }
-.chat-input {
-  display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid #1c1c1c; background: #0f0f0f;
-}
-.chat-plus { width: 38px; height: 38px; flex: none; border: 1px solid #2a2a2a; border-radius: 50%; background: #1a1a1a; font-size: 20px; }
-.chat-input input { min-width: 0; flex: 1; border: 1px solid #2a2a2a; border-radius: 19px; background: #1a1a1a; color: #ddd; padding: 0 14px; font: inherit; font-size: 13px; outline: none; }
-.chat-input input:focus { border-color: #2a6eff; }
-
 .tabbar {
   flex: none; display: flex; border-top: 1px solid #1c1c1c; background: #0d0d0d;
   padding: 6px 0 calc(14px + env(safe-area-inset-bottom));
@@ -326,12 +242,13 @@ html, body {
 .tabbar button .ico { font-size: 18px; }
 .tabbar button.active { color: #2a6eff; }
 
-/* ── PC 布局（≥1024px）：左导航栏 + 记录主区 + Luna 右侧栏 ───── */
+/* ── PC 布局（≥1024px）：左导航栏 + 记录主区 + Calo 右侧栏 ───── */
 @media (min-width: 1024px) {
   .app { max-width: none; border-left: none; border-right: none; }
 
   /* 关键：手机布局是纵向 flex，桌面改为横向，左栏才能与主区并列 */
   .app.desktop { flex-direction: row; }
+  .chat-pane { border-left: 1px solid #1c1c1c; }
 
   /* 左侧导航栏（参考旧版桌面布局）：品牌 + 选择照片 + 日/周切换 + 常驻日历 + 快捷键 */
   .nav-rail {
