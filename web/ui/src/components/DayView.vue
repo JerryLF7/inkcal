@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue';
 import {
-  API, fmtDate, parseDate, hktNow, addDays,
+  API, DAILY_TARGET_KCAL, fmtDate, parseDate, hktNow, addDays,
   shortDate, weekdayLabel,
 } from '../utils/format.js';
 import { store } from '../store.js';
@@ -24,6 +24,10 @@ const sentinelEl = ref(null);
 
 const todayStr = fmtDate(hktNow());
 
+function hasMacros(s) {
+  return s && (s.protein || s.carbs || s.fat);
+}
+
 function groupRecords(recordList) {
   const byDate = new Map();
   for (const r of recordList) {
@@ -37,7 +41,12 @@ function groupRecords(recordList) {
         (b.photo_time || '').localeCompare(a.photo_time || '') ||
         (b.asset_id || '').localeCompare(a.asset_id || '')
       ),
-      summary: records.reduce((s, r) => s + (r.calories || 0), 0),
+      summary: {
+        calories: records.reduce((s, r) => s + (r.calories || 0), 0),
+        protein: records.reduce((s, r) => s + (r.protein_g || 0), 0),
+        carbs: records.reduce((s, r) => s + (r.carbs_g || 0), 0),
+        fat: records.reduce((s, r) => s + (r.fat_g || 0), 0),
+      },
     }))
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 }
@@ -183,7 +192,21 @@ const isEmpty = computed(() => !initialLoading.value && days.value.length === 0)
     </div>
 
     <template v-for="day in days" :key="day.date">
-      <div v-if="day.date !== todayStr" class="date-sep">{{ shortDate(day.date) }} · {{ weekdayLabel(day.date) }}</div>
+      <div class="date-sep">
+        <div class="sep-date">
+          {{ day.date === todayStr ? '今天 · ' + weekdayLabel(day.date) : shortDate(day.date) + ' · ' + weekdayLabel(day.date) }}
+        </div>
+        <div class="sep-summary">
+          <span v-if="hasMacros(day.summary)" class="sep-macros">
+            <span class="p">P {{ Math.round(day.summary.protein) }}</span> ·
+            <span class="c">C {{ Math.round(day.summary.carbs) }}</span> ·
+            <span class="f">F {{ Math.round(day.summary.fat) }}</span>
+          </span>
+          <span class="sep-cals" :class="{ over: day.summary.calories > DAILY_TARGET_KCAL }">
+            {{ Math.round(day.summary.calories).toLocaleString() }}<small> kcal</small>
+          </span>
+        </div>
+      </div>
       <div :data-group-date="day.date" class="day-group">
         <MealCard
           v-for="r in day.records"
@@ -210,8 +233,34 @@ const isEmpty = computed(() => !initialLoading.value && days.value.length === 0)
 
 .date-sep {
   position: sticky; top: 0; z-index: 2;
-  font-size: 12px; color: #888; padding: 10px 0 6px;
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 10px 0 6px;
   background: linear-gradient(#0f0f0f 75%, transparent);
+}
+
+.sep-date {
+  font-size: 12px; color: #888; font-weight: 500;
+}
+
+.sep-summary {
+  display: flex; align-items: baseline; gap: 8px;
+}
+
+.sep-macros {
+  font-size: 11px; color: #777;
+}
+.sep-macros .p { color: #51cf66; }
+.sep-macros .c { color: #ffd43b; }
+.sep-macros .f { color: #ff922b; }
+
+.sep-cals {
+  font-size: 13px; font-weight: 700; color: #e0e0e0;
+}
+.sep-cals small {
+  font-size: 10px; font-weight: 400; color: #888;
+}
+.sep-cals.over {
+  color: #ff6b6b;
 }
 
 .hint { text-align: center; color: #888; font-size: 14px; padding: 40px 0; }

@@ -141,7 +141,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ### 记录 Tab（已实现主要骨架）
 
-- 日视图：最新记录在顶部，向下无限加载更早记录；**每日内卡片也按 `photo_time` 倒序**（`DayView.groupRecords` / `WeekView.timeline` 内排序， tie-break 用 `asset_id`）；日期分隔线，且**今天不重复显示分隔标题**；顶栏显示当前浏览日期。
+- 日视图：最新记录在顶部，向下无限加载更早记录；**每日内卡片也按 `photo_time` 倒序**（`DayView.groupRecords` / `WeekView.timeline` 内排序， tie-break 用 `asset_id`）；日期吸顶分隔线（`.date-sep`）左侧显示日期/星期，右侧显示当天**总摄入热量与 P/C/F 宏营养素**（超过每日目标变红；今天也显示作为当日汇总锚点）；顶栏显示当前浏览日期。
 - 周视图：柱状图 + 餐食时间轴；可前后切换周，未来周禁用；暴露 `resetToCurrentWeek()` 供左栏「本周」快捷键回当前周。
 - 月视图：日期格显示每日热量占目标的圆环（有记录的日期数字加粗提亮），点击跳回日时间轴；不使用额外色点标记（已验证冗余）。
 - 顶栏/左栏的 **选择照片** 必须保留两条既有路径：Immich/PhotoPrism 相册未处理照片与本地上传（Vue 端为 `PhotoPicker.vue`）。

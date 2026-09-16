@@ -14,6 +14,11 @@ const data = ref(null);
 const loading = ref(true);
 
 const dayNames = ['一', '二', '三', '四', '五', '六', '日'];
+const todayStr = fmtDate(hktNow());
+
+function hasMacros(s) {
+  return s && (s.protein || s.carbs || s.fat);
+}
 
 const isCurrentWeek = computed(() =>
   fmtDate(monday.value) >= fmtDate(mondayOf(hktNow()))
@@ -87,6 +92,7 @@ const timeline = computed(() => {
         (b.photo_time || '').localeCompare(a.photo_time || '') ||
         (b.asset_id || '').localeCompare(a.asset_id || '')
       ),
+      summary: data.value.by_day[d].summary,
     }));
 });
 
@@ -126,7 +132,21 @@ defineExpose({ reload: load, resetToCurrentWeek });
 
       <div v-if="!timeline.length" class="hint">本周暂无记录</div>
       <template v-for="day in timeline" :key="day.date">
-        <div class="date-sep">{{ shortDate(day.date) }} · {{ weekdayLabel(day.date) }}</div>
+        <div class="date-sep">
+          <div class="sep-date">
+            {{ day.date === todayStr ? '今天 · ' + weekdayLabel(day.date) : shortDate(day.date) + ' · ' + weekdayLabel(day.date) }}
+          </div>
+          <div class="sep-summary">
+            <span v-if="hasMacros(day.summary)" class="sep-macros">
+              <span class="p">P {{ Math.round(day.summary.protein) }}</span> ·
+              <span class="c">C {{ Math.round(day.summary.carbs) }}</span> ·
+              <span class="f">F {{ Math.round(day.summary.fat) }}</span>
+            </span>
+            <span class="sep-cals" :class="{ over: day.summary.calories > DAILY_TARGET_KCAL }">
+              {{ Math.round(day.summary.calories).toLocaleString() }}<small> kcal</small>
+            </span>
+          </div>
+        </div>
         <div class="week-timeline">
           <MealCard
             v-for="r in day.records"
@@ -169,8 +189,34 @@ defineExpose({ reload: load, resetToCurrentWeek });
 
 .date-sep {
   position: sticky; top: 0; z-index: 2;
-  font-size: 12px; color: #888; padding: 10px 0 6px;
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 10px 0 6px;
   background: linear-gradient(#0f0f0f 75%, transparent);
+}
+
+.sep-date {
+  font-size: 12px; color: #888; font-weight: 500;
+}
+
+.sep-summary {
+  display: flex; align-items: baseline; gap: 8px;
+}
+
+.sep-macros {
+  font-size: 11px; color: #777;
+}
+.sep-macros .p { color: #51cf66; }
+.sep-macros .c { color: #ffd43b; }
+.sep-macros .f { color: #ff922b; }
+
+.sep-cals {
+  font-size: 13px; font-weight: 700; color: #e0e0e0;
+}
+.sep-cals small {
+  font-size: 10px; font-weight: 400; color: #888;
+}
+.sep-cals.over {
+  color: #ff6b6b;
 }
 .hint { text-align: center; color: #888; font-size: 14px; padding: 40px 0; }
 </style>
