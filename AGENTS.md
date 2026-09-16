@@ -27,10 +27,11 @@ Immich / PhotoPrism
 
 ### 绝对边界
 
-- 所有日期边界采用 **Asia/Hong_Kong（UTC+8）**。
+- **日期与时区归属原则**：餐食记录的日历归属一律采用**照片拍摄地的当地日历日（Local Wall-clock Date）**，即 Exif 钟表时间与时区决定的当地日期（对应 `photo_time` 的前 10 位 `YYYY-MM-DD` / `substr(photo_time, 1, 10)`）。**禁止在 SQL 中使用 SQLite 内置的 `date(photo_time)`**，因其会隐式将带时区字符串转为 UTC 导致当地凌晨（00:00~08:00 HKT）照片日期倒退一天、从而引发 cron 无限重复处理（2026-09-14 凌晨事故：同一照片被重复处理 23 次）。无 Exif 时区或手动上传未带时区时回退至 HKT（并在 Web 端提供弹窗手动选择日期调整）；同餐时间间隔计算按绝对时刻对比。
 - 写数据库必须经 `inkcal` CLI、`src/db.py` 的既有业务路径或已有 Flask API；不要用 SQLite shell 直接改数据。
 - `asset_id` 是幂等键。删除 Immich 资产对应记录时要进入 `ignored_assets`，避免 cron 重新入库。
 - 同餐组用 `records.merged_into` 表达：`NULL` = 主记录（一餐一卡），非 `NULL` = 附属照片行（指向主记录 asset_id）。两种形态：**状态延续**（同一食物吃前/吃后，Luna 一条 add 覆盖多张照片）从行数值清零，总值只在主行；**独立条目**（同餐不同食物分开拍，Luna 每张照片一条 add + `group_with` 关联）从行携带自己的数值。汇总永远对所有行直接求和（两种形态都正确），餐数只数主行。每张照片必有一行——update 决策覆盖的新照片也要落 0 值从行，否则 `already_processed` 查不到会导致 cron 无限重复处理（2026-08-29 事故：同一照片 6 小时被 update 35 次）。
+- **跨批次状态延续（吃前/吃后 update，2026-09-16 规范）**：新照片为已有记录同一食物的新状态（如吃后残局）触发 `update` 时，必须同时将已有记录照片与新照片传入 `analyze_with_gemini`（`asset_ids=[<已有记录 asset_id>, <新照片 asset_id>]`），并在 `prompt_for_gemini` 中说明拍摄顺序与吃前/吃后关系，由 Gemini 联合对比评估实际摄入量；`image_getter` 遇到非当前批次 asset_id 自动从 DB 和照片源回溯原图。禁止单送吃后照片覆盖原记录（防 2026-09-15 事故：单送残局导致 1150 kcal 盒饭被错误覆盖成 450 kcal 残留量）。
 - SigLIP2 是隐私门槛；用户从相册明确选择照片或手动上传时，才可绕过食物过滤。`AGENT_ENABLED=1` 时绕过 SigLIP2 的照片仍进入 Luna（skip 契约保留），失败降级直送 Gemini；`AGENT_ENABLED=0` 时直送 Gemini。
 - Gemini 只负责估算，不负责同餐关系；Luna 只负责视觉判断/编排，不应自己编造热量。
 - Luna 写给 Gemini 的 `prompt_for_gemini` 只准描述照片关系（同餐/顺序/以哪张为准），禁止餐次结论、食物内容预判、纳入/排除决定（2026-08-31 晚餐案例：Luna 排除啤酒导致漏算）。食物内容与纳入范围由 Gemini 依照片自行判断。
@@ -190,11 +191,11 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 - **桌面端（≥1024px）lightbоx 为左图右栏**（图区自适应 + 右栏固定 400px 独立滚动），`@media` 内只翻转 `.lb-inner` 主轴方向，不给 `.lightbox` 加新直接子元素。手机端维持纵向布局 + 主图左右滑动切换（40px 阈值）+ ←/→/Esc 键盘导航。
 - **photos[] 契约扩展**：条目含 `asset_id / thumbnail_url / photo_time / meal / meal_detail / calories / protein_g / carbs_g / fat_g`，**刻意不含 confidence**（组级置信度在主记录上，逐照片无可操作场景）。
-- **形态 A 从行显示「已并入整餐估算」**（判据：从行且数值全零），绝不在 UI 上显示 0 kcal——防 8-29 式误读。形态 B 从行带自己的 meal/数值，行合计 = 组头。
+- **形态 A 从行显示「已并入整餐估算」**（判据：从行且数值全零），绝不在 UI 上显示 0 kcal——防 8-29 式误读。形态 B 从行带自己的 meal/数值，**行合计 = 组头**（`db.group_meals` 自动累加数值并拼接餐名如「主食 + 饮品/甜点」，2026-09-16 实现）。
 - **双删除入口**：行内 ✕ 两步确认（`mode:"photo"`，独立武装态）与「删除整餐」两步确认（`mode:"meal"`）互不干扰。单张移除后**原地刷新**（`DELETE /api/record` photo 分支响应含 `promoted` 字段——删主行时前端按新主行锚点重拉 `/api/records?date=`）；形态 A 删主行晋升 0 值行时 toast 提示需要重估。组不存在时兜底关闭 + touch()。
 - AI 决策区块匹配范围扩到**组内全部 asset_id**（含 target_asset_id）。
-- 回归：`scripts/test_lightbox_smoke.py`（19 checks，隔离库，覆盖 photos 字段/删从行/晋升/整餐删/404）。注意该脚本预置 `INKCAL_USER=""` 空串防 `.env` 被 load_dotenv 注入鉴权变量。
-- 未做（刻意）：lightbox 内重分析入口、形态 B 组头餐名拼接、编辑宏营养素、跨零点组审计聚合。C 类历史数据（同分钟聚类）处理方式仍未讨论。
+- 回归：`scripts/test_lightbox_smoke.py`（26 checks，隔离库，覆盖 photos 字段/形态 B 组头累加与餐名拼接/删从行/晋升/整餐删/404）。注意该脚本预置 `INKCAL_USER=""` 空串防 `.env` 被 load_dotenv 注入鉴权变量。
+- 未做（刻意）：lightbox 内重分析入口、编辑宏营养素、跨零点组审计聚合。C 类历史数据（同分钟聚类）处理方式仍未讨论。
 
 ### Phase 5：接通 Luna 聊天 Pane
 
@@ -259,7 +260,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ## 8. 运行、服务与安全约定
 
-- 时区一律为 `Asia/Hong_Kong`（UTC+8）；所有日期边界按 HKT 判断。
+- 日历日以照片 Exif 拍摄地当地日历日（`substr(photo_time, 1, 10)`）为准；无 Exif 时区回退至 `Asia/Hong_Kong`（UTC+8）。禁止在 SQLite 中使用 `date(photo_time)`。
 - 幂等由 `asset_id` 保障；`already_processed()` 按日期检查。手动记录使用 `manual-<timestamp>` 作为 asset ID。
 - 数据库是 `data/inkcal.db`，包含 records、重分析历史、忽略资产、非食物、Agent 审计、事件和聊天表；所有 schema 以 `src/db.py` 为准。
 - 不直接用 SQLite shell 修改业务数据。优先走 CLI、`src/db.py` 既有业务函数或 Flask API；变更后用 `inkcal view`、`inkcal label --status` 或对应 API 验证。

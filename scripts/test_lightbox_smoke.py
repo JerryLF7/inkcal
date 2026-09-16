@@ -100,7 +100,8 @@ def main():
     d = client.get("/api/records?date=2026-08-29").get_json()
     groups = {g["asset_id"]: g for g in d["records"]}
     check("B 组剩 2 张", len(groups["b-primary"]["photos"]) == 2)
-    check("B 组合计仍 720", groups["b-primary"]["calories"] == 720)
+    check("B 组合计为 800 (720+80)", groups["b-primary"]["calories"] == 800)
+    check("B 组餐名拼接更新", groups["b-primary"]["meal"] == "轻食三明治 + 苹果")
 
     # ── 3. 删形态 B 主行 → 最早从行晋升，merged_into 重挂 ──
     r = client.delete("/api/record", json={"asset_id": "b-primary", "mode": "photo"})

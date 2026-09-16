@@ -972,7 +972,7 @@ def api_move_record():
 
     # Get old date from database (records has no `date` column — derive it)
     conn = db._get_conn()
-    row = conn.execute("SELECT date(photo_time) AS d FROM records WHERE asset_id = ?", (asset_id,)).fetchone()
+    row = conn.execute("SELECT substr(photo_time, 1, 10) AS d FROM records WHERE asset_id = ?", (asset_id,)).fetchone()
     old_date = row["d"] if row else None
 
     # Re-try Immich pHash matching on the new date

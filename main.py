@@ -280,7 +280,7 @@ def _run_source(
             max_batch = 6
         for i in range(0, len(food_batch), max_batch):
             _run_agent_batch(date_str, food_batch[i:i + max_batch],
-                             analyzer, run_id=run_id)
+                             analyzer, run_id=run_id, config=config)
     else:
         for item in food_batch:
             _legacy_analyze_single(item, analyzer, run_id=run_id)
@@ -322,7 +322,7 @@ def _date_of(photo_time: str) -> str:
 
 
 def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
-                     run_id: str = ""):
+                     run_id: str = "", config: dict | None = None):
     """
     Agent path: hand the whole filtered batch to Luna's harness, apply the
     returned decisions to records + audit table. Falls back to the legacy
@@ -331,11 +331,22 @@ def _run_agent_batch(date_str: str, batch: list[dict], analyzer, *,
     from src.agent_harness import AgentHarness
 
     luna_model = os.getenv("LUNA_MODEL", "gpt-5.6-luna")
+    cfg = config or load_config()
 
     def image_getter(asset_id: str) -> bytes:
         for it in batch:
             if it["aid"] == asset_id:
                 return it["original"]
+        # Fallback to existing records in DB (for 跨批次 update 状态延续联合对比)
+        from src.pipeline_ops import _download_original, _get_image_bytes
+        rec = db.get_record_by_asset_id(asset_id)
+        if rec:
+            orig = _download_original(rec["asset_id"], rec.get("source_type", "immich"), cfg)
+            if orig:
+                return orig
+            thumb = _get_image_bytes(rec, cfg)
+            if thumb:
+                return thumb
         raise KeyError(asset_id)
 
     harness = AgentHarness(

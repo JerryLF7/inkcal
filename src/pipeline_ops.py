@@ -162,6 +162,15 @@ def analyze_assets_via_agent(
         for a in pending:
             if a["asset_id"] == asset_id:
                 return a["image_bytes"]
+        # Fallback to existing records in DB (for 跨批次 update 状态延续联合对比)
+        rec = db.get_record_by_asset_id(asset_id)
+        if rec:
+            orig = _download_original(rec["asset_id"], rec.get("source_type", "immich"), config)
+            if orig:
+                return orig
+            thumb = _get_image_bytes(rec, config)
+            if thumb:
+                return thumb
         raise KeyError(asset_id)
 
     harness = AgentHarness(

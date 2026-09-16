@@ -115,6 +115,7 @@ def get_recent_meals(args: dict, deps: dict) -> dict:
             "photo_time": pt,
             "date": pt[:10],  # explicit for cross-day reasoning
             "meal": r.get("meal"),
+            "meal_detail": r.get("meal_detail", ""),
             "calories": r.get("calories"),
             "protein_g": r.get("protein_g"),
             "carbs_g": r.get("carbs_g"),

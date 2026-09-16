@@ -84,7 +84,7 @@ def _create_schema(conn: sqlite3.Connection):
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
-        CREATE INDEX IF NOT EXISTS idx_records_date ON records(date(photo_time));
+        CREATE INDEX IF NOT EXISTS idx_records_local_date ON records(substr(photo_time, 1, 10));
         CREATE INDEX IF NOT EXISTS idx_records_photo_time ON records(photo_time);
         CREATE INDEX IF NOT EXISTS idx_records_source ON records(source_type, source_id);
 
@@ -435,7 +435,7 @@ def find_records_by_asset_id_prefix(prefix: str, date_str: str | None = None) ->
     conn = _get_conn()
     if date_str:
         rows = conn.execute(
-            "SELECT * FROM records WHERE asset_id LIKE ? AND date(photo_time) = ?",
+            "SELECT * FROM records WHERE asset_id LIKE ? AND substr(photo_time, 1, 10) = ?",
             (prefix + "%", date_str),
         ).fetchall()
     else:
@@ -449,7 +449,7 @@ def get_records_by_date(date_str: str) -> list[dict]:
     """Get all records for a specific date. Includes reanalysis_history."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT * FROM records WHERE date(photo_time) = ? ORDER BY photo_time",
+        "SELECT * FROM records WHERE substr(photo_time, 1, 10) = ? ORDER BY photo_time",
         (date_str,),
     ).fetchall()
 
@@ -491,7 +491,7 @@ def get_records_by_date_range(start: str, end: str) -> list[dict]:
     """Get all records in a date range [start, end]."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT * FROM records WHERE date(photo_time) >= ? AND date(photo_time) <= ? ORDER BY photo_time",
+        "SELECT * FROM records WHERE substr(photo_time, 1, 10) >= ? AND substr(photo_time, 1, 10) <= ? ORDER BY photo_time",
         (start, end),
     ).fetchall()
     return [_record_from_row(r) for r in rows]
@@ -516,13 +516,13 @@ def search_records(
     date_filter = ""
     params: list = []
     if start_date and end_date:
-        date_filter = " AND date(photo_time) BETWEEN ? AND ?"
+        date_filter = " AND substr(photo_time, 1, 10) BETWEEN ? AND ?"
         params = [start_date, end_date]
     elif start_date:
-        date_filter = " AND date(photo_time) >= ?"
+        date_filter = " AND substr(photo_time, 1, 10) >= ?"
         params = [start_date]
     elif end_date:
-        date_filter = " AND date(photo_time) <= ?"
+        date_filter = " AND substr(photo_time, 1, 10) <= ?"
         params = [end_date]
 
     # Split CJK phrases into individual characters to maximize recall for
@@ -535,7 +535,7 @@ def search_records(
         SELECT r.* FROM records_fts f
         JOIN records r ON r.id = f.rowid
         WHERE f.records_fts MATCH ? {date_filter}
-        ORDER BY date(photo_time) DESC, photo_time DESC
+        ORDER BY substr(photo_time, 1, 10) DESC, photo_time DESC
         LIMIT ?
         """,
         (fts_query, *params, limit),
@@ -903,7 +903,7 @@ def get_available_dates() -> list[str]:
     """Return dates that have at least one record, newest first."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT DISTINCT date(photo_time) as d FROM records ORDER BY d DESC"
+        "SELECT DISTINCT substr(photo_time, 1, 10) as d FROM records ORDER BY d DESC"
     ).fetchall()
     return [r["d"] for r in rows]
 
@@ -968,7 +968,8 @@ def group_meals(records: list[dict]) -> list[dict]:
         if r.get("merged_into"):
             stray.append(r)
         else:
-            r["photos"] = [{
+            p_record = dict(r)  # 浅拷贝，避免原地修改传入的原始记录列表污染外部统计
+            p_record["photos"] = [{
                 "asset_id": r["asset_id"],
                 "thumbnail_url": r.get("thumbnail_url", ""),
                 "photo_time": r.get("photo_time", ""),
@@ -979,8 +980,8 @@ def group_meals(records: list[dict]) -> list[dict]:
                 "carbs_g": r.get("carbs_g", 0),
                 "fat_g": r.get("fat_g", 0),
             }]
-            primaries.append(r)
-            by_asset[r["asset_id"]] = r
+            primaries.append(p_record)
+            by_asset[r["asset_id"]] = p_record
 
     if not primaries:
         return []
@@ -1015,6 +1016,57 @@ def group_meals(records: list[dict]) -> list[dict]:
             "carbs_g": m.get("carbs_g", 0),
             "fat_g": m.get("fat_g", 0),
         })
+
+    # 形态 B 组头聚合（数值累加 + 餐名与明细拼接）
+    for root in primaries:
+        photos = root.get("photos", [])
+        if len(photos) <= 1:
+            continue
+
+        has_form_b = False
+        item_names = []
+        detail_parts = []
+
+        main_meal = (root.get("meal") or "").strip()
+        if main_meal and main_meal not in ("📷", "?"):
+            item_names.append(main_meal)
+        main_detail = (root.get("meal_detail") or "").strip()
+        if main_detail:
+            detail_parts.append(main_detail)
+
+        for p in photos:
+            if p["asset_id"] == root["asset_id"]:
+                continue
+            is_form_b_row = bool(
+                p.get("calories") or p.get("protein_g") or p.get("carbs_g") or p.get("fat_g")
+            )
+            if is_form_b_row:
+                has_form_b = True
+                p_meal = (p.get("meal") or "").strip()
+                if p_meal and p_meal not in ("📷", "?") and p_meal not in item_names:
+                    item_names.append(p_meal)
+                p_detail = (p.get("meal_detail") or "").strip()
+                if p_detail:
+                    if p_meal and p_meal != main_meal:
+                        detail_parts.append(f"{p_meal}: {p_detail}")
+                    else:
+                        detail_parts.append(p_detail)
+
+        if has_form_b:
+            # 组头数值为组内所有照片合计（对齐 summarize_records）
+            root["calories"] = round(sum(p.get("calories", 0) for p in photos), 1)
+            root["protein_g"] = round(sum(p.get("protein_g", 0) for p in photos), 1)
+            root["carbs_g"] = round(sum(p.get("carbs_g", 0) for p in photos), 1)
+            root["fat_g"] = round(sum(p.get("fat_g", 0) for p in photos), 1)
+
+            # 主标题体现独立条目组合
+            if len(item_names) > 1:
+                root["meal"] = " + ".join(item_names)
+
+            # 明细体现组合明细
+            if detail_parts:
+                root["meal_detail"] = "；".join(detail_parts)
+
     return primaries
 
 
