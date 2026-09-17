@@ -31,6 +31,8 @@ Previous: {meal}, {calories} kcal
 Notes: {notes}
 Return JSON with meal, calories, protein_g, carbs_g, fat_g, confidence."""
 
+_FALLBACK_ANALYZE_TEXT = """You are a nutritionist estimating calories from a food description: {description}. Return JSON with meal, meal_detail, calories, protein_g, carbs_g, fat_g, confidence."""
+
 
 def _load(name: str, fallback: str) -> str:
     """Load prompt text from user dir → package dir → inline fallback."""
@@ -74,6 +76,11 @@ def load_packaged_analyze() -> str:
 def get_reanalyze_prompt() -> str:
     """Prompt template for reanalyze-with-notes. Contains {meal}/{notes} placeholders."""
     return _load("reanalyze", _FALLBACK_REANALYZE)
+
+
+def get_analyze_text_prompt() -> str:
+    """Prompt template for text-based food calorie estimation. Contains {description} placeholder."""
+    return _load("analyze_text", _FALLBACK_ANALYZE_TEXT)
 
 
 def list_placeholders(template: str) -> list[str]:

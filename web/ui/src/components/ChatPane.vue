@@ -39,7 +39,7 @@ const currentSessionTitle = computed(() => {
 // 快速提示语（无消息时展示）
 const promptChips = [
   '今天摄入了多少热量？',
-  '这周平均每天吃多少？',
+  '记一下昨天下午吃了包薯片',
   '帮我查查昨天的午餐',
   '最近吃过什么高蛋白食物？',
 ];
@@ -182,9 +182,9 @@ async function submitMessage() {
       tool_log: data.tool_log || [],
     });
 
-    // 若工具执行了写操作（修改/重分析），通知全局刷新视图
+    // 若工具执行了写操作（新增/修改/重分析），通知全局刷新视图
     const wroteData = (data.tool_log || []).some(
-      t => (t.name === 'edit_record' || t.name === 'reanalyze_record') && t.result?.ok
+      t => (t.name === 'add_record' || t.name === 'edit_record' || t.name === 'reanalyze_record') && t.result?.ok
     );
     if (wroteData) {
       touch();
@@ -356,7 +356,7 @@ onMounted(async () => {
         <div class="empty-icon">🍽️</div>
         <div class="empty-title">我是 Calo</div>
         <div class="empty-desc">
-          你的饮食与热量摄入管理助手。你可以随时问我摄入统计、查询餐食记录，或让我修改、重新分析记录。
+          你的饮食与热量摄入管理助手。你可以随时问我摄入统计、查询餐食记录，或直接对我说「记一下吃了什么零食」，让我帮你估算并记录。
         </div>
         <div class="prompt-chips">
           <button
@@ -421,7 +421,22 @@ onMounted(async () => {
                 />
               </div>
 
-              <!-- 3. 删除确认卡 (request_delete_record) -->
+              <!-- 3. 添加记录后展示记录卡 (add_record) -->
+              <div
+                v-else-if="tool.name === 'add_record' && tool.result?.record"
+                class="artifact"
+              >
+                <div class="artifact-caption">
+                  📝 已添加餐食记录：
+                </div>
+                <MealCard
+                  :record="normalizeRecord(tool.result.record)"
+                  :interactive="true"
+                  @open="$emit('open', normalizeRecord(tool.result.record))"
+                />
+              </div>
+
+              <!-- 4. 删除确认卡 (request_delete_record) -->
               <div
                 v-else-if="tool.name === 'request_delete_record' && tool.result?.confirm_card"
                 class="confirm-card"

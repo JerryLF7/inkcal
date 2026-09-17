@@ -464,6 +464,79 @@ def reanalyze_record_tool(args: dict, deps: dict) -> dict:
             "after": _record_brief(updated)}
 
 
+def add_record(args: dict, deps: dict) -> dict:
+    """Add a manual food record via Gemini text-based calorie analysis."""
+    from datetime import datetime, timezone, timedelta
+    from src import db
+    from src.calorie_analyzer import CalorieAnalyzer
+
+    description = str(args.get("description", "")).strip()
+    if not description:
+        return {"ok": False, "error": "description is required"}
+
+    date_str = str(args.get("date", "")).strip()
+    if not date_str:
+        return {"ok": False, "error": "date is required (YYYY-MM-DD)"}
+
+    now_hkt = datetime.now(timezone(timedelta(hours=8)))
+    time_str = str(args.get("time", "")).strip()
+    if not time_str:
+        time_str = now_hkt.strftime("%H:%M")
+    elif len(time_str) == 5 and ":" in time_str:
+        pass
+    elif len(time_str) == 4 and ":" not in time_str:
+        time_str = f"{time_str[:2]}:{time_str[2:]}"
+
+    if len(time_str) == 5:
+        photo_time = f"{date_str}T{time_str}:00+08:00"
+    else:
+        photo_time = f"{date_str}T{time_str}" if "+" in time_str else f"{date_str}T{time_str}+08:00"
+
+    config = deps.get("pipeline_config") or {}
+    gemini_key = config.get("gemini_key")
+    if not gemini_key:
+        return {"ok": False, "error": "GEMINI_API_KEY is not configured"}
+
+    user_cal = args.get("user_calories")
+    if user_cal is not None:
+        try:
+            user_cal = float(user_cal)
+        except (ValueError, TypeError):
+            user_cal = None
+
+    analyzer = CalorieAnalyzer(
+        api_key=gemini_key,
+        base_url=config.get("gemini_base_url"),
+        model=config.get("gemini_model", "gemini-3-flash-preview"),
+    )
+
+    analysis = analyzer.analyze_text(description, user_calories=user_cal)
+    if not analysis or analysis.get("meal") == "not real food":
+        return {"ok": False, "error": "未能识别为有效食物描述，未添加记录"}
+
+    asset_id = f"manual-{now_hkt.strftime('%Y%m%d%H%M%S%f')}"
+    record_data = {
+        "asset_id": asset_id,
+        "source_type": "manual",
+        "source_id": asset_id,
+        "photo_time": photo_time,
+        "thumbnail_url": "",
+        "meal": analysis.get("meal", "手工记录"),
+        "meal_detail": analysis.get("meal_detail", description),
+        "calories": analysis.get("calories", 0),
+        "protein_g": analysis.get("protein_g", 0),
+        "carbs_g": analysis.get("carbs_g", 0),
+        "fat_g": analysis.get("fat_g", 0),
+        "confidence": analysis.get("confidence", "low"),
+        "analyzed_at": now_hkt.isoformat(),
+        "merged_into": None,
+    }
+
+    db.insert_record(record_data)
+    saved = db.get_record_by_asset_id(asset_id)
+    return {"ok": True, "record": _record_brief(saved or record_data)}
+
+
 def request_delete_record(args: dict, deps: dict) -> dict:
     """Never deletes. Returns a confirmation-card payload; the actual
     deletion happens only when the user clicks the card, via the existing
@@ -496,6 +569,7 @@ CHAT_TOOLS = {
     "get_intake_stats": get_intake_stats,
     "search_meals": search_meals,
     "get_decisions": get_decisions,
+    "add_record": add_record,
     "edit_record": edit_record,
     "reanalyze_record": reanalyze_record_tool,
     "request_delete_record": request_delete_record,

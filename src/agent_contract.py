@@ -480,6 +480,41 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "add_record",
+            "description": (
+                "手动添加一条纯文本饮食记录（用于没拍照但吃了零食、外卖、饮料或加餐的补录）。"
+                "系统会自动调用 Gemini 分析食物内容并估算热量与 P/C/F 营养素，"
+                "不要自己编造数值。参数包括 description（食物文字描述，如'一包乐事原味薯片约40g'）、"
+                "date（日期 YYYY-MM-DD）、time（可选，时间 HH:MM，未指定时可根据上下文合理推断或留空使用当前时间）、"
+                "user_calories（可选，若用户明确告知了具体热量如'200大卡'时传入）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "食物与份量文字描述，如'昨天下午三点半吃了一包薯片和一瓶可乐'",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "记录归属的当地日期 YYYY-MM-DD",
+                    },
+                    "time": {
+                        "type": "string",
+                        "description": "可选，记录时间 HH:MM（24小时制，如 15:30）",
+                    },
+                    "user_calories": {
+                        "type": "number",
+                        "description": "可选，用户在对话中明确指定的热量数值（千卡/kcal）",
+                    },
+                },
+                "required": ["description", "date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "reanalyze_record",
             "description": (
                 "带补充说明重新分析一条记录的照片（如'没算米饭''这是两人份'），"
@@ -529,7 +564,8 @@ CHAT_SYSTEM_PROMPT = """你是 inkcal 的饮食助手 Calo，正在与用户对�
 
 ## 写操作规则
 
-- edit_record / reanalyze_record 可以直接执行，但执行前先用一句话向用户确认你理解的需求（在同一条回复里说明即可，无需等待）。
+- add_record / edit_record / reanalyze_record 可以直接执行。当用户要求记录、补记未拍照的食物（如零食、外卖或饮品）时，调用 add_record 工具并传入食物描述与换算后的当地日期时间，由 Gemini 进行热量估算与落库，不要自己瞎编热量。
+- edit_record / reanalyze_record 执行前先用一句话向用户确认你理解的需求（在同一条回复里说明即可，无需等待）。
 - 删除记录只能调用 request_delete_record 生成确认卡片，绝不承诺"已删除"。
 - 所有写操作都会留痕审计，操作后告知用户结果。
 

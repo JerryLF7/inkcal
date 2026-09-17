@@ -11,7 +11,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from src.prompts.loader import get_analyze_prompt, get_reanalyze_prompt
+from src.prompts.loader import get_analyze_prompt, get_reanalyze_prompt, get_analyze_text_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,37 @@ class CalorieAnalyzer:
                     time.sleep(delay)
                     continue
                 logger.error("Reanalysis failed: %s", e)
+                return self._empty_result()
+
+        return self._empty_result()
+
+    def analyze_text(self, description: str, user_calories: float | None = None) -> dict[str, Any]:
+        """Estimate calories and macronutrients from a text description of food."""
+        prompt = get_analyze_text_prompt().format(description=description)
+
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                r = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.2,
+                    response_format={"type": "json_object"},
+                )
+                res = self._parse_response(r)
+                if user_calories is not None and user_calories > 0:
+                    res["calories"] = float(user_calories)
+                return res
+
+            except Exception as e:
+                if self._should_retry(e, attempt):
+                    delay = RETRY_BACKOFF ** (attempt + 1)
+                    logger.warning("Text calorie analysis API error (attempt %d/%d), %ds 后重试: %s",
+                                   attempt + 1, MAX_RETRIES, delay, str(e)[:120])
+                    time.sleep(delay)
+                    continue
+                logger.error("Text calorie analysis failed: %s", e)
                 return self._empty_result()
 
         return self._empty_result()
