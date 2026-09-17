@@ -506,22 +506,22 @@ onMounted(async () => {
                     <span class="stat-label">总热量</span>
                   </div>
                   <div class="stat-cell">
-                    <span class="stat-val">{{ tool.result.total.count || 0 }}</span>
+                    <span class="stat-val">{{ tool.result.total.meals ?? tool.result.total.count ?? 0 }}</span>
                     <span class="stat-unit">餐</span>
                     <span class="stat-label">餐数</span>
                   </div>
                   <div class="stat-cell">
-                    <span class="stat-val p">{{ Math.round(tool.result.total.protein_g || 0) }}</span>
+                    <span class="stat-val p">{{ Math.round(tool.result.total.protein ?? tool.result.total.protein_g ?? 0) }}</span>
                     <span class="stat-unit">g</span>
                     <span class="stat-label">蛋白质</span>
                   </div>
                   <div class="stat-cell">
-                    <span class="stat-val c">{{ Math.round(tool.result.total.carbs_g || 0) }}</span>
+                    <span class="stat-val c">{{ Math.round(tool.result.total.carbs ?? tool.result.total.carbs_g ?? 0) }}</span>
                     <span class="stat-unit">g</span>
                     <span class="stat-label">碳水</span>
                   </div>
                   <div class="stat-cell">
-                    <span class="stat-val f">{{ Math.round(tool.result.total.fat_g || 0) }}</span>
+                    <span class="stat-val f">{{ Math.round(tool.result.total.fat ?? tool.result.total.fat_g ?? 0) }}</span>
                     <span class="stat-unit">g</span>
                     <span class="stat-label">脂肪</span>
                   </div>

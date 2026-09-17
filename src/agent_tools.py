@@ -354,6 +354,25 @@ def get_records_in_range(args: dict, deps: dict) -> dict:
             "records": [_group_brief(r) for r in grouped]}
 
 
+def _format_summary(s: dict) -> dict:
+    meals = s.get("meals", 0)
+    calories = s.get("calories", 0)
+    protein = s.get("protein", s.get("protein_g", 0))
+    carbs = s.get("carbs", s.get("carbs_g", 0))
+    fat = s.get("fat", s.get("fat_g", 0))
+    return {
+        "meals": meals,
+        "count": meals,
+        "calories": calories,
+        "protein": protein,
+        "protein_g": protein,
+        "carbs": carbs,
+        "carbs_g": carbs,
+        "fat": fat,
+        "fat_g": fat,
+    }
+
+
 def get_intake_stats(args: dict, deps: dict) -> dict:
     from src import db
 
@@ -367,8 +386,8 @@ def get_intake_stats(args: dict, deps: dict) -> dict:
         by_day.setdefault((r.get("photo_time") or "")[:10], []).append(r)
     return {
         "ok": True,
-        "total": db.summarize_records(records),
-        "by_day": {d: db.summarize_records(rs) for d, rs in sorted(by_day.items())},
+        "total": _format_summary(db.summarize_records(records)),
+        "by_day": {d: _format_summary(db.summarize_records(rs)) for d, rs in sorted(by_day.items())},
     }
 
 

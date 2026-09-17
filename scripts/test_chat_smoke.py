@@ -227,4 +227,15 @@ assert data["session_id"] == new_sid, "无效 session_id 应自动回退到最�
 assert len(data["messages"]) > 0
 print("  ok  GET /api/chat/messages 对无效 session_id 平滑回退到有效会话")
 
+# 9. 验证 get_intake_stats 字段完整性（同时兼容 meals/count 与 protein/protein_g）
+stats_res = call_chat_tool("get_intake_stats", {"start": "2026-09-16", "end": "2026-09-16"}, deps={})
+assert stats_res["ok"] is True
+total = stats_res["total"]
+assert total["calories"] == 400.0
+assert total["meals"] == 2 and total["count"] == 2
+assert total["protein"] == 10.5 and total["protein_g"] == 10.5
+assert total["carbs"] == 33.0 and total["carbs_g"] == 33.0
+assert total["fat"] == 23.0 and total["fat_g"] == 23.0
+print("  ok  get_intake_stats 正确聚合营养素并支持双向字段别名")
+
 print("\nall passed (fully isolated chat smoke tests)")
