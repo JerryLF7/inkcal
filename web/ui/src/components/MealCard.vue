@@ -49,7 +49,7 @@ function onClick() {
   <div class="meal-card" :class="{ clickable: interactive }" @click="onClick">
     <div class="conf-indicator" :class="'conf-' + conf" :title="CONF_TITLES[conf] || ''"></div>
     <div class="thumb-wrap">
-      <img v-if="thumb" class="thumb" :src="thumb" loading="lazy" alt="" @error="retryImg" @click.stop>
+      <img v-if="thumb" class="thumb" :src="thumb" loading="lazy" alt="" @error="retryImg">
       <div v-else class="thumb thumb-empty">{{ r.emoji || '🍽️' }}</div>
       <span v-if="photoCount > 1" class="photo-badge" :title="photoCount + ' 张照片，已合并为一餐'">×{{ photoCount }}</span>
     </div>
