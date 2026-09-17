@@ -159,7 +159,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 前端 Tab 与助手形象正式确定为 **Calo**（取自 inkcal / calor，后半截 Cal 的演化），后端系统提示对应更新为「你是 inkcal 的饮食助手 Calo」。
 `web/ui/src/components/ChatPane.vue` 完整接通聊天后端：
 
-- 默认恢复最新聊天 session；支持历史抽屉选择（`GET /api/chat/sessions`）和手动新建（`POST /api/chat/sessions`）。
+- 默认恢复最新聊天 session（优先从 `localStorage` 读取用户停留的会话，回退到后端有实际消息的最新 session）；支持历史抽屉选择与惰性手动新建（点 `＋` 时仅清空前端状态，首条消息发送时才真正落库，避免空 session 占位与刷新空白）。
 - 渲染普通消息（支持完整 Markdown 解析与排版）、摄入汇总统计卡（`get_intake_stats`）、餐记录 artifact（`MealCard` 结构化展示，可点击直接唤出 `MealLightbox`）、工具执行状态、安全删除确认卡。
 - 可通过自然语言查、改、重分析饮食记录；支持纯文本记账（`add_record`：没拍照时通过文字补录零食/加餐，由 Gemini 统一以 `src/prompts/analyze_text.md` 模板进行全摄入基准估算并落库为 `manual-` 记录）；写操作完成后自动触发 `touch()` 联动更新时间轴。
 - PC 布局与盒模型：全局配置 `box-sizing: border-box`，彻底解决时间轴右侧 padding 撑大导致第二列卡片及吸顶日期汇总被 Calo 侧栏遮挡的问题。

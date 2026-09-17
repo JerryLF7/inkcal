@@ -290,6 +290,10 @@ def api_chat_create_session():
 @app.route("/api/chat/messages")
 def api_chat_messages():
     session_id = request.args.get("session_id", type=int)
+    if session_id:
+        sess = db.get_chat_session(session_id)
+        if not sess:
+            session_id = None
     if not session_id:
         session_id = db.get_latest_chat_session_id()
         if not session_id:

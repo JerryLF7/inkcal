@@ -210,4 +210,18 @@ with patch("src.calorie_analyzer.CalorieAnalyzer", return_value=mock_analyzer):
     assert "未能识别" in res["error"]
     print("  ok  add_record 非食物描述正确拦截不落库")
 
+# 8. 验证会话恢复与防空 session 劫持
+empty_sid = db.create_chat_session()
+# 虽然 empty_sid 比 1 大，但由于它没有消息，get_latest_chat_session_id 优先返回有消息的 session 1
+assert db.get_latest_chat_session_id() == new_sid, "空 session 不应抢占最新会话锚点"
+print("  ok  get_latest_chat_session_id 优先返回有消息的会话")
+
+# 查询不存在的 session_id，后端自动回退到最新有效会话
+r = client.get("/api/chat/messages?session_id=99999")
+assert r.status_code == 200
+data = r.get_json()
+assert data["session_id"] == new_sid, "无效 session_id 应自动回退到最新有效会话"
+assert len(data["messages"]) > 0
+print("  ok  GET /api/chat/messages 对无效 session_id 平滑回退到有效会话")
+
 print("\nall passed (fully isolated chat smoke tests)")

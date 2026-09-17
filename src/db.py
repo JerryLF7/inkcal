@@ -1202,8 +1202,22 @@ def list_chat_sessions() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_chat_session(session_id: int) -> dict | None:
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def get_latest_chat_session_id() -> int | None:
     conn = _get_conn()
+    # 优先返回有消息记录的最新 session，避免空 session 抢占
+    row = conn.execute(
+        """SELECT s.id FROM chat_sessions s
+           INNER JOIN chat_messages m ON m.session_id = s.id
+           ORDER BY s.id DESC LIMIT 1"""
+    ).fetchone()
+    if row and row["id"] is not None:
+        return row["id"]
     row = conn.execute("SELECT MAX(id) AS id FROM chat_sessions").fetchone()
     return row["id"] if row and row["id"] is not None else None
 

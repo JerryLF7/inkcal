@@ -87,6 +87,8 @@ function normalizeRecord(r) {
 }
 
 // ── 会话与消息管理 ──────────────────────────────────────────
+const STORAGE_KEY_SESSION = 'inkcal_chat_session_id';
+
 async function loadSessions() {
   try {
     const res = await fetch(`${API}/api/chat/sessions`);
@@ -101,13 +103,20 @@ async function loadSessions() {
 async function loadMessages(sessionId = null) {
   loading.value = true;
   try {
-    const url = sessionId
-      ? `${API}/api/chat/messages?session_id=${sessionId}`
+    const saved = localStorage.getItem(STORAGE_KEY_SESSION);
+    const targetId = sessionId !== null ? sessionId : (saved ? Number(saved) : null);
+    const url = targetId
+      ? `${API}/api/chat/messages?session_id=${targetId}`
       : `${API}/api/chat/messages`;
     const res = await fetch(url);
     if (!res.ok) return;
     const data = await res.json();
     currentSessionId.value = data.session_id || null;
+    if (currentSessionId.value) {
+      localStorage.setItem(STORAGE_KEY_SESSION, String(currentSessionId.value));
+    } else {
+      localStorage.removeItem(STORAGE_KEY_SESSION);
+    }
     messages.value = data.messages || [];
     scrollToBottom(false);
   } catch (e) {
@@ -126,23 +135,14 @@ async function selectSession(sid) {
   await loadMessages(sid);
 }
 
-async function createNewSession() {
-  try {
-    const res = await fetch(`${API}/api/chat/sessions`, { method: 'POST' });
-    if (!res.ok) {
-      toast('创建新会话失败', 'error');
-      return;
-    }
-    const data = await res.json();
-    currentSessionId.value = data.session_id;
-    messages.value = [];
-    sessionsDrawerOpen.value = false;
-    toast('已新建会话');
-    await loadSessions();
-    nextTick(() => inputRef.value?.focus());
-  } catch (e) {
-    toast('创建新会话失败', 'error');
-  }
+function createNewSession() {
+  // 惰性新建：不往后端塞空 session 占位，只重置前端会话与本地消息
+  currentSessionId.value = null;
+  localStorage.removeItem(STORAGE_KEY_SESSION);
+  messages.value = [];
+  sessionsDrawerOpen.value = false;
+  toast('已开启新会话');
+  nextTick(() => inputRef.value?.focus());
 }
 
 // ── 消息发送 ───────────────────────────────────────────────
@@ -185,6 +185,9 @@ async function submitMessage() {
     }
 
     currentSessionId.value = data.session_id;
+    if (data.session_id) {
+      localStorage.setItem(STORAGE_KEY_SESSION, String(data.session_id));
+    }
 
     messages.value.push({
       id: 'reply-' + Date.now(),
