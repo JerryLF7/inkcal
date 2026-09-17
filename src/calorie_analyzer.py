@@ -210,6 +210,7 @@ class CalorieAnalyzer:
             "carbs_g": 0,
             "fat_g": 0,
             "confidence": "low",
+            "emoji": "",
         }
 
     def close(self):

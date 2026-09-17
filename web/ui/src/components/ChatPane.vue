@@ -82,6 +82,7 @@ function normalizeRecord(r) {
       calories: r.calories,
       thumbnail_url: r.thumbnail_url,
       replacement_image: r.replacement_image,
+      emoji: r.emoji,
     }],
   };
 }

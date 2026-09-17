@@ -230,6 +230,7 @@ async function refreshGroup(promoted) {
         <div class="lb-stage"
              @touchstart.passive="onSwipeStart" @touchend.passive="onSwipeEnd">
           <img v-if="imgSrc" class="lb-img" :src="imgSrc" alt="">
+          <div v-else class="lb-emoji-empty">{{ current?.emoji || rec?.emoji || '🍽️' }}</div>
           <span v-if="isGroup && currentIdx >= 0" class="lb-count">
             {{ currentIdx + 1 }} / {{ photosList.length }}
           </span>
@@ -336,6 +337,10 @@ async function refreshGroup(promoted) {
 .lb-stage { position: relative; display: flex; justify-content: center; }
 .lb-img {
   max-width: 100%; max-height: 62vh; border-radius: 12px; object-fit: contain;
+}
+.lb-emoji-empty {
+  width: 160px; height: 160px; display: flex; align-items: center; justify-content: center;
+  font-size: 80px; background: #1f1f1f; border-radius: 16px; border: 1px solid #282828;
 }
 .lb-count {
   position: absolute; bottom: 10px; right: 10px;

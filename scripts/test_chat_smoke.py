@@ -138,6 +138,7 @@ fake_analysis = {
     "carbs_g": 21.0,
     "fat_g": 14.0,
     "confidence": "high",
+    "emoji": "🍟",
 }
 
 mock_analyzer = MagicMock()
@@ -154,6 +155,7 @@ with patch("src.calorie_analyzer.CalorieAnalyzer", return_value=mock_analyzer):
     rec = res["record"]
     assert rec["meal"] == "休闲零食"
     assert rec["calories"] == 220
+    assert rec["emoji"] == "🍟"
     assert rec["photo_time"] == "2026-09-16T15:30:00+08:00"
     assert rec["asset_id"].startswith("manual-")
 
@@ -162,8 +164,9 @@ with patch("src.calorie_analyzer.CalorieAnalyzer", return_value=mock_analyzer):
     assert db_rec is not None
     assert db_rec["source_type"] == "manual"
     assert db_rec["calories"] == 220
+    assert db_rec["emoji"] == "🍟"
     assert db_rec["photo_time"].startswith("2026-09-16")
-    print("  ok  add_record 成功调用 Gemini 分析并落库 manual- 记录")
+    print("  ok  add_record 成功调用 Gemini 分析并落库 manual- 记录（含 emoji）")
 
 # 7.2 测试用户显式指定热量覆盖
 mock_analyzer.analyze_text.return_value = {

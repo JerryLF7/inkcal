@@ -80,6 +80,7 @@ def _create_schema(conn: sqlite3.Connection):
             user_label TEXT CHECK(user_label IN ('correct', 'wrong')),
             replacement_image TEXT,
             merged_into TEXT,
+            emoji TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -245,6 +246,10 @@ def _migrate_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE agent_decisions ADD COLUMN group_with TEXT")
         conn.commit()
 
+    if "emoji" not in rcols:
+        conn.execute("ALTER TABLE records ADD COLUMN emoji TEXT")
+        conn.commit()
+
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS pipeline_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -354,6 +359,11 @@ def _record_from_row(row: sqlite3.Row, history: list[dict] | None = None) -> dic
             record["merged_into"] = row["merged_into"]
     except (KeyError, IndexError):
         pass  # pre-migration rows / SELECT subsets without the column
+    try:
+        if row["emoji"]:
+            record["emoji"] = row["emoji"]
+    except (KeyError, IndexError):
+        pass
     if history:
         record["reanalysis_history"] = history
     return record
@@ -373,8 +383,8 @@ def insert_record(record: dict) -> dict:
             asset_id, source_type, source_id, photo_time, thumbnail_url,
             original_url, meal, meal_detail, calories, protein_g, carbs_g, fat_g,
             confidence, analyzed_at, model_used, user_label, replacement_image,
-            merged_into
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            merged_into, emoji
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             asset_id,
@@ -395,6 +405,7 @@ def insert_record(record: dict) -> dict:
             record.get("user_label"),
             record.get("replacement_image"),
             record.get("merged_into"),
+            record.get("emoji", "") or "",
         ),
     )
     conn.commit()
@@ -603,6 +614,7 @@ def update_record(asset_id: str, updates: dict) -> bool:
         "user_label": "user_label",
         "replacement_image": "replacement_image",
         "merged_into": "merged_into",
+        "emoji": "emoji",
     }
 
     set_clauses = []
@@ -979,6 +991,7 @@ def group_meals(records: list[dict]) -> list[dict]:
                 "protein_g": r.get("protein_g", 0),
                 "carbs_g": r.get("carbs_g", 0),
                 "fat_g": r.get("fat_g", 0),
+                "emoji": r.get("emoji", "") or "",
             }]
             primaries.append(p_record)
             by_asset[r["asset_id"]] = p_record
@@ -1015,6 +1028,7 @@ def group_meals(records: list[dict]) -> list[dict]:
             "protein_g": m.get("protein_g", 0),
             "carbs_g": m.get("carbs_g", 0),
             "fat_g": m.get("fat_g", 0),
+            "emoji": m.get("emoji", "") or "",
         })
 
     # 形态 B 组头聚合（数值累加 + 餐名与明细拼接）

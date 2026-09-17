@@ -31,7 +31,7 @@ Previous: {meal}, {calories} kcal
 Notes: {notes}
 Return JSON with meal, calories, protein_g, carbs_g, fat_g, confidence."""
 
-_FALLBACK_ANALYZE_TEXT = """You are a nutritionist estimating calories from a food description: {description}. Return JSON with meal, meal_detail, calories, protein_g, carbs_g, fat_g, confidence."""
+_FALLBACK_ANALYZE_TEXT = """You are a nutritionist estimating calories from a food description: {description}. Return JSON with meal, meal_detail, calories, protein_g, carbs_g, fat_g, emoji, confidence."""
 
 
 def _load(name: str, fallback: str) -> str:
