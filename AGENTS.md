@@ -160,8 +160,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 `web/ui/src/components/ChatPane.vue` 完整接通聊天后端：
 
 - 默认恢复最新聊天 session；支持历史抽屉选择（`GET /api/chat/sessions`）和手动新建（`POST /api/chat/sessions`）。
-- 渲染普通消息、摄入汇总统计卡（`get_intake_stats`）、餐记录 artifact（`MealCard` 结构化展示，可点击直接唤出 `MealLightbox`）、工具执行状态、安全删除确认卡。
+- 渲染普通消息（支持完整 Markdown 解析与排版）、摄入汇总统计卡（`get_intake_stats`）、餐记录 artifact（`MealCard` 结构化展示，可点击直接唤出 `MealLightbox`）、工具执行状态、安全删除确认卡。
 - 可通过自然语言查、改、重分析饮食记录；支持纯文本记账（`add_record`：没拍照时通过文字补录零食/加餐，由 Gemini 统一以 `src/prompts/analyze_text.md` 模板进行全摄入基准估算并落库为 `manual-` 记录）；写操作完成后自动触发 `touch()` 联动更新时间轴。
+- PC 布局与盒模型：全局配置 `box-sizing: border-box`，彻底解决时间轴右侧 padding 撑大导致第二列卡片及吸顶日期汇总被 Calo 侧栏遮挡的问题。
 - 删除安全契约：`request_delete_record` 的 `confirm_card` 真实渲染为二次确认卡；只有用户显式点击「确认删除」后才调用既有 `DELETE /api/record`，取消仅关闭卡片。**严禁让模型或前端直接绕过确认删除。**
 - 聊天设置：支持通过 `⚙️` 弹窗读写 `/api/settings` 的 `chat_window`（5～50 轮）。
 - 工具层数据流：`_record_brief` 与 `_group_brief` 补充 `thumbnail_url` 与 `replacement_image`，使聊天 artifact 能够直接渲染缩略图。

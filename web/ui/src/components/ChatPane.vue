@@ -1,8 +1,19 @@
 <script setup>
 import { ref, computed, nextTick, onMounted } from 'vue';
+import { marked } from 'marked';
 import MealCard from './MealCard.vue';
 import { API, fmtTimeHM } from '../utils/format.js';
 import { touch, toast } from '../store.js';
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  return marked.parse(text);
+}
 
 const props = defineProps({
   isDesktop: { type: Boolean, default: false },
@@ -515,9 +526,9 @@ onMounted(async () => {
             </div>
           </template>
 
-          <!-- 回复文本内容 -->
+          <!-- 回复文本内容（Markdown 渲染） -->
           <div v-if="msg.content" class="message calo">
-            <div class="msg-content">{{ msg.content }}</div>
+            <div class="msg-content" v-html="renderMarkdown(msg.content)"></div>
           </div>
         </div>
       </template>
@@ -726,7 +737,72 @@ onMounted(async () => {
   align-self: flex-start; color: #dedede; background: #1a1a1a;
   border: 1px solid #242424; border-bottom-left-radius: 3px;
 }
-.msg-content { white-space: pre-wrap; }
+.msg-content {
+  color: #dedede;
+  line-height: 1.55;
+  font-size: 14px;
+}
+.msg-content :deep(p) {
+  margin: 0 0 8px;
+  line-height: 1.55;
+}
+.msg-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.msg-content :deep(strong) {
+  color: #fff;
+  font-weight: 600;
+}
+.msg-content :deep(em) {
+  color: #ffd43b;
+  font-style: normal;
+}
+.msg-content :deep(ul),
+.msg-content :deep(ol) {
+  margin: 6px 0 8px;
+  padding-left: 18px;
+}
+.msg-content :deep(li) {
+  margin-bottom: 3px;
+  line-height: 1.5;
+}
+.msg-content :deep(li:last-child) {
+  margin-bottom: 0;
+}
+.msg-content :deep(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  background: #252525;
+  color: #ffd43b;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.msg-content :deep(pre) {
+  background: #111;
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.msg-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: #eee;
+}
+.msg-content :deep(blockquote) {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid #2a6eff;
+  background: #141414;
+  color: #aaa;
+}
+.msg-content :deep(a) {
+  color: #2a6eff;
+  text-decoration: none;
+}
+.msg-content :deep(a:hover) {
+  text-decoration: underline;
+}
 
 /* 思考中动画 */
 .message.thinking {

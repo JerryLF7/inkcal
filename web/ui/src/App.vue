@@ -177,7 +177,11 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
 </template>
 
 <style>
-/* 全局（非 scoped）：body 背景与字体 */
+/* 全局（非 scoped）：重置 box-sizing、body 背景与字体 */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 html, body {
   background: #000; margin: 0;
   font-family: -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
@@ -293,23 +297,26 @@ html, body {
   }
   .chat-restorer:hover { color: #e0e0e0; }
 
-  /* 主区内容限宽居中，避免超宽屏拉伸 */
-  .records-pane > .topbar { max-width: 1080px; width: 100%; margin: 0 auto; }
-  .records-pane > .scroll {
-    max-width: 1080px; width: 100%; margin: 0 auto;
+  /* 主区内容限宽居中，避免超宽屏拉伸；box-sizing 防 padding 撑大溢出被右侧栏遮挡 */
+  .records-pane > .topbar {
+    max-width: 1080px; width: 100%; margin: 0 auto; box-sizing: border-box;
+  }
+  .records-pane :deep(.scroll) {
+    max-width: 1080px; width: 100%; margin: 0 auto; box-sizing: border-box;
     padding: 0 20px 20px;
   }
 
   /* 桌面：日/周时间轴卡片双列排布（参考旧版 PC 布局） */
-  .records-pane > .scroll :deep(.day-group),
-  .records-pane > .scroll :deep(.week-timeline) {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px;
+  .records-pane :deep(.day-group),
+  .records-pane :deep(.week-timeline) {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px;
+    box-sizing: border-box;
   }
-  .records-pane > .scroll :deep(.day-group > .meal-card),
-  .records-pane > .scroll :deep(.week-timeline > .meal-card) { margin-bottom: 10px; }
+  .records-pane :deep(.day-group > .meal-card),
+  .records-pane :deep(.week-timeline > .meal-card) { margin-bottom: 10px; }
   /* 单卡日期也保持同样列宽，不留半行空白 */
-  .records-pane > .scroll :deep(.day-group > .meal-card:last-child:nth-child(odd)),
-  .records-pane > .scroll :deep(.week-timeline > .meal-card:last-child:nth-child(odd)) {
+  .records-pane :deep(.day-group > .meal-card:last-child:nth-child(odd)),
+  .records-pane :deep(.week-timeline > .meal-card:last-child:nth-child(odd)) {
     grid-column: auto; width: auto;
   }
   /* 日期分隔线不属于 day-group，保持单列横贯：无调整 */
