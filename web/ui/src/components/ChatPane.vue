@@ -550,15 +550,6 @@ onMounted(async () => {
 
     <!-- 底部输入框 -->
     <form class="chat-input" @submit.prevent="submitMessage">
-      <button
-        class="chat-plus"
-        type="button"
-        aria-label="聊天设置"
-        title="聊天设置"
-        @click="openSettings"
-      >
-        ⚙️
-      </button>
       <input
         ref="inputRef"
         v-model="inputText"
@@ -878,13 +869,6 @@ onMounted(async () => {
   display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid #1c1c1c;
   background: #0f0f0f; flex: none; align-items: center;
 }
-.chat-plus {
-  width: 36px; height: 36px; flex: none; border: 1px solid #262626;
-  border-radius: 50%; background: #181818; color: #888; font-size: 16px;
-  display: flex; align-items: center; justify-content: center; cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.chat-plus:hover { background: #222; color: #fff; }
 .chat-input input {
   min-width: 0; flex: 1; height: 38px; border: 1px solid #262626;
   border-radius: 19px; background: #161616; color: #eee; padding: 0 14px;
