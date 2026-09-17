@@ -116,6 +116,7 @@ function onClick() {
 .meal-meta .source { color: #555; }
 .meal-meta .agent-mark { cursor: help; }
 .macros { font-size: 11px; color: #777; margin-top: 3px; }
+.macros span { white-space: nowrap; }
 .macros .p { color: #51cf66; }
 .macros .c { color: #ffd43b; }
 .macros .f { color: #ff922b; }

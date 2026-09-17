@@ -1,14 +1,29 @@
 #!/usr/bin/env python3
-"""Smoke test for Phase 5 Calo chat feature and chat API endpoints."""
+"""Smoke test for Phase 5 Calo chat feature and chat API endpoints.
+
+Runs against an isolated temp DB (production data untouched).
+"""
 
 import os
 import sys
+import tempfile
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# 必须在导入任何模块之前设置隔离环境与临时数据库路径
+tmp_dir = Path(tempfile.mkdtemp())
+tmp_db = tmp_dir / "smoke_chat.db"
+os.environ["INKCAL_DB"] = str(tmp_db)
 os.environ["INKCAL_USER"] = ""
 os.environ["INKCAL_PASS"] = ""
 
-from src import db
-from web.server import app
+from src import db  # noqa: E402
+
+# 初始化隔离数据库
+db.init_db(tmp_db)
+
+from web.server import app  # noqa: E402
 
 client = app.test_client()
 
@@ -19,19 +34,21 @@ assert b"inkcal" in r.data
 assert b"index-" in r.data
 print("  ok  GET / 正常返回 Vue 生产 HTML")
 
-# 2. 验证 sessions API
+# 2. 验证 sessions API（新库应为空）
 r = client.get("/api/chat/sessions")
 assert r.status_code == 200
 sessions = r.get_json()["sessions"]
 assert isinstance(sessions, list)
-print(f"  ok  GET /api/chat/sessions 返回会话列表 ({len(sessions)} 个)")
+assert len(sessions) == 0, f"期望新隔离库 sessions 为空，实际有 {len(sessions)} 个"
+print("  ok  GET /api/chat/sessions 隔离库初始为空")
 
 # 3. 验证创建 session
 r = client.post("/api/chat/sessions")
 assert r.status_code == 200
 new_sid = r.get_json()["session_id"]
 assert isinstance(new_sid, int)
-print(f"  ok  POST /api/chat/sessions 成功创建 session_id={new_sid}")
+assert new_sid == 1, f"期望隔离库首个 session_id 为 1，实际为 {new_sid}"
+print(f"  ok  POST /api/chat/sessions 在隔离库成功创建 session_id={new_sid}")
 
 # 4. 验证获取新 session 消息为空
 r = client.get(f"/api/chat/messages?session_id={new_sid}")
@@ -99,8 +116,6 @@ r = client.put("/api/settings", json={"chat_window": 2})
 assert r.status_code == 200
 assert r.get_json()["chat_window"] == 5
 
-# 恢复设置
-client.put("/api/settings", json={"chat_window": cur_w})
 print("  ok  /api/settings chat_window 读写与边界约束正常")
 
-print("\nall passed (chat smoke tests)")
+print("\nall passed (fully isolated chat smoke tests)")
