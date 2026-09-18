@@ -266,16 +266,38 @@ def analyze_assets_via_agent(
                 skipped.append(aid)
             continue
 
-        # update: manual photos have no pre-existing record to merge into;
-        # the semantics here are always a new meal — downgrade to add.
-        if dec.action == "update":
-            logger.info("agent path: update decision downgraded to add "
-                        "(manual photos have no target record)")
-            dec = replace(dec, action="add", relation="new_meal")
-
         if dec.group_with:
             # 形态 B：延后——group_with 可能指向同批稍后落库的照片
             deferred.append(dec)
+            continue
+
+        if dec.action == "update":
+            root = db.resolve_group_root(dec.target_asset_id) \
+                if dec.target_asset_id else None
+            ok = False
+            if root:
+                ok = db.update_record(root, {
+                    "meal": dec.result.get("meal"),
+                    "meal_detail": dec.result.get("meal_detail", ""),
+                    "calories": dec.result.get("calories"),
+                    "protein_g": dec.result.get("protein_g"),
+                    "carbs_g": dec.result.get("carbs_g"),
+                    "fat_g": dec.result.get("fat_g"),
+                    "confidence": dec.result.get("confidence", "low"),
+                    "model_used": f"agent+{analyzer.model}",
+                })
+            if ok:
+                # 状态延续：update 覆盖的新照片落 0 值从行，主行更新最新估算
+                for aid in dec.asset_ids:
+                    _apply_add(dec, aid, merged_into=root, zero=True)
+                logger.info("agent path: 🔄 update → [%s...] %s ~%skcal",
+                            root[:8], dec.result.get("meal"),
+                            dec.result.get("calories"))
+            else:
+                logger.warning("agent path: update 目标不存在: %s（降级为 add）",
+                               dec.target_asset_id)
+                for aid in dec.asset_ids:
+                    _apply_add(dec, aid)
             continue
 
         if dec.action == "add":

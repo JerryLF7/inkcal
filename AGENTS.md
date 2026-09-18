@@ -288,7 +288,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 记录读取 API（`/api/records`、`/api/today`、`/api/week`）返回**分组后**的数据：`records` 只含主记录，主记录带 `photos` 数组（组内全部照片，按拍摄时间排序，含 asset_id/thumbnail_url/photo_time/meal/calories）；`summary` 基于原始行求和（形态 A 从行 0 值、形态 B 从行自带数值，都正确）。聊天工具（get_records_in_range/search_meals）同样按组聚合。
 - 删除：`DELETE /api/record` 默认 `mode="meal"`（整餐级联：组内所有行删除 + 全部 asset_id 进 ignored_assets）；`mode="photo"` 仅移除单张照片，删主行时最早从行自动晋升。CLI `inkcal delete` 同理（`--photo` 仅删单张）。`inkcal merge <主> <从>` 把已有记录并入同餐组（默认从行清零=状态延续，`--keep` 保留数值=独立条目）。
 - 同餐组多图评估（已实现）：同批多图或跨批次状态延续（吃前/吃后残局更新）时，均通过 `analyze_with_gemini`（回溯原图 + 联合对比）对全组照片进行综合摄入评估；形态 B（独立条目）由 `group_meals` 自动在组头累加各照片数值并拼接餐名与明细。
-- `AGENT_ENABLED=1` 时手动路径（相册选择、本地上传、`inkcal analyze`）统一经 `src/pipeline_ops.py::analyze_assets_via_agent` 进 Luna harness：跳过 SigLIP2 但保留 Luna skip 契约（skip → `classified_non_food`，decided_by=agent），决策审计写入 `agent_decisions`；`update` 决策在手动路径降级为 `add`（手动照片无已有记录可并入）。harness 失败或决策未覆盖时逐张降级原直发路径。
+- `AGENT_ENABLED=1` 时手动路径（相册选择、本地上传、`inkcal analyze`）统一经 `src/pipeline_ops.py::analyze_assets_via_agent` 进 Luna harness：跳过 SigLIP2 但保留 Luna skip 契约（skip → `classified_non_food`，decided_by=agent），决策审计写入 `agent_decisions`；`update` 决策与 cron 保持一致（通过 `resolve_group_root` 更新主记录最新摄入数值并将新照片落 0 值从行，支持跨批次状态延续回溯原图对比），仅当目标不存在时降级为 `add`。harness 失败或决策未覆盖时逐张降级原直发路径。
 - 手动上传先做 Immich pHash 匹配（幂等键先行，已处理返回 409），再走 Luna 或 Gemini；非食物返回 422。无 EXIF 时需允许后续日期修正，经 `/api/move-record` 重新尝试匹配。
 - EXIF 时间必须用 Immich 的 `asset.exifInfo.dateTimeOriginal` 和 `timeZone`，不要下载缩略图再读 EXIF；缩略图可能没有 EXIF。`UTC+8` 与 IANA 时区均要兼容，未知时区回退 HKT。
 - 卡片缩略图优先 Immich `size=thumbnail`，不要回退大 `preview`；慢网下保留超时、重试、请求取消/去重和缓存防御。旧原生 UI 的 localStorage 方案可作参考，新 Vue 实现不应无意倒退。

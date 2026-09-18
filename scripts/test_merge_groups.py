@@ -148,6 +148,27 @@ day2 = db.group_meals(db.get_records_by_date("2026-09-04"))
 check("X: 次日不产生孤儿卡",
       all(not m["asset_id"] == "f2" for m in day2))
 
+# ── 手动/相册路径 (analyze_assets_via_agent) update 状态延续 ─────────
+from src.pipeline_ops import analyze_assets_via_agent
+os.environ["LUNA_API_KEY"] = "fake-key"
+os.environ["GEMINI_API_KEY"] = "fake-key"
+
+manual_batch = [{
+    "asset_id": "m1",
+    "source": "immich",
+    "photo_time": "2026-09-03T16:00:00+08:00",
+    "image_bytes": b"fake",
+    "thumbnail_url": "",
+}]
+StubHarness.decisions = [make_dec(["m1"], action="update", relation="same_meal",
+                                  target="a2", meal="更新餐", cal=950)]
+records, skipped, fallback = analyze_assets_via_agent(manual_batch, {"gemini_key": "fake"})
+a2_up = db.get_record_by_asset_id("a2")
+m1_rec = db.get_record_by_asset_id("m1")
+check("Manual Update: 主记录数值更新", a2_up and a2_up["calories"] == 950 and a2_up["meal"] == "更新餐")
+check("Manual Update: 从记录 0 值且指向目标", m1_rec and m1_rec["calories"] == 0 and m1_rec.get("merged_into") == "a2")
+check("Manual Update: 返回列表包含从记录", records and any(r["asset_id"] == "m1" for r in records))
+
 os.unlink(_tmp.name)
 if failures:
     print(f"\n{len(failures)} FAILED")
