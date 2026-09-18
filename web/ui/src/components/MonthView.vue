@@ -143,11 +143,22 @@ defineExpose({ reload: load });
 .cal-day:hover { background: #1e1e1e; }
 .cal-day.dim { cursor: default; background: none; }
 .cal-day.today .num { color: #2a6eff; font-weight: 700; }
-.cal-day svg.ring { position: absolute; inset: 2px; transform: rotate(-90deg); }
+.cal-day svg.ring {
+  position: absolute; top: 50%; left: 50%;
+  width: calc(100% - 4px); height: calc(100% - 4px);
+  transform: translate(-50%, -50%) rotate(-90deg);
+  pointer-events: none;
+}
 .ring .bg { stroke: #222; }
 .ring .ok { stroke: #2a6eff; }
 .ring .warn { stroke: #51cf66; }
 .ring .over { stroke: #ff6b6b; }
+
+.cal-day .num {
+  position: relative; z-index: 1; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  transform: translateY(-0.5px);
+}
 
 /* 有记录的格子：数字提亮加粗，与空格子拉开对比 */
 .cal-day.filled .num { color: #e0e0e0; font-weight: 600; }
@@ -169,6 +180,6 @@ defineExpose({ reload: load });
 .scroll.compact .cal-head .m { font-size: 13px; }
 .scroll.compact .cal-grid { gap: 2px; }
 .scroll.compact .cal-wd { font-size: 10px; padding: 2px 0; }
-.scroll.compact .cal-day { aspect-ratio: auto; min-height: 34px; height: 34px; font-size: 12px; border-radius: 8px; }
+.scroll.compact .cal-day { aspect-ratio: 1; height: auto; min-height: unset; font-size: 12px; border-radius: 8px; }
 .scroll.compact .hint { padding: 10px 0; }
 </style>
