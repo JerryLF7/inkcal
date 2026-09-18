@@ -151,7 +151,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 卡片缩略图为 **96px**（Immich `size=thumbnail` 250px 足够清晰，不要换更大尺寸）；卡片 padding 12px。
 - PC 端日/周时间轴卡片为**双列网格、固定列宽**；主标题（`meal`）超长时折行显示（`MealCard` 的 `meal-name` 为 `white-space: normal` + `word-break: break-word`），不做省略号截断。
 - 卡片标题区为**主标题 + 副标题**两级：`meal-name`（15px 粗）+ `meal-detail`（12px 灰，**最多 2 行 `-webkit-line-clamp` 省略**，已拍板；完整明细在 lightbox 全文展示）。旧记录无副标题时不渲染该行。lightbox 主记录明细全文展示（`.lb-meal-detail`），形态 B 分行各带 2 行省略的 `.row-detail`。
-- `MealCard` 与 `MealLightbox` 是可复用组件；lightbox 已可展示 AI 决策审计和执行两步删除确认；lightbox 右上角关闭按钮为 SVG 细线 X + 圆形幽灵按钮样式（与 `.chat-plus` 同一视觉语言），不要退回裸文本 `✕`。
+- `MealCard` 与 `MealLightbox` 是可复用组件；卡片点击任意区域（含缩略图图片区域）均可唤出详情；lightbox 已可展示 AI 决策审计和执行两步删除确认；lightbox 右上角关闭按钮为 SVG 细线 X + 圆形幽灵按钮样式（与 `.chat-plus` 同一视觉语言），不要退回裸文本 `✕`。
 - 已决定：**不在时间轴显示 SigLIP2/Luna 判为非食物的 skip 照片**。`/api/skipped` 可以为未来纠错留着，但不是一期 UI。
 
 ### Calo Tab（已接通聊天后端与完整交互，2026-09-16）
@@ -230,7 +230,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ### 数据表
 
-- `records`：餐记录；`merged_into` 列表达同餐组（NULL=主记录，非空=附属照片行，详见 §1 绝对边界）；`meal` 为短标题、`meal_detail` 为菜品明细（2026-09-13 起，旧记录 detail 为空、不回填）。
+- `records`：餐记录；`merged_into` 列表达同餐组（NULL=主记录，非空=附属照片行，详见 §1 绝对边界）；`meal` 为短标题、`meal_detail` 为菜品明细（2026-09-13 起，旧记录 detail 为空、不回填）；`emoji` 为纯文本/手动补录的食物专属图标（由 Gemini 智能生成，无图时展示代替默认空餐盘）。
 - `records_fts`：标题 + 明细两列全文检索（meal / meal_detail）。
 - `reanalysis_history`：重分析和手动编辑前的旧值。
 - `ignored_assets`：删除后永远跳过的照片。
