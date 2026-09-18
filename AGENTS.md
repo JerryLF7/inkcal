@@ -165,7 +165,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **意图消歧原则（防重记误增）**：当用户表述指向某具体餐次或包含细节修正（如“今晚的...”、“一共15个”、“其实是玉米猪肉馅”、“没算米饭”）时，Calo 必须先调用 `get_records_in_range` 查询已有记录；若已存在对应记录，严禁调用 `add_record`（避免同一餐重复入库导致热量双倍计算），必须优先调用 `reanalyze_record` 让 Gemini 结合原图与修正说明更新原记录。
 - PC 布局与盒模型：全局配置 `box-sizing: border-box`，彻底解决时间轴右侧 padding 撑大导致第二列卡片及吸顶日期汇总被 Calo 侧栏遮挡的问题。
 - 删除安全契约：`request_delete_record` 的 `confirm_card` 真实渲染为二次确认卡；只有用户显式点击「确认删除」后才调用既有 `DELETE /api/record`，取消仅关闭卡片。**严禁让模型或前端直接绕过确认删除。**
-- 聊天设置：支持通过 `⚙️` 弹窗读写 `/api/settings` 的 `chat_window`（5～50 轮）。
+- 聊天设置：支持通过设置弹窗读写 `/api/settings` 的 `chat_window`（5～50 轮）。
+- 操作栏视觉对齐：Calo 顶部操作栏（历史会话、新建会话、设置、侧栏折叠）采用统一 16x16 细线矢量 SVG 图标（历史会话采用标准时钟回滚 History 图标，杜绝 Unicode 字符引起的类饼图歧义与 Emoji 混排导致的基线上下错位）。
 - 工具层数据流：`_record_brief` 与 `_group_brief` 补充 `thumbnail_url` 与 `replacement_image`，使聊天 artifact 能够直接渲染缩略图。
 - 回归测试：`scripts/test_chat_smoke.py`。
 - 一期不做聊天传图（未来可从 `+` 入口扩展）。
