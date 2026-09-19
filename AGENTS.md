@@ -170,7 +170,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
   - 实测注意：模型在"找某食物历史记录"时会**随机**选 `search_meals`（按关键词）或 `get_records_in_range`（按日期），两者都合理，前端分流规则对二者一视同仁，不要假设只会走其中一个。
 - 可通过自然语言查、改、重分析饮食记录；支持纯文本记账（`add_record`：没拍照时通过文字补录零食/加餐，由 Gemini 统一以 `src/prompts/analyze_text.md` 模板进行全摄入基准估算并落库为 `manual-` 记录，由模型自主决定生成 1~3 个匹配食物组合的 Emoji 如 ☕🥐 或 🍔🍟🥤 代替无图时的空餐盘展示，前端按字符数自适应字号居中排版）；写操作完成后自动触发 `touch()` 联动更新时间轴。
 - **意图消歧原则（防重记误增）**：当用户表述指向某具体餐次或包含细节修正（如“今晚的...”、“一共15个”、“其实是玉米猪肉馅”、“没算米饭”）时，Calo 必须先调用 `get_records_in_range` 查询已有记录；若已存在对应记录，严禁调用 `add_record`（避免同一餐重复入库导致热量双倍计算），必须优先调用 `reanalyze_record` 让 Gemini 结合原图与修正说明更新原记录。
-- PC 布局与盒模型：全局配置 `box-sizing: border-box`，彻底解决时间轴右侧 padding 撑大导致第二列卡片及吸顶日期汇总被 Calo 侧栏遮挡的问题。
+- PC 布局与盒模型：全局配置 `box-sizing: border-box`，彻底解决时间轴右侧 padding 撑大导致第二列卡片及吸顶日期汇总被 Calo 侧栏遮挡的问题。全局轻提示 Toast 补齐 `position: fixed; left: 50%; transform: translateX(-50%)` 及高层级圆角样式，脱离 `.app.desktop` 横向 flex 流，彻底解决桌面端轻提示被挤到屏幕最右上角贴边的问题。
 - 删除安全契约：`request_delete_record` 的 `confirm_card` 真实渲染为二次确认卡；只有用户显式点击「确认删除」后才调用既有 `DELETE /api/record`，取消仅关闭卡片。**严禁让模型或前端直接绕过确认删除。**
 - 聊天设置：支持通过设置弹窗读写 `/api/settings` 的 `chat_window`（5～50 轮）。
 - 操作栏视觉对齐：Calo 顶部操作栏（历史会话、新建会话、设置、侧栏折叠）采用统一 16x16 细线矢量 SVG 图标（历史会话采用标准时钟回滚 History 图标，杜绝 Unicode 字符引起的类饼图歧义与 Emoji 混排导致的基线上下错位）。

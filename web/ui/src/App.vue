@@ -320,5 +320,21 @@ html, body {
     grid-column: auto; width: auto;
   }
   /* 日期分隔线不属于 day-group，保持单列横贯：无调整 */
+
+  .toast { bottom: 36px; }
+}
+
+/* ── 全局轻提示 Toast（fixed 居中悬浮，脱离 flex 布局）── */
+.toast {
+  position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%);
+  background: rgba(36, 36, 36, 0.95); color: #f0f0f0; font-size: 13px;
+  font-weight: 500; padding: 9px 20px; border-radius: 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  border: 1px solid #333; z-index: 300; pointer-events: none;
+  max-width: 90%; text-align: center; white-space: nowrap;
+  backdrop-filter: blur(8px);
+}
+.toast.error {
+  background: rgba(60, 20, 20, 0.95); color: #ff8787; border-color: #6a2a2a;
 }
 </style>
