@@ -302,6 +302,107 @@ function formatSessionTime(t) {
   return t.replace('T', ' ').slice(0, 16);
 }
 
+// ── 工具执行步骤链（参考 LobeHub/Pi：过程折叠、产物留白）──────────
+// 设计契约：
+//   1. 每一次工具调用都是"过程"，收进默认折叠的步骤条里，标题优先用
+//      模型给出的 intent（本次调用的目的），历史消息无 intent 时按工具
+//      名 + 关键参数兜底，绝不把函数名直接甩给用户。
+//   2. 只有"最终产物"才在步骤条下方单独渲染卡片：写操作永远展示；
+//      查询类结果仅在本轮没有写操作时展示（否则它只是内部参考依据，
+//      例如为确认未重复而回查今天、为对比份量而回查昨天）。
+const TOOL_LABELS = {
+  get_records_in_range: '查询餐食记录',
+  get_intake_stats: '统计摄入情况',
+  search_meals: '搜索餐食记录',
+  get_decisions: '查看 AI 识别决策',
+  edit_record: '修改餐食记录',
+  add_record: '补记餐食记录',
+  reanalyze_record: '重新分析餐食记录',
+  request_delete_record: '请求删除餐食记录',
+};
+
+// 写操作：其结果卡片是用户真正关心的产物，必须展示
+const WRITE_TOOLS = new Set([
+  'add_record', 'edit_record', 'reanalyze_record', 'request_delete_record',
+]);
+
+const stepsOpen = ref({});        // 步骤条展开态，key = msg.id
+const stepDetailOpen = ref({});   // 单步详情展开态，key = `${msg.id}:${idx}`
+
+function toggleSteps(id) { stepsOpen.value[id] = !stepsOpen.value[id]; }
+function toggleStepDetail(key) { stepDetailOpen.value[key] = !stepDetailOpen.value[key]; }
+
+// 步骤标题：优先 intent，其次工具名兜底 + 参数线索
+function stepTitle(tool) {
+  const intent = (tool.args?.intent || '').trim();
+  if (intent) return intent;
+
+  const label = TOOL_LABELS[tool.name] || tool.name;
+  const a = tool.args || {};
+  if (tool.name === 'get_records_in_range') {
+    const s = (a.start || '').slice(5);
+    const e = (a.end || '').slice(5);
+    if (s && e) return s === e ? `${label} (${s})` : `${label} (${s}~${e})`;
+  } else if (tool.name === 'search_meals' && a.keyword) {
+    return `${label}「${a.keyword}」`;
+  } else if (tool.name === 'get_decisions' && a.date) {
+    return `${label} (${a.date.slice(5)})`;
+  }
+  return label;
+}
+
+// 步骤右侧的轻量结果徽标（不铺开正文，只给一个量级）
+function stepBadge(tool) {
+  if (tool.name === 'get_records_in_range' || tool.name === 'search_meals') {
+    const n = tool.result?.records?.length;
+    return n ? `${n} 条` : '';
+  }
+  if (tool.name === 'get_intake_stats' && tool.result?.total) {
+    return `${Math.round(tool.result.total.calories || 0)} kcal`;
+  }
+  if (tool.name === 'get_decisions') {
+    const n = tool.result?.count ?? tool.result?.decisions?.length;
+    return n ? `${n} 条` : '';
+  }
+  return '';
+}
+
+function stepParams(tool) {
+  const a = { ...(tool.args || {}) };
+  delete a.intent;                       // intent 已是标题，不重复展示
+  return JSON.stringify(a);
+}
+
+function stepOutcome(tool) {
+  const r = tool.result || {};
+  if (tool.name === 'get_records_in_range' || tool.name === 'search_meals') {
+    return `匹配 ${r.records?.length || 0} 条记录`;
+  }
+  if (tool.name === 'get_intake_stats') {
+    return r.total ? `${Math.round(r.total.calories || 0)} kcal` : (r.error || '');
+  }
+  if (tool.name === 'get_decisions') {
+    return `审计决策 ${r.count ?? (r.decisions?.length || 0)} 条`;
+  }
+  if (tool.name === 'add_record') {
+    return r.record ? `新增「${r.record.meal}」${r.record.calories} kcal` : (r.error || '');
+  }
+  if (tool.name === 'edit_record' || tool.name === 'reanalyze_record') {
+    return r.after ? `「${r.after.meal}」${r.after.calories} kcal` : (r.error || '');
+  }
+  if (tool.name === 'request_delete_record') {
+    return r.confirm_card ? '已生成待确认删除卡' : (r.error || '');
+  }
+  return '';
+}
+
+// 查询结果卡片只在本轮无写操作时展示（否则属内部参考步骤）
+function recordsArtifactVisible(tool, msg) {
+  if (!tool.result?.records?.length) return false;
+  const hasWrite = (msg.tool_log || []).some(t => WRITE_TOOLS.has(t.name));
+  return !hasWrite;
+}
+
 onMounted(async () => {
   await loadSessions();
   await loadMessages();
@@ -408,137 +509,168 @@ onMounted(async () => {
 
         <!-- Assistant 消息 -->
         <div v-else class="assistant-group">
-          <!-- 工具执行状态与 Artifact -->
-          <template v-if="msg.tool_log && msg.tool_log.length">
+          <!-- ── ① 过程：工具执行步骤链（默认折叠，参考 LobeHub/Pi）── -->
+          <div v-if="msg.tool_log && msg.tool_log.length" class="tool-steps">
+            <button type="button" class="steps-head" @click="toggleSteps(msg.id)">
+              <span class="steps-check">✓</span>
+              <span class="steps-label">已执行 {{ msg.tool_log.length }} 步操作</span>
+              <span class="steps-caret" :class="{ open: !!stepsOpen[msg.id] }">▾</span>
+            </button>
+            <div v-if="stepsOpen[msg.id]" class="steps-body">
+              <div v-for="(tool, tIdx) in msg.tool_log" :key="tIdx" class="step">
+                <button
+                  type="button"
+                  class="step-row"
+                  @click="toggleStepDetail(`${msg.id}:${tIdx}`)"
+                >
+                  <span class="step-check">✓</span>
+                  <span class="step-title">{{ stepTitle(tool) }}</span>
+                  <span v-if="stepBadge(tool)" class="step-badge">{{ stepBadge(tool) }}</span>
+                  <span
+                    class="step-caret"
+                    :class="{ open: !!stepDetailOpen[`${msg.id}:${tIdx}`] }"
+                  >▸</span>
+                </button>
+                <div
+                  v-if="stepDetailOpen[`${msg.id}:${tIdx}`]"
+                  class="step-detail"
+                >
+                  <div class="step-line">
+                    <span class="step-k">参数</span><code>{{ stepParams(tool) }}</code>
+                  </div>
+                  <div v-if="stepOutcome(tool)" class="step-line">
+                    <span class="step-k">结果</span><code>{{ stepOutcome(tool) }}</code>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── ② 产物：仅渲染最终结果卡片（写操作 + 纯查询 + 统计）── -->
+          <template v-for="(tool, tIdx) in (msg.tool_log || [])" :key="`art${tIdx}`">
+            <!-- 1. 添加记录后展示记录卡 (add_record) -->
             <div
-              v-for="(tool, tIdx) in msg.tool_log"
-              :key="tIdx"
-              class="tool-wrap"
+              v-if="tool.name === 'add_record' && tool.result?.record"
+              class="artifact"
             >
-              <!-- 1. 查询/搜索餐食记录列表 (get_records_in_range / search_meals) -->
-              <div
-                v-if="(tool.name === 'get_records_in_range' || tool.name === 'search_meals') && tool.result?.records?.length"
-                class="artifact"
-              >
-                <div class="artifact-caption">
-                  {{ tool.name === 'search_meals' ? `搜索「${tool.args?.keyword || ''}」找到 ${tool.result.records.length} 餐：` : `找到 ${tool.result.records.length} 餐：` }}
+              <div class="artifact-caption">
+                📝 已添加餐食记录：
+              </div>
+              <MealCard
+                :record="normalizeRecord(tool.result.record)"
+                :interactive="true"
+                @open="$emit('open', normalizeRecord(tool.result.record))"
+              />
+            </div>
+
+            <!-- 2. 编辑/重新分析记录后展示更新卡 (edit_record / reanalyze_record) -->
+            <div
+              v-else-if="(tool.name === 'edit_record' || tool.name === 'reanalyze_record') && tool.result?.after"
+              class="artifact"
+            >
+              <div class="artifact-caption">
+                {{ tool.name === 'edit_record' ? '✏️ 已更新餐食记录：' : '🔄 已重新分析餐食记录：' }}
+              </div>
+              <MealCard
+                :record="normalizeRecord(tool.result.after)"
+                :interactive="true"
+                @open="$emit('open', normalizeRecord(tool.result.after))"
+              />
+            </div>
+
+            <!-- 3. 删除确认卡 (request_delete_record) -->
+            <div
+              v-else-if="tool.name === 'request_delete_record' && tool.result?.confirm_card"
+              class="confirm-card"
+              :class="{
+                'confirmed': tool.result._status === 'confirmed',
+                'canceled': tool.result._status === 'canceled'
+              }"
+            >
+              <template v-if="tool.result._status === 'confirmed'">
+                <div class="confirm-done">✅ 已删除该餐记录</div>
+              </template>
+              <template v-else-if="tool.result._status === 'canceled'">
+                <div class="confirm-canceled">已取消删除</div>
+              </template>
+              <template v-else>
+                <div class="confirm-text">
+                  确认删除 <strong>{{ tool.result.confirm_card.meal || '该餐' }}</strong>（{{ fmtTimeHM(tool.result.confirm_card.photo_time) }}，{{ tool.result.confirm_card.calories }} kcal）吗？
                 </div>
-                <div class="artifact-cards">
-                  <MealCard
-                    v-for="rec in tool.result.records"
-                    :key="rec.asset_id || rec.id"
-                    :record="normalizeRecord(rec)"
-                    :interactive="true"
-                    @open="$emit('open', normalizeRecord(rec))"
-                  />
+                <div class="confirm-actions">
+                  <button
+                    type="button"
+                    class="confirm-btn danger"
+                    :disabled="deletingAssetId === tool.result.confirm_card.asset_id"
+                    @click="handleDeleteRecord(tool.result)"
+                  >
+                    {{ deletingAssetId === tool.result.confirm_card.asset_id ? '删除中…' : '确认删除' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="confirm-btn cancel"
+                    :disabled="deletingAssetId === tool.result.confirm_card.asset_id"
+                    @click="handleCancelDelete(tool.result)"
+                  >
+                    取消
+                  </button>
+                </div>
+              </template>
+            </div>
+
+            <!-- 4. 统计卡 (get_intake_stats)：本身就是答案，始终展示 -->
+            <div
+              v-else-if="tool.name === 'get_intake_stats' && tool.result?.total"
+              class="stats-artifact"
+            >
+              <div class="stats-header">
+                📊 {{ tool.args?.start || '' }} 至 {{ tool.args?.end || '' }} 摄入汇总
+              </div>
+              <div class="stats-grid">
+                <div class="stat-cell">
+                  <span class="stat-val">{{ Math.round(tool.result.total.calories || 0) }}</span>
+                  <span class="stat-unit">kcal</span>
+                  <span class="stat-label">总热量</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-val">{{ tool.result.total.meals ?? tool.result.total.count ?? 0 }}</span>
+                  <span class="stat-unit">餐</span>
+                  <span class="stat-label">餐数</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-val p">{{ Math.round(tool.result.total.protein ?? tool.result.total.protein_g ?? 0) }}</span>
+                  <span class="stat-unit">g</span>
+                  <span class="stat-label">蛋白质</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-val c">{{ Math.round(tool.result.total.carbs ?? tool.result.total.carbs_g ?? 0) }}</span>
+                  <span class="stat-unit">g</span>
+                  <span class="stat-label">碳水</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-val f">{{ Math.round(tool.result.total.fat ?? tool.result.total.fat_g ?? 0) }}</span>
+                  <span class="stat-unit">g</span>
+                  <span class="stat-label">脂肪</span>
                 </div>
               </div>
+            </div>
 
-              <!-- 2. 编辑/重新分析记录后展示更新卡 (edit_record / reanalyze_record) -->
-              <div
-                v-else-if="(tool.name === 'edit_record' || tool.name === 'reanalyze_record') && tool.result?.after"
-                class="artifact"
-              >
-                <div class="artifact-caption">
-                  {{ tool.name === 'edit_record' ? '✏️ 已更新餐食记录：' : '🔄 已重新分析餐食记录：' }}
-                </div>
+            <!-- 5. 查询/搜索结果卡：仅在本轮无写操作时展示（否则属内部参考步骤） -->
+            <div
+              v-else-if="(tool.name === 'get_records_in_range' || tool.name === 'search_meals') && recordsArtifactVisible(tool, msg)"
+              class="artifact"
+            >
+              <div class="artifact-caption">
+                {{ tool.name === 'search_meals' ? `搜索「${tool.args?.keyword || ''}」找到 ${tool.result.records.length} 餐：` : `找到 ${tool.result.records.length} 餐：` }}
+              </div>
+              <div class="artifact-cards">
                 <MealCard
-                  :record="normalizeRecord(tool.result.after)"
+                  v-for="rec in tool.result.records"
+                  :key="rec.asset_id || rec.id"
+                  :record="normalizeRecord(rec)"
                   :interactive="true"
-                  @open="$emit('open', normalizeRecord(tool.result.after))"
+                  @open="$emit('open', normalizeRecord(rec))"
                 />
-              </div>
-
-              <!-- 3. 添加记录后展示记录卡 (add_record) -->
-              <div
-                v-else-if="tool.name === 'add_record' && tool.result?.record"
-                class="artifact"
-              >
-                <div class="artifact-caption">
-                  📝 已添加餐食记录：
-                </div>
-                <MealCard
-                  :record="normalizeRecord(tool.result.record)"
-                  :interactive="true"
-                  @open="$emit('open', normalizeRecord(tool.result.record))"
-                />
-              </div>
-
-              <!-- 4. 删除确认卡 (request_delete_record) -->
-              <div
-                v-else-if="tool.name === 'request_delete_record' && tool.result?.confirm_card"
-                class="confirm-card"
-                :class="{
-                  'confirmed': tool.result._status === 'confirmed',
-                  'canceled': tool.result._status === 'canceled'
-                }"
-              >
-                <template v-if="tool.result._status === 'confirmed'">
-                  <div class="confirm-done">✅ 已删除该餐记录</div>
-                </template>
-                <template v-else-if="tool.result._status === 'canceled'">
-                  <div class="confirm-canceled">已取消删除</div>
-                </template>
-                <template v-else>
-                  <div class="confirm-text">
-                    确认删除 <strong>{{ tool.result.confirm_card.meal || '该餐' }}</strong>（{{ fmtTimeHM(tool.result.confirm_card.photo_time) }}，{{ tool.result.confirm_card.calories }} kcal）吗？
-                  </div>
-                  <div class="confirm-actions">
-                    <button
-                      type="button"
-                      class="confirm-btn danger"
-                      :disabled="deletingAssetId === tool.result.confirm_card.asset_id"
-                      @click="handleDeleteRecord(tool.result)"
-                    >
-                      {{ deletingAssetId === tool.result.confirm_card.asset_id ? '删除中…' : '确认删除' }}
-                    </button>
-                    <button
-                      type="button"
-                      class="confirm-btn cancel"
-                      :disabled="deletingAssetId === tool.result.confirm_card.asset_id"
-                      @click="handleCancelDelete(tool.result)"
-                    >
-                      取消
-                    </button>
-                  </div>
-                </template>
-              </div>
-
-              <!-- 4. 统计卡 (get_intake_stats) -->
-              <div
-                v-else-if="tool.name === 'get_intake_stats' && tool.result?.total"
-                class="stats-artifact"
-              >
-                <div class="stats-header">
-                  📊 {{ tool.args?.start || '' }} 至 {{ tool.args?.end || '' }} 摄入汇总
-                </div>
-                <div class="stats-grid">
-                  <div class="stat-cell">
-                    <span class="stat-val">{{ Math.round(tool.result.total.calories || 0) }}</span>
-                    <span class="stat-unit">kcal</span>
-                    <span class="stat-label">总热量</span>
-                  </div>
-                  <div class="stat-cell">
-                    <span class="stat-val">{{ tool.result.total.meals ?? tool.result.total.count ?? 0 }}</span>
-                    <span class="stat-unit">餐</span>
-                    <span class="stat-label">餐数</span>
-                  </div>
-                  <div class="stat-cell">
-                    <span class="stat-val p">{{ Math.round(tool.result.total.protein ?? tool.result.total.protein_g ?? 0) }}</span>
-                    <span class="stat-unit">g</span>
-                    <span class="stat-label">蛋白质</span>
-                  </div>
-                  <div class="stat-cell">
-                    <span class="stat-val c">{{ Math.round(tool.result.total.carbs ?? tool.result.total.carbs_g ?? 0) }}</span>
-                    <span class="stat-unit">g</span>
-                    <span class="stat-label">碳水</span>
-                  </div>
-                  <div class="stat-cell">
-                    <span class="stat-val f">{{ Math.round(tool.result.total.fat ?? tool.result.total.fat_g ?? 0) }}</span>
-                    <span class="stat-unit">g</span>
-                    <span class="stat-label">脂肪</span>
-                  </div>
-                </div>
               </div>
             </div>
           </template>
@@ -828,7 +960,60 @@ onMounted(async () => {
 .thinking-text { font-size: 12px; color: #888; margin-left: 4px; }
 
 /* 工具与 Artifact */
-.tool-wrap { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+
+/* ── 工具执行步骤链（默认折叠，参考 LobeHub/Pi 的过程展示）── */
+.tool-steps {
+  border: 1px solid #1f1f1f; border-radius: 10px;
+  background: #121212; overflow: hidden; width: 100%;
+}
+.steps-head {
+  width: 100%; display: flex; align-items: center; gap: 7px;
+  padding: 8px 11px; background: none; border: 0; cursor: pointer;
+  color: #9a9a9a; font: inherit; font-size: 12px; text-align: left;
+  transition: background 0.15s;
+}
+.steps-head:hover { background: #181818; }
+.steps-check { color: #51cf66; font-size: 11px; flex: none; line-height: 1; }
+.steps-label { flex: 1; min-width: 0; }
+.steps-caret {
+  color: #555; font-size: 9px; flex: none; line-height: 1;
+  transition: transform 0.18s ease;
+}
+.steps-caret.open { transform: rotate(180deg); }
+
+.steps-body { border-top: 1px solid #1c1c1c; padding: 3px 0; }
+.step + .step { border-top: 1px solid #191919; }
+.step-row {
+  width: 100%; display: flex; align-items: center; gap: 7px;
+  padding: 7px 11px; background: none; border: 0; cursor: pointer;
+  color: #b8b8b8; font: inherit; font-size: 12px; text-align: left;
+  transition: background 0.15s;
+}
+.step-row:hover { background: #181818; }
+.step-check { color: #51cf66; font-size: 11px; flex: none; line-height: 1; }
+.step-title { flex: 1; min-width: 0; word-break: break-word; line-height: 1.4; }
+.step-badge {
+  flex: none; font-size: 10px; color: #808080; line-height: 1.6;
+  background: #1f1f1f; border-radius: 6px; padding: 0 6px;
+}
+.step-caret {
+  color: #4a4a4a; font-size: 8px; flex: none; line-height: 1;
+  transition: transform 0.15s ease;
+}
+.step-caret.open { transform: rotate(90deg); }
+
+.step-detail {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 0 11px 9px 29px;
+}
+.step-line { display: flex; gap: 8px; align-items: baseline; }
+.step-k { flex: none; font-size: 10px; color: #555; }
+.step-detail code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px; color: #8a8a8a; line-height: 1.5;
+  word-break: break-all;
+}
+
 .artifact {
   border: 1px solid #2a2a2a; border-radius: 10px; background: #141414;
   padding: 10px; width: 100%; box-sizing: border-box;

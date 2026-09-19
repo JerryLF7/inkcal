@@ -383,6 +383,10 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "本次调用的具体目的（中文，5-15字，如'查询今日已有餐食确认未重复'、'查询昨日玉米作为份量参考'、'补记晚餐水煮甜玉米'），会作为执行步骤标题展示在界面上",
+                    },
                     "start": {"type": "string", "description": "开始日期 YYYY-MM-DD"},
                     "end": {"type": "string", "description": "结束日期 YYYY-MM-DD"},
                 },
@@ -401,6 +405,10 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "本次调用的具体目的（中文，5-15字，如'查询今日已有餐食确认未重复'、'查询昨日玉米作为份量参考'、'补记晚餐水煮甜玉米'），会作为执行步骤标题展示在界面上",
+                    },
                     "start": {"type": "string", "description": "开始日期 YYYY-MM-DD"},
                     "end": {"type": "string", "description": "结束日期 YYYY-MM-DD"},
                 },
@@ -419,6 +427,10 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "本次调用的具体目的（中文，5-15字，如'查询今日已有餐食确认未重复'、'查询昨日玉米作为份量参考'、'补记晚餐水煮甜玉米'），会作为执行步骤标题展示在界面上",
+                    },
                     "keyword": {"type": "string", "description": "搜索关键词（中文食物名）"},
                     "start": {"type": "string", "description": "可选，开始日期 YYYY-MM-DD"},
                     "end": {"type": "string", "description": "可选，结束日期 YYYY-MM-DD"},
@@ -439,6 +451,10 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "本次调用的具体目的（中文，5-15字，如'查询今日已有餐食确认未重复'、'查询昨日玉米作为份量参考'、'补记晚餐水煮甜玉米'），会作为执行步骤标题展示在界面上",
+                    },
                     "date": {"type": "string", "description": "日期 YYYY-MM-DD"},
                 },
                 "required": ["date"],
@@ -459,6 +475,10 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "本次调用的具体目的（中文，5-15字，如'查询今日已有餐食确认未重复'、'查询昨日玉米作为份量参考'、'补记晚餐水煮甜玉米'），会作为执行步骤标题展示在界面上",
+                    },
                     "record_id": {"type": "integer", "description": "记录 id"},
                     "updates": {
                         "type": "object",
@@ -493,6 +513,10 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "本次调用的具体目的（中文，5-15字，如'查询今日已有餐食确认未重复'、'查询昨日玉米作为份量参考'、'补记晚餐水煮甜玉米'），会作为执行步骤标题展示在界面上",
+                    },
                     "description": {
                         "type": "string",
                         "description": "食物与份量文字描述，如'昨天下午三点半吃了一包薯片和一瓶可乐'",
@@ -527,6 +551,10 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "本次调用的具体目的（中文，5-15字，如'查询今日已有餐食确认未重复'、'查询昨日玉米作为份量参考'、'补记晚餐水煮甜玉米'），会作为执行步骤标题展示在界面上",
+                    },
                     "record_id": {"type": "integer", "description": "记录 id"},
                     "notes": {"type": "string", "description": "补充说明"},
                 },
@@ -546,6 +574,10 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "本次调用的具体目的（中文，5-15字，如'查询今日已有餐食确认未重复'、'查询昨日玉米作为份量参考'、'补记晚餐水煮甜玉米'），会作为执行步骤标题展示在界面上",
+                    },
                     "record_id": {"type": "integer", "description": "记录 id"},
                 },
                 "required": ["record_id"],
@@ -558,6 +590,13 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
 CHAT_SYSTEM_PROMPT = """你是 inkcal 的饮食助手 Calo，正在与用户对话。当前时间：{now}（HKT）。
 
 用户的食物照片由后台 pipeline 自动分析入库，你可以通过工具查询和修改这些记录。
+
+## 工具调用目的（intent 参数）
+
+调用任何工具时，**必须在 `intent` 参数中用简明中文（5-15字）写明本次调用的具体目的**，
+例如「查询今日已有餐食确认未重复」「查询昨日玉米作为份量参考」「补记晚餐水煮甜玉米」。
+该文字会直接作为执行步骤的标题展示在用户界面上，让查询与操作链路清晰透明。
+不要写函数名式的描述，要写清楚"为什么调用这次工具"。
 
 ## 工具使用原则
 

@@ -238,4 +238,38 @@ assert total["carbs"] == 33.0 and total["carbs_g"] == 33.0
 assert total["fat"] == 23.0 and total["fat_g"] == 23.0
 print("  ok  get_intake_stats 正确聚合营养素并支持双向字段别名")
 
+# 10. 工具调用意图契约（intent）：所有聊天工具必须声明该参数，
+#     以便前端把每一次调用渲染成"可折叠 + 带目的"的执行步骤
+from src.agent_contract import CHAT_TOOL_SCHEMAS, CHAT_SYSTEM_PROMPT  # noqa: E402
+
+EXPECTED_TOOLS = {
+    "get_records_in_range", "get_intake_stats", "search_meals", "get_decisions",
+    "edit_record", "add_record", "reanalyze_record", "request_delete_record",
+}
+schema_names = {t["function"]["name"] for t in CHAT_TOOL_SCHEMAS}
+assert schema_names == EXPECTED_TOOLS, f"聊天工具集合漂移: {schema_names ^ EXPECTED_TOOLS}"
+
+for t in CHAT_TOOL_SCHEMAS:
+    fn = t["function"]
+    props = fn["parameters"]["properties"]
+    assert "intent" in props, f"{fn['name']} 缺少 intent 参数（前端步骤标题依赖它）"
+    assert props["intent"]["type"] == "string"
+    # intent 必须可选：模型偶尔省略时前端走兜底标题，不能因此让调用失败
+    assert "intent" not in fn["parameters"].get("required", []), \
+        f"{fn['name']} 的 intent 不应是必填（会导致调用直接报错）"
+print(f"  ok  全部 {len(CHAT_TOOL_SCHEMAS)} 个聊天工具都声明了可选 intent 参数")
+
+assert "intent" in CHAT_SYSTEM_PROMPT, "系统提示词必须要求模型填写 intent"
+print("  ok  CHAT_SYSTEM_PROMPT 已包含 intent 填写要求")
+
+# 11. intent 参数不得干扰工具实现（各工具按需取参，多余键应被忽略）
+res_with_intent = call_chat_tool(
+    "get_intake_stats",
+    {"intent": "统计今日摄入", "start": "2026-09-16", "end": "2026-09-16"},
+    deps={},
+)
+assert res_with_intent["ok"] is True
+assert res_with_intent["total"]["calories"] == 400.0
+print("  ok  携带 intent 调用工具时业务结果不受影响")
+
 print("\nall passed (fully isolated chat smoke tests)")
