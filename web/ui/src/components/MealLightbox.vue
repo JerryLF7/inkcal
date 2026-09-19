@@ -53,6 +53,16 @@ const isGroup = computed(() => photosList.value.length > 1);
 const primaryId = computed(() => rec.value?.asset_id || '');
 const imgSrc = computed(() => (current.value ? lightboxImageSrc(current.value) : ''));
 
+const emojiFontSize = computed(() => {
+  const e = (current.value?.emoji || rec.value?.emoji || '').trim();
+  if (!e) return '72px';
+  const len = Array.from(e).length;
+  if (len <= 1) return '72px';
+  if (len === 2) return '56px';
+  if (len === 3) return '40px';
+  return '32px';
+});
+
 const subLine = computed(() => {
   if (!rec.value) return '';
   const r = rec.value;
@@ -230,7 +240,7 @@ async function refreshGroup(promoted) {
         <div class="lb-stage"
              @touchstart.passive="onSwipeStart" @touchend.passive="onSwipeEnd">
           <img v-if="imgSrc" class="lb-img" :src="imgSrc" alt="">
-          <div v-else class="lb-emoji-empty">{{ current?.emoji || rec?.emoji || '🍽️' }}</div>
+          <div v-else class="lb-emoji-empty" :style="{ fontSize: emojiFontSize }">{{ current?.emoji || rec?.emoji || '🍽️' }}</div>
           <span v-if="isGroup && currentIdx >= 0" class="lb-count">
             {{ currentIdx + 1 }} / {{ photosList.length }}
           </span>
@@ -340,7 +350,9 @@ async function refreshGroup(promoted) {
 }
 .lb-emoji-empty {
   width: 160px; height: 160px; display: flex; align-items: center; justify-content: center;
-  font-size: 80px; background: #1f1f1f; border-radius: 16px; border: 1px solid #282828;
+  background: #1f1f1f; border-radius: 16px; border: 1px solid #282828;
+  padding: 12px; text-align: center; line-height: 1.2; word-break: break-all;
+  letter-spacing: 2px;
 }
 .lb-count {
   position: absolute; bottom: 10px; right: 10px;

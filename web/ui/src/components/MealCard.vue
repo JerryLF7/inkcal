@@ -23,6 +23,17 @@ const thumb = computed(() => cardImageSrc(r.value));
 const hasMacros = computed(() => r.value.protein_g || r.value.carbs_g || r.value.fat_g);
 const photoCount = computed(() => (r.value.photos || []).length);
 
+// 根据 emoji 数量自适应字号，确保 1~3+ 个 emoji 在 96px 缩略图框内饱满且不溢出
+const emojiFontSize = computed(() => {
+  const e = (r.value?.emoji || '').trim();
+  if (!e) return '36px';
+  const len = Array.from(e).length;
+  if (len <= 1) return '38px';
+  if (len === 2) return '30px';
+  if (len === 3) return '24px';
+  return '20px';
+});
+
 // agent 记录的餐：🤖 角标（数据由 DayView/WeekView 按日期预取到 store）
 const agentDecision = computed(() => decisionFor(r.value));
 const agentMarkTitle = computed(() => {
@@ -50,7 +61,7 @@ function onClick() {
     <div class="conf-indicator" :class="'conf-' + conf" :title="CONF_TITLES[conf] || ''"></div>
     <div class="thumb-wrap">
       <img v-if="thumb" class="thumb" :src="thumb" loading="lazy" alt="" @error="retryImg">
-      <div v-else class="thumb thumb-empty">{{ r.emoji || '🍽️' }}</div>
+      <div v-else class="thumb thumb-empty" :style="{ fontSize: emojiFontSize }">{{ r.emoji || '🍽️' }}</div>
       <span v-if="photoCount > 1" class="photo-badge" :title="photoCount + ' 张照片，已合并为一餐'">×{{ photoCount }}</span>
     </div>
     <div class="body">
@@ -99,7 +110,9 @@ function onClick() {
   padding: 2px 5px; border-radius: 6px;
 }
 .thumb-empty {
-  display: flex; align-items: center; justify-content: center; font-size: 30px;
+  display: flex; align-items: center; justify-content: center;
+  line-height: 1.2; text-align: center; padding: 6px;
+  word-break: break-all; letter-spacing: 1px;
 }
 
 .body { flex: 1; min-width: 0; }
