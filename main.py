@@ -748,6 +748,38 @@ def cmd_add(args):
     return record
 
 
+# ── subcommand: burn ─────────────────────────────────────────────────
+
+def cmd_burn(args):
+    db.init_db()
+    from datetime import datetime, timezone, timedelta
+
+    if args.date:
+        date_str = args.date
+    else:
+        date_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+
+    if args.kcal is not None:
+        source = args.source or "manual"
+        steps = args.steps if args.steps is not None else 0
+        burn = db.upsert_daily_burn(date_str, args.kcal, steps, source)
+        if _emit({"ok": True, "command": "burn", "burn": burn}):
+            return burn
+        logger.info("🔥 已记录消耗: %s  %skcal (%d 步, 来源: %s)",
+                    date_str, burn["active_kcal"], burn["steps"], burn["source"])
+        return burn
+
+    burn = db.get_daily_burn(date_str)
+    if _emit({"ok": True, "command": "burn", "date": date_str, "burn": burn}):
+        return burn
+    if not burn:
+        logger.info("ℹ️ %s 暂无消耗记录", date_str)
+    else:
+        logger.info("🔥 %s 消耗: %skcal (%d 步, 来源: %s)",
+                    date_str, burn["active_kcal"], burn["steps"], burn["source"])
+    return burn
+
+
 # ── subcommand: edit ─────────────────────────────────────────────────
 
 def cmd_edit(args):
@@ -1627,6 +1659,14 @@ def main():
                        choices=["high", "medium", "low"])
     add_json_flag(p_add)
 
+    p_burn = sub.add_parser("burn", help="Record or view daily calorie burn & steps")
+    p_burn.add_argument("--date", help="Date (YYYY-MM-DD), defaults to today")
+    p_burn.add_argument("--kcal", type=float, help="Active calories burned (kcal)")
+    p_burn.add_argument("--steps", type=int, help="Step count")
+    p_burn.add_argument("--source", default="manual",
+                        help="Data source (e.g. heytap-ui, manual)")
+    add_json_flag(p_burn)
+
     p_edit = sub.add_parser("edit", help="Edit a record's meal/macros/date directly")
     add_locator_args(p_edit)
     p_edit.add_argument("--new-meal", help="New meal title (short)")
@@ -1730,6 +1770,8 @@ def main():
         cmd_view(args)
     elif args.command == "add":
         cmd_add(args)
+    elif args.command == "burn":
+        cmd_burn(args)
     elif args.command == "edit":
         cmd_edit(args)
     elif args.command == "search":

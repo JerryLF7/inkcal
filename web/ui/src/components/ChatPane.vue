@@ -32,11 +32,8 @@ const loading = ref(false);
 const sending = ref(false);
 const inputText = ref('');
 
-// 侧拉/弹窗状态
+// 侧拉状态（聊天窗口设置已迁移至设置 Tab）
 const sessionsDrawerOpen = ref(false);
-const settingsModalOpen = ref(false);
-const chatWindowSetting = ref(20);
-const savingSettings = ref(false);
 
 const currentSession = computed(() => {
   if (!currentSessionId.value) return null;
@@ -262,41 +259,6 @@ function handleCancelDelete(toolResult) {
   toolResult._status = 'canceled';
 }
 
-// ── 聊天设置（/api/settings 中的 chat_window）────────────────
-async function openSettings() {
-  settingsModalOpen.value = true;
-  try {
-    const res = await fetch(`${API}/api/settings`);
-    if (res.ok) {
-      const data = await res.json();
-      chatWindowSetting.value = data.chat_window || 20;
-    }
-  } catch (e) {
-    console.error('Failed to load settings:', e);
-  }
-}
-
-async function saveSettings() {
-  savingSettings.value = true;
-  try {
-    const res = await fetch(`${API}/api/settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_window: chatWindowSetting.value }),
-    });
-    if (res.ok) {
-      toast('设置已保存');
-      settingsModalOpen.value = false;
-    } else {
-      toast('保存失败', 'error');
-    }
-  } catch (e) {
-    toast('保存失败', 'error');
-  } finally {
-    savingSettings.value = false;
-  }
-}
-
 function formatSessionTime(t) {
   if (!t) return '';
   return t.replace('T', ' ').slice(0, 16);
@@ -443,18 +405,6 @@ onMounted(async () => {
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"/>
             <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-        </button>
-        <button
-          type="button"
-          class="act-btn"
-          aria-label="设置"
-          title="设置"
-          @click="openSettings"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
         </button>
         <button
@@ -754,51 +704,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 聊天设置弹窗 -->
-    <div v-if="settingsModalOpen" class="drawer-mask" @click.self="settingsModalOpen = false">
-      <div class="settings-dialog">
-        <div class="drawer-header">
-          <div class="drawer-title">聊天设置</div>
-          <button
-            type="button"
-            class="drawer-close"
-            aria-label="关闭"
-            @click="settingsModalOpen = false"
-          >
-            ✕
-          </button>
-        </div>
-        <div class="settings-body">
-          <div class="setting-item">
-            <div class="setting-label">
-              <span>上下文滑动窗口</span>
-              <span class="setting-val">{{ chatWindowSetting }} 轮</span>
-            </div>
-            <input
-              v-model.number="chatWindowSetting"
-              type="range"
-              min="5"
-              max="50"
-              step="1"
-              class="setting-range"
-            />
-            <div class="setting-desc">
-              每轮向模型发送最近 N 轮对话历史（5～50 轮，默认 20）。调大可记住更长上下文，调小节省 Token 与提高响应速度。
-            </div>
-          </div>
-        </div>
-        <div class="settings-footer">
-          <button
-            type="button"
-            class="btn-save"
-            :disabled="savingSettings"
-            @click="saveSettings"
-          >
-            {{ savingSettings ? '保存中…' : '保存设置' }}
-          </button>
-        </div>
-      </div>
-    </div>
   </section>
 </template>
 
@@ -1121,26 +1026,4 @@ onMounted(async () => {
   overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px;
 }
 .session-item-time { font-size: 11px; color: #666; }
-
-/* 聊天设置弹窗 */
-.settings-dialog {
-  margin: auto; width: 90%; max-width: 320px; background: #161616;
-  border: 1px solid #282828; border-radius: 12px; overflow: hidden;
-  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-}
-.settings-body { padding: 16px; }
-.setting-item { display: flex; flex-direction: column; gap: 8px; }
-.setting-label {
-  display: flex; justify-content: space-between; font-size: 13px; color: #ddd;
-}
-.setting-val { color: #2a6eff; font-weight: 600; }
-.setting-range { width: 100%; accent-color: #2a6eff; }
-.setting-desc { font-size: 11px; color: #777; line-height: 1.45; }
-.settings-footer { padding: 12px 16px; border-top: 1px solid #222; display: flex; justify-content: flex-end; }
-.btn-save {
-  padding: 7px 16px; border-radius: 6px; border: 0; background: #2a6eff;
-  color: #fff; font-size: 13px; cursor: pointer;
-}
-.btn-save:hover { background: #235cd6; }
-.btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

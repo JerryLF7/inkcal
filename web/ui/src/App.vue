@@ -6,11 +6,12 @@ import MonthView from './components/MonthView.vue';
 import MealLightbox from './components/MealLightbox.vue';
 import PhotoPicker from './components/PhotoPicker.vue';
 import ChatPane from './components/ChatPane.vue';
+import SettingsPane from './components/SettingsPane.vue';
 import { store, startDataVersionPolling } from './store.js';
 import { fmtDate, addDays, hktNow } from './utils/format.js';
 
 // 双 pane：记录 / Calo 对话（原型 docs/prototypes/two-tab-proto.html）
-const pane = ref('records');           // 'records' | 'chat'
+const pane = ref('records');           // 'records' | 'chat' | 'settings'
 const view = ref('day');               // 'day' | 'week'（PC 端月历常驻左栏，无月视图页）
 
 // 各视图各自上报顶栏标题；切换时恢复该视图最近一次上报的标题
@@ -60,6 +61,7 @@ function onTouchStart(e) {
   sy = e.touches[0].clientY;
 }
 function onTouchEnd(e) {
+  if (pane.value === 'settings') return;   // 设置页不参与左右滑动
   const dx = e.changedTouches[0].clientX - sx;
   const dy = e.changedTouches[0].clientY - sy;
   if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
@@ -108,11 +110,13 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
       <div class="rail-section rail-quick">
         <button class="quick-link" type="button" @click="goToday">今日</button>
         <button class="quick-link" type="button" @click="goThisWeek">本周</button>
+        <button class="quick-link" type="button" @click="go('settings')">设置</button>
       </div>
     </aside>
 
     <div
       class="panes" :class="{ 'show-chat': pane === 'chat' }"
+      v-show="pane !== 'settings'"
       @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd"
     >
       <!-- 主区：记录 -->
@@ -157,8 +161,13 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
       />
     </div>
 
+    <!-- 设置 Tab：体征参数 + Calo 窗口（自 ChatPane 迁移） -->
+    <div v-show="pane === 'settings'" class="settings-wrap">
+      <SettingsPane />
+    </div>
+
     <!-- PC 折叠后的唤出把手 -->
-    <button v-if="isDesktop && chatCollapsed" class="chat-restorer" type="button" aria-label="打开 Calo 侧栏" title="打开 Calo 侧栏" @click="toggleChat">◂</button>
+    <button v-if="isDesktop && chatCollapsed && pane !== 'settings'" class="chat-restorer" type="button" aria-label="打开 Calo 侧栏" title="打开 Calo 侧栏" @click="toggleChat">◂</button>
 
     <nav v-if="!isDesktop" class="tabbar">
       <button :class="{ active: pane === 'records' }" @click="go('records')">
@@ -166,6 +175,9 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
       </button>
       <button :class="{ active: pane === 'chat' }" @click="go('chat')">
         <span class="ico">💬</span>Calo
+      </button>
+      <button :class="{ active: pane === 'settings' }" @click="go('settings')">
+        <span class="ico">⚙️</span>设置
       </button>
     </nav>
 
@@ -245,6 +257,12 @@ html, body {
 }
 .tabbar button .ico { font-size: 18px; }
 .tabbar button.active { color: #2a6eff; }
+
+/* 设置 Tab 容器：手机端占满主区，桌面端限宽居中 */
+.settings-wrap { flex: 1; min-height: 0; display: flex; }
+@media (min-width: 1024px) {
+  .settings-wrap { max-width: 1080px; width: 100%; margin: 0 auto; }
+}
 
 /* ── PC 布局（≥1024px）：左导航栏 + 记录主区 + Calo 右侧栏 ───── */
 @media (min-width: 1024px) {

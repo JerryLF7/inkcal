@@ -127,10 +127,10 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 ## 4. 已拍板的产品与 UI 约束
 
-### 双 Tab 是最终一级导航
+### 一级导航是三个 Tab（2026-09-23 起）
 
-- 全局只有 **记录** 与 **Luna** 两个 Tab。
-- 支持底部 Tab 点击和左右滑动。
+- 全局三个 Tab：**记录**、**Calo**、**设置**（设置为体征参数与 Calo 窗口配置的唯一入口）。
+- 支持底部 Tab 点击；左右滑动仅在 **记录 ↔ Calo** 之间生效，设置页不参与滑动。
 - 默认落在哪一页尚未最终拍板；不要擅自把任一页设为永久默认。
 
 ### PC 布局（≥1024px，已拍板）
@@ -172,8 +172,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **意图消歧原则（防重记误增）**：当用户表述指向某具体餐次或包含细节修正（如“今晚的...”、“一共15个”、“其实是玉米猪肉馅”、“没算米饭”）时，Calo 必须先调用 `get_records_in_range` 查询已有记录；若已存在对应记录，严禁调用 `add_record`（避免同一餐重复入库导致热量双倍计算），必须优先调用 `reanalyze_record` 让 Gemini 结合原图与修正说明更新原记录。
 - PC 布局与盒模型：全局配置 `box-sizing: border-box`，彻底解决时间轴右侧 padding 撑大导致第二列卡片及吸顶日期汇总被 Calo 侧栏遮挡的问题。全局轻提示 Toast 补齐 `position: fixed; left: 50%; transform: translateX(-50%)` 及高层级圆角样式，脱离 `.app.desktop` 横向 flex 流，彻底解决桌面端轻提示被挤到屏幕最右上角贴边的问题。
 - 删除安全契约：`request_delete_record` 的 `confirm_card` 真实渲染为二次确认卡；只有用户显式点击「确认删除」后才调用既有 `DELETE /api/record`，取消仅关闭卡片。**严禁让模型或前端直接绕过确认删除。**
-- 聊天设置：支持通过设置弹窗读写 `/api/settings` 的 `chat_window`（5～50 轮）。
-- 操作栏视觉对齐：Calo 顶部操作栏（历史会话、新建会话、设置、侧栏折叠）采用统一 16x16 细线矢量 SVG 图标（历史会话采用标准时钟回滚 History 图标，杜绝 Unicode 字符引起的类饼图歧义与 Emoji 混排导致的基线上下错位）。
+- 聊天设置：上下文滑动窗口（5～50 轮）已迁移至**「设置」Tab**（`SettingsPane.vue`，经 `/api/settings` 读写）；Calo 顶部原设置齿轮按钮与弹窗已删除，勿加回。
+- 操作栏视觉对齐：Calo 顶部操作栏（历史会话、新建会话、侧栏折叠）采用统一 16x16 细线矢量 SVG 图标（历史会话采用标准时钟回滚 History 图标，杜绝 Unicode 字符引起的类饼图歧义与 Emoji 混排导致的基线上下错位）。
 - 工具层数据流：`_record_brief` 与 `_group_brief` 补充 `thumbnail_url` 与 `replacement_image`，使聊天 artifact 能够直接渲染缩略图。
 - 回归测试：`scripts/test_chat_smoke.py`。
 - 一期不做聊天传图（未来可从 `+` 入口扩展）。
@@ -225,8 +225,21 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **工具数据流补全**：`_record_brief` 与 `_group_brief` 补充 `thumbnail_url` 与 `replacement_image` 字段，使聊天 artifact 能够直接展示照片缩略图。
 - **回归测试**：`scripts/test_chat_smoke.py`。
 
+### Phase 6：每日身体消耗（Burn）与热量缺口后端（已实现，2026-09-23）
+
+支持从外部可穿戴设备（如 redroid 托管的 OPPO 健康/欢太健康）同步或手工录入每日卡路里消耗与步数：
+- **数据库表**：新增 `daily_burn`（主键 `date` 本地日历日，`active_kcal`、`steps`、`source`、`created_at`、`updated_at`），`_create_schema` 与 `_migrate_schema` 自动幂等建立；`get_data_version` 包含消耗更新时间戳 `b`。
+- **数据访问层**：`db.upsert_daily_burn`（`ON CONFLICT(date) DO UPDATE`）、`db.get_daily_burn`、`db.get_daily_burn_range`。
+- **CLI 入口**：`inkcal burn [--date YYYY-MM-DD] [--kcal N] [--steps N] [--source S] [--json]`，支持无参数查今天或录入当日消耗，纯本地 direct SQLite WAL 写入。
+- **API 端点**：`GET/PUT/POST /api/burn`；`/api/records` 与 `/api/today` 自动同级返回 `burn`，`/api/week` 的 `by_day` 字典与顶层返回 `burns`，供前端直接按日读取计算缺口。
+- **回归测试**：`scripts/test_daily_burn.py`（25 checks 覆盖 DB / CLI / API）。
+- **体征参数与 BMR（2026-09-23）**：`app_settings` 存 `user_height`/`user_weight`/`user_birthdate`/`user_gender`；`db.compute_bmr()` 用 Mifflin-St Jeor（男 +5 / 女 −161，年龄按 HKT 当日动态算），`db.get_user_bmr()` 聚合；`PUT /api/settings` 校验范围（身高 50–260、体重 20–300、gender ∈ male/female、日期 `_valid_date`）且**只更新请求中出现的键**（部分更新不得 KeyError），GET 返回体征+`bmr`。
+- **设置 Tab（2026-09-23）**：`web/ui/src/components/SettingsPane.vue`——体征表单 + BMR 实时结果 + 原 Calo 滑动窗口迁移至此；`App.vue` 三 Tab（记录/Calo/设置），滑动手势在设置页禁用，桌面左栏 rail-quick 增「设置」入口；Calo 齿轮按钮与弹窗已删。
+- **Cron 同步**：`0 8-23 * * *` 每小时 + `57 23 * * *` 收口，跑 `/home/jerry/heytap-pull.py`（含启动后下拉刷新手势）并直写 `inkcal burn`；日志 `~/heytap-pull.log`。
+
 ### 后续任务
 
+- 缺口展示：日视图吸顶栏/周视图渲染 `TDEE(BMR+active_kcal) − intake`（正缺口绿色、超标红色），等 UI 细节拍板后动工。
 - 主动确认队列：`/api/data-version` 已有 `pending: 0` 占位；在设计确认前不要自造 schema。
 - Lightbox 内部能力扩展：重分析入口、宏营养素手动编辑。
 - SSE：后端当前刻意是非流式，因为 relay SSE 能力未验证。先完成可靠同步模式，再决定流式和降级策略。
@@ -239,6 +252,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 ### 数据表
 
 - `records`：餐记录；`merged_into` 列表达同餐组（NULL=主记录，非空=附属照片行，详见 §1 绝对边界）；`meal` 为短标题、`meal_detail` 为菜品明细（2026-09-13 起，旧记录 detail 为空、不回填）；`emoji` 为纯文本/手动补录的食物专属图标（由 Gemini 智能生成 1~3 个匹配食物组合的 Emoji，无图时展示代替默认空餐盘，前端自适应字号居中）。
+- `daily_burn`：每日卡路里消耗与步数（date 主键、active_kcal、steps、source，2026-09-23 规范）；由 redroid 无头 Android 同步或 CLI/API 录入。
 - `records_fts`：标题 + 明细两列全文检索（meal / meal_detail）。
 - `reanalysis_history`：重分析和手动编辑前的旧值。
 - `ignored_assets`：删除后永远跳过的照片。

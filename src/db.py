@@ -141,6 +141,16 @@ def _create_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_agent_decisions_date
             ON agent_decisions(session_date);
 
+        -- Daily calorie burn & step counts from wearable sync / manual input
+        CREATE TABLE IF NOT EXISTS daily_burn (
+            date TEXT PRIMARY KEY,
+            active_kcal REAL NOT NULL DEFAULT 0,
+            steps INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'heytap-ui',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         -- Full-text search over meal title + detail for quick retrieval
         CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
             meal,
@@ -286,6 +296,15 @@ def _migrate_schema(conn: sqlite3.Connection):
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS daily_burn (
+            date TEXT PRIMARY KEY,
+            active_kcal REAL NOT NULL DEFAULT 0,
+            steps INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'heytap-ui',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
     """)
     conn.commit()
@@ -1313,10 +1332,83 @@ def set_setting(key: str, value: str):
     conn.commit()
 
 
+def compute_bmr(height: float, weight: float, birthdate: str,
+                gender: str = "male") -> float | None:
+    """Compute Basal Metabolic Rate (BMR) using Mifflin-St Jeor equation."""
+    if not (height > 0 and weight > 0 and birthdate):
+        return None
+    try:
+        birth = datetime.strptime(birthdate[:10], "%Y-%m-%d").date()
+        today = datetime.now(HKT).date()
+        age = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+        if age < 0 or age > 120:
+            return None
+        if str(gender).lower() == "female":
+            bmr = 10.0 * weight + 6.25 * height - 5.0 * age - 161.0
+        else:
+            bmr = 10.0 * weight + 6.25 * height - 5.0 * age + 5.0
+        return round(bmr, 1)
+    except Exception:
+        return None
+
+
+def get_user_bmr() -> float | None:
+    """Get calculated BMR based on user profile stored in app_settings."""
+    try:
+        h_str = get_setting("user_height", "")
+        w_str = get_setting("user_weight", "")
+        b_str = get_setting("user_birthdate", "")
+        g_str = get_setting("user_gender", "male")
+        if not (h_str and w_str and b_str):
+            return None
+        return compute_bmr(float(h_str), float(w_str), b_str, g_str)
+    except (ValueError, TypeError):
+        return None
+
+
+# ── daily burn ───────────────────────────────────────────────────────
+
+def upsert_daily_burn(date_str: str, active_kcal: float, steps: int = 0,
+                      source: str = "heytap-ui") -> dict:
+    conn = _get_conn()
+    cur = conn.execute(
+        """
+        INSERT INTO daily_burn (date, active_kcal, steps, source, created_at, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(date) DO UPDATE SET
+            active_kcal = excluded.active_kcal,
+            steps = excluded.steps,
+            source = excluded.source,
+            updated_at = datetime('now')
+        RETURNING *;
+        """,
+        (date_str, round(float(active_kcal), 1), int(steps), source),
+    )
+    row = cur.fetchone()
+    conn.commit()
+    return _row_to_dict(row)
+
+
+def get_daily_burn(date_str: str) -> dict | None:
+    conn = _get_conn()
+    cur = conn.execute("SELECT * FROM daily_burn WHERE date = ?", (date_str,))
+    row = cur.fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def get_daily_burn_range(start_date: str, end_date: str) -> dict[str, dict]:
+    conn = _get_conn()
+    cur = conn.execute(
+        "SELECT * FROM daily_burn WHERE date >= ? AND date <= ? ORDER BY date ASC",
+        (start_date, end_date),
+    )
+    return {row["date"]: _row_to_dict(row) for row in cur.fetchall()}
+
+
 def get_data_version() -> str:
     """
     Cheap fingerprint of all meal-data writes (insert / update / delete /
-    relabel / reanalyze). The web frontend polls this to detect background
+    relabel / reanalyze / burn). The web frontend polls this to detect background
     writes from cron runs (agent or legacy path) and refresh stale views.
     COUNT covers deletes; timestamps cover in-place updates.
     """
@@ -1327,10 +1419,13 @@ def get_data_version() -> str:
           (SELECT COUNT(*) FROM records)                        AS n,
           (SELECT MAX(created_at) FROM records)                 AS c,
           (SELECT MAX(updated_at) FROM records)                 AS u,
-          (SELECT MAX(reanalyzed_at) FROM reanalysis_history)   AS r
+          (SELECT MAX(reanalyzed_at) FROM reanalysis_history)   AS r,
+          (SELECT COUNT(*) FROM daily_burn)                     AS bn,
+          (SELECT TOTAL(active_kcal) FROM daily_burn)           AS bk,
+          (SELECT MAX(updated_at) FROM daily_burn)              AS b
         """
     ).fetchone()
-    return f"{row['n']}:{row['c']}:{row['u']}:{row['r']}"
+    return f"{row['n']}:{row['c']}:{row['u']}:{row['r']}:{row['bn']}:{row['bk']}:{row['b']}"
 
 
 def get_run_summary(run_id: str) -> dict:

@@ -160,6 +160,7 @@ def api_records():
             "date": date_str,
             "records": db.group_meals(raw),
             "summary": _summarize(raw),
+            "burn": db.get_daily_burn(date_str),
         })
 
     if start and end:
@@ -174,12 +175,14 @@ def api_records():
             ds = cursor.strftime("%Y-%m-%d")
             all_records.extend({"date": ds, **r} for r in _load_date(ds))
             cursor += timedelta(days=1)
+        burns = db.get_daily_burn_range(start, end)
         return jsonify({
             "start": start,
             "end": end,
             # 组内照片挂到主记录的 photos 数组；跨零点组归主记录所在日期
             "records": db.group_meals(all_records),
             "summary": _summarize(all_records),
+            "burns": burns,
         })
 
     # Default: today
@@ -189,6 +192,7 @@ def api_records():
         "date": today,
         "records": db.group_meals(raw),
         "summary": _summarize(raw),
+        "burn": db.get_daily_burn(today),
     })
 
 
@@ -200,6 +204,7 @@ def api_today():
         "date": today,
         "records": db.group_meals(raw),
         "summary": _summarize(raw),
+        "burn": db.get_daily_burn(today),
     })
 
 
@@ -337,7 +342,36 @@ def api_settings():
             except (TypeError, ValueError):
                 return jsonify({"error": "invalid chat_window"}), 400
             db.set_setting("chat_window", str(n))
-    return jsonify({"chat_window": int(db.get_setting("chat_window", "20"))})
+        # 体征参数（供 BMR 计算）：height cm / weight kg / birthdate YYYY-MM-DD / gender
+        for key, validator in (
+            ("user_height", lambda v: 50 <= float(v) <= 260),
+            ("user_weight", lambda v: 20 <= float(v) <= 300),
+            ("user_gender", lambda v: str(v) in ("male", "female")),
+        ):
+            raw = data.get(key)
+            if raw is None:
+                continue
+            try:
+                ok = validator(raw)
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                return jsonify({"error": f"invalid {key}"}), 400
+            db.set_setting(key, str(raw))
+        bd = data.get("user_birthdate")
+        if bd is not None:
+            bd = str(bd)
+            if not _valid_date(bd):
+                return jsonify({"error": "invalid user_birthdate"}), 400
+            db.set_setting("user_birthdate", bd)
+    return jsonify({
+        "chat_window": int(db.get_setting("chat_window", "20")),
+        "user_height": db.get_setting("user_height", ""),
+        "user_weight": db.get_setting("user_weight", ""),
+        "user_birthdate": db.get_setting("user_birthdate", ""),
+        "user_gender": db.get_setting("user_gender", "male"),
+        "bmr": db.get_user_bmr(),
+    })
 
 
 @app.route("/api/week")
@@ -353,13 +387,40 @@ def api_week():
     dates = [(monday + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
     raw_by_day = {ds: _load_date(ds) for ds in dates}
     all_records = [r for day_recs in raw_by_day.values() for r in day_recs]
+    burns = db.get_daily_burn_range(dates[0], dates[-1])
     return jsonify({
         "start": dates[0],
         "end": dates[-1],
         "by_day": {d: {"records": db.group_meals(raw_by_day[d]),
-                       "summary": _summarize(raw_by_day[d])} for d in dates},
+                       "summary": _summarize(raw_by_day[d]),
+                       "burn": burns.get(d)} for d in dates},
         "summary": _summarize(all_records),
+        "burns": burns,
     })
+
+
+@app.route("/api/burn", methods=["GET", "PUT", "POST"])
+def api_burn():
+    if request.method in ("PUT", "POST"):
+        data = request.get_json(silent=True) or {}
+        date_str = data.get("date") or datetime.now(HKT).strftime("%Y-%m-%d")
+        if not _valid_date(date_str):
+            return jsonify({"error": "invalid date"}), 400
+        try:
+            active_kcal = float(data.get("active_kcal", 0))
+            steps = int(data.get("steps", 0))
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid active_kcal or steps"}), 400
+        source = str(data.get("source", "manual"))
+        burn = db.upsert_daily_burn(date_str, active_kcal, steps, source)
+        return jsonify({"ok": True, "burn": burn})
+
+    # GET
+    date_str = request.args.get("date") or datetime.now(HKT).strftime("%Y-%m-%d")
+    if not _valid_date(date_str):
+        return jsonify({"error": "invalid date"}), 400
+    burn = db.get_daily_burn(date_str)
+    return jsonify({"date": date_str, "burn": burn})
 
 
 @app.route("/api/image")
