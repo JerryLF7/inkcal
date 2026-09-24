@@ -362,13 +362,14 @@ def _build_record(asset_id: str, source: str, photo_time: str,
 
 
 def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
-    """Re-analyze a food photo with user-provided notes.
+    """Re-analyze a meal (all photos of its group) with user-provided notes.
 
-    Retrieves the image (from replacement_image file, Immich thumbnail,
-    or PhotoPrism thumbnail), runs Gemini reanalysis, appends current
-    values to reanalysis_history, and updates the record.
+    Resolves the group root first: multi-photo meals are re-analyzed
+    jointly so correction notes (e.g. "same dish in both photos, count
+    once") apply to the whole meal, and stale per-row values in merged
+    rows are zeroed so the group sum can never double count.
 
-    Returns the updated record dict, or None if the image is unavailable.
+    Returns the updated primary record dict, or None if unavailable.
     """
     from src import db
     from src.calorie_analyzer import CalorieAnalyzer
@@ -378,16 +379,28 @@ def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
         logger.error("Record not found: %s", asset_id[:8])
         return None
 
-    image_bytes = _get_image_bytes(found, config)
-    if image_bytes is None:
-        logger.error("Image unavailable for %s", asset_id[:8])
-        return None
+    root_id = db.resolve_group_root(found["asset_id"])
+    rows = db.get_group_rows(root_id)
+    primary = next((r for r in rows if r["asset_id"] == root_id), found)
 
-    # Verify image validity
-    try:
-        Image.open(io.BytesIO(image_bytes)).verify()
-    except Exception:
-        logger.error("Invalid image data for %s", asset_id[:8])
+    # Joint re-analysis over every photo in the group (single-photo groups
+    # degrade to the old single-image path).
+    images: list[bytes] = []
+    for row in rows:
+        img = _get_image_bytes(row, config)
+        if img is None:
+            logger.warning("Reanalyze: image unavailable for %s, skipping",
+                           row["asset_id"][:8])
+            continue
+        try:
+            Image.open(io.BytesIO(img)).verify()
+        except Exception:
+            logger.warning("Reanalyze: invalid image %s, skipping",
+                           row["asset_id"][:8])
+            continue
+        images.append(img)
+    if not images:
+        logger.error("Image unavailable for %s", root_id[:8])
         return None
 
     analyzer = CalorieAnalyzer(
@@ -397,43 +410,55 @@ def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
     )
 
     current_result = {
-        "meal": found.get("meal", "unknown"),
-        "meal_detail": found.get("meal_detail", ""),
-        "calories": found.get("calories", 0),
-        "protein_g": found.get("protein_g", 0),
-        "carbs_g": found.get("carbs_g", 0),
-        "fat_g": found.get("fat_g", 0),
-        "confidence": found.get("confidence", "low"),
+        "meal": primary.get("meal", "unknown"),
+        "meal_detail": primary.get("meal_detail", ""),
+        "calories": primary.get("calories", 0),
+        "protein_g": primary.get("protein_g", 0),
+        "carbs_g": primary.get("carbs_g", 0),
+        "fat_g": primary.get("fat_g", 0),
+        "confidence": primary.get("confidence", "low"),
     }
 
-    result = analyzer.reanalyze(image_bytes, current_result, notes)
+    result = analyzer.reanalyze(images, current_result, notes)
     analyzer.close()
 
-    # Preserve current values in history before overwriting
-    db.append_reanalysis_history(asset_id, {
-        "meal": found.get("meal"),
-        "meal_detail": found.get("meal_detail", ""),
-        "calories": found.get("calories"),
-        "protein_g": found.get("protein_g"),
-        "carbs_g": found.get("carbs_g"),
-        "fat_g": found.get("fat_g"),
-        "confidence": found.get("confidence"),
+    # Preserve current primary values in history before overwriting
+    db.append_reanalysis_history(root_id, {
+        "meal": primary.get("meal"),
+        "meal_detail": primary.get("meal_detail", ""),
+        "calories": primary.get("calories"),
+        "protein_g": primary.get("protein_g"),
+        "carbs_g": primary.get("carbs_g"),
+        "fat_g": primary.get("fat_g"),
+        "confidence": primary.get("confidence"),
         "notes": notes,
         "reanalyzed_at": datetime.now(HKT).isoformat(),
     })
 
-    # Update record with new values
-    db.update_record(asset_id, {
-        "meal": result.get("meal", found["meal"]),
-        "meal_detail": result.get("meal_detail", found.get("meal_detail", "")),
-        "calories": result.get("calories", found["calories"]),
-        "protein_g": result.get("protein_g", found["protein_g"]),
-        "carbs_g": result.get("carbs_g", found["carbs_g"]),
-        "fat_g": result.get("fat_g", found["fat_g"]),
-        "confidence": result.get("confidence", found["confidence"]),
+    # Update the primary with the joint (whole-group) result
+    db.update_record(root_id, {
+        "meal": result.get("meal", primary["meal"]),
+        "meal_detail": result.get("meal_detail", primary.get("meal_detail", "")),
+        "calories": result.get("calories", primary["calories"]),
+        "protein_g": result.get("protein_g", primary["protein_g"]),
+        "carbs_g": result.get("carbs_g", primary["carbs_g"]),
+        "fat_g": result.get("fat_g", primary["fat_g"]),
+        "confidence": result.get("confidence", primary["confidence"]),
     })
 
-    return db.get_record_by_asset_id(asset_id)
+    # The joint result now covers the whole meal: zero any merged rows that
+    # still carry their own values (形态 B), otherwise the group sum would
+    # double count against the fresh primary total.
+    for row in rows:
+        if row["asset_id"] == root_id or not row.get("merged_into"):
+            continue
+        if any(row.get(k, 0) for k in ("calories", "protein_g", "carbs_g", "fat_g")):
+            db.update_record(row["asset_id"], {
+                "calories": 0, "protein_g": 0,
+                "carbs_g": 0, "fat_g": 0,
+            })
+
+    return db.get_record_by_asset_id(root_id)
 
 
 # ── internal helpers ──────────────────────────────────────────────────

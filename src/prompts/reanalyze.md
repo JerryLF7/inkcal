@@ -13,11 +13,12 @@ USER'S ADDITIONAL NOTES (take these as primary truth):
 {notes}
 
 INSTRUCTIONS:
-1. Re-examine the image carefully, incorporating the user's notes.
+1. Re-examine the image(s) carefully, incorporating the user's notes.
 2. The user's notes should OVERRIDE any assumptions from the previous analysis.
 3. If the user describes portions, ingredients, or preparation methods not visible in the image, trust the user and adjust accordingly.
-4. Be conservative with estimates. Use common sense portion sizes unless the user specifies otherwise.
-5. Return a JSON object with EXACTLY these fields:
+4. If multiple images are provided, they represent photos of the same meal session (e.g. before/after eating, different angles, dish close-ups vs full table spreads). Evaluate the combined actual intake for the entire meal without duplicate counting of items that appear in multiple photos.
+5. Be conservative with estimates. Use common sense portion sizes unless the user specifies otherwise.
+6. Return a JSON object with EXACTLY these fields:
    {{
      "meal": "short Chinese title, at most 10 characters, naming the meal type or form — do NOT list every dish here",
      "meal_detail": "Chinese detail line: concrete dishes/items and rough portions, EXCLUDING any dish already named in \"meal\"",

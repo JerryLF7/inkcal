@@ -128,10 +128,22 @@ class CalorieAnalyzer:
         logger.info("Gemini analysis: %s", result)
         return result
 
-    def reanalyze(self, image_bytes: bytes, current_result: dict[str, Any], notes: str) -> dict[str, Any]:
-        """Re-analyze a food photo with user-provided additional context."""
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
-        data_url = f"data:image/jpeg;base64,{b64}"
+    def reanalyze(self, image_bytes: bytes | list[bytes], current_result: dict[str, Any], notes: str) -> dict[str, Any]:
+        """Re-analyze a food photo (or all photos of one meal group) with
+        user-provided additional context.
+
+        image_bytes: 单张图，或同餐组的全部照片（联合评估整餐，重复食物只算一次）。
+        """
+        if isinstance(image_bytes, bytes):
+            image_bytes = [image_bytes]
+        image_contents = []
+        for ib in image_bytes:
+            b64 = base64.b64encode(ib).decode("utf-8")
+            url = "data" + ":image/jpeg;base64," + b64
+            image_contents.append({
+                "type": "image_url",
+                "image_url": {"url": url},
+            })
 
         prompt = get_reanalyze_prompt().format(
             meal=current_result.get("meal", "unknown"),
@@ -149,10 +161,8 @@ class CalorieAnalyzer:
                 r = self._client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": data_url}},
-                        ]},
+                        {"role": "user", "content":
+                            [{"type": "text", "text": prompt}] + image_contents},
                     ],
                     temperature=0.2,
                     response_format={"type": "json_object"},
