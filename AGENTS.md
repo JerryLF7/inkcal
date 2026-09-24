@@ -236,6 +236,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **体征参数与 BMR（2026-09-23）**：`app_settings` 存 `user_height`/`user_weight`/`user_birthdate`/`user_gender`；`db.compute_bmr()` 用 Mifflin-St Jeor（男 +5 / 女 −161，年龄按 HKT 当日动态算），`db.get_user_bmr()` 聚合；`PUT /api/settings` 校验范围（身高 50–260、体重 20–300、gender ∈ male/female、日期 `_valid_date`）且**只更新请求中出现的键**（部分更新不得 KeyError），GET 返回体征+`bmr`。
 - **设置 Tab（2026-09-23）**：`web/ui/src/components/SettingsPane.vue`——体征表单 + BMR 实时结果 + 原 Calo 滑动窗口迁移至此；`App.vue` 三 Tab（记录/Calo/设置），滑动手势在设置页禁用，桌面左栏底部固定常驻「⚙️ 设置」入口（主区原位展示设置并限宽居中，右侧 Calo 侧栏完整保留不被挤走）；Calo 齿轮按钮与弹窗已删。
 - **Cron 同步**：`0 8-23 * * *` 抓今天每小时增量更新；`0 1 * * *` 凌晨 1 点执行 `scripts/burn_sources/heytap_ui.py --yesterday` 回溯昨日终值锁定收口；均直写 `inkcal burn`，日志 `~/heytap-pull.log`。保留 `~/heytap-pull.py` 软链接兼容旧调用。
+- **redroid 资产归档（2026-09-24）**：全部收敛至 `~/Docker/redroid/`——compose 文件与 `.env`、`data/` 数据卷（登录态/adb_keys，`~/rd` 软链兼容）、`apk/`（官方原件 + 防截屏补丁版）、`apktool-work/` 逆向工作区、`scripts/`（post-start / hide-root / install / heyweb 等全套维护脚本）、`build/` 镜像构建工程。镜像 `redroid:14.0.0_heytap`（su 改名、release-keys、zh-CN 等文件级伪装已 `docker commit` 固化）。日常管理：`~/.local/bin/docker-compose -f ~/Docker/redroid/docker-compose.yml up -d` 之后**必须跑 `scripts/post-start.sh`**（binder 权限 + bind-ro 运行时伪装；compose 无 post-start 钩子，漏跑则欢太健康重新弹 root 框）。详见该目录 `README.md`。
 
 ### 后续任务
 
