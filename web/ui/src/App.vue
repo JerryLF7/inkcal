@@ -27,6 +27,7 @@ function onTitle(v, t) {
 }
 
 function switchView(v) {
+  pane.value = 'records';
   view.value = v;
   title.value = titles[v].value.main ? titles[v].value : title.value;
 }
@@ -99,7 +100,7 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
           <button
             v-for="v in [['day', '日'], ['week', '周']]"
             :key="v[0]"
-            :class="{ active: view === v[0] }"
+            :class="{ active: view === v[0] && pane === 'records' }"
             @click="switchView(v[0])"
           >{{ v[1] }}</button>
         </div>
@@ -110,46 +111,66 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
       <div class="rail-section rail-quick">
         <button class="quick-link" type="button" @click="goToday">今日</button>
         <button class="quick-link" type="button" @click="goThisWeek">本周</button>
-        <button class="quick-link" type="button" @click="go('settings')">设置</button>
+      </div>
+
+      <!-- PC 左侧导航栏底部固定：设置 -->
+      <div class="rail-footer">
+        <button
+          class="rail-settings-btn"
+          :class="{ active: pane === 'settings' }"
+          type="button"
+          aria-label="设置"
+          @click="go('settings')"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          <span>设置</span>
+        </button>
       </div>
     </aside>
 
     <div
       class="panes" :class="{ 'show-chat': pane === 'chat' }"
-      v-show="pane !== 'settings'"
       @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd"
     >
-      <!-- 主区：记录 -->
+      <!-- 主区：记录（日/周/月）或 设置 -->
       <section class="pane records-pane">
-        <div class="topbar">
-          <div class="sticky-date">{{ title.main }}<small>{{ title.sub }}</small></div>
-          <div class="record-actions">
-            <template v-if="!isDesktop">
-              <button class="photo-button" type="button" aria-label="选择照片" @click="openPhotoPicker">选择照片</button>
-              <div class="seg">
-                <button
-                  v-for="v in [['day', '日'], ['week', '周'], ['month', '月']]"
-                  :key="v[0]"
-                  :class="{ active: view === v[0] }"
-                  @click="switchView(v[0])"
-                >{{ v[1] }}</button>
-              </div>
-            </template>
+        <div v-show="pane !== 'settings'" class="records-content">
+          <div class="topbar">
+            <div class="sticky-date">{{ title.main }}<small>{{ title.sub }}</small></div>
+            <div class="record-actions">
+              <template v-if="!isDesktop">
+                <button class="photo-button" type="button" aria-label="选择照片" @click="openPhotoPicker">选择照片</button>
+                <div class="seg">
+                  <button
+                    v-for="v in [['day', '日'], ['week', '周'], ['month', '月']]"
+                    :key="v[0]"
+                    :class="{ active: view === v[0] }"
+                    @click="switchView(v[0])"
+                  >{{ v[1] }}</button>
+                </div>
+              </template>
+            </div>
           </div>
+
+          <DayView
+            v-show="view === 'day'" ref="dayViewRef"
+            @open="openLightbox" @title="t => onTitle('day', t)"
+          />
+          <WeekView
+            v-show="view === 'week'" ref="weekViewRef"
+            @open="openLightbox" @title="t => onTitle('week', t)"
+          />
+          <MonthView
+            v-if="!isDesktop" v-show="view === 'month'"
+            @select="onSelectDate" @title="() => {}"
+          />
         </div>
 
-        <DayView
-          v-show="view === 'day'" ref="dayViewRef"
-          @open="openLightbox" @title="t => onTitle('day', t)"
-        />
-        <WeekView
-          v-show="view === 'week'" ref="weekViewRef"
-          @open="openLightbox" @title="t => onTitle('week', t)"
-        />
-        <MonthView
-          v-if="!isDesktop" v-show="view === 'month'"
-          @select="onSelectDate" @title="() => {}"
-        />
+        <!-- 设置面板：置于主区，PC 端右侧 Calo 侧栏保持可用 -->
+        <SettingsPane v-show="pane === 'settings'" />
       </section>
 
       <!-- Calo 对话：手机端为第二 pane；PC 端为右侧栏（可折叠） -->
@@ -161,13 +182,8 @@ function toggleChat() { chatCollapsed.value = !chatCollapsed.value; }
       />
     </div>
 
-    <!-- 设置 Tab：体征参数 + Calo 窗口（自 ChatPane 迁移） -->
-    <div v-show="pane === 'settings'" class="settings-wrap">
-      <SettingsPane />
-    </div>
-
     <!-- PC 折叠后的唤出把手 -->
-    <button v-if="isDesktop && chatCollapsed && pane !== 'settings'" class="chat-restorer" type="button" aria-label="打开 Calo 侧栏" title="打开 Calo 侧栏" @click="toggleChat">◂</button>
+    <button v-if="isDesktop && chatCollapsed" class="chat-restorer" type="button" aria-label="打开 Calo 侧栏" title="打开 Calo 侧栏" @click="toggleChat">◂</button>
 
     <nav v-if="!isDesktop" class="tabbar">
       <button :class="{ active: pane === 'records' }" @click="go('records')">
@@ -258,10 +274,9 @@ html, body {
 .tabbar button .ico { font-size: 18px; }
 .tabbar button.active { color: #2a6eff; }
 
-/* 设置 Tab 容器：手机端占满主区，桌面端限宽居中 */
-.settings-wrap { flex: 1; min-height: 0; display: flex; }
-@media (min-width: 1024px) {
-  .settings-wrap { max-width: 1080px; width: 100%; margin: 0 auto; }
+/* 主区内部容器：包裹记录页（日/周/月） */
+.records-content {
+  width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;
 }
 
 /* ── PC 布局（≥1024px）：左导航栏 + 记录主区 + Calo 右侧栏 ───── */
@@ -272,7 +287,7 @@ html, body {
   .app.desktop { flex-direction: row; }
   .chat-pane { border-left: 1px solid #1c1c1c; }
 
-  /* 左侧导航栏（参考旧版桌面布局）：品牌 + 选择照片 + 日/周切换 + 常驻日历 + 快捷键 */
+  /* 左侧导航栏（参考旧版桌面布局）：品牌 + 选择照片 + 日/周切换 + 常驻日历 + 快捷键 + 底部设置 */
   .nav-rail {
     flex: none; width: 264px; height: 100%;
     display: flex; flex-direction: column; gap: 14px;
@@ -291,6 +306,23 @@ html, body {
   }
   .quick-link:hover { background: #222; }
   .rail-calendar { border-top: 1px solid #1c1c1c; padding-top: 12px; }
+
+  /* 底部固定设置入口 */
+  .rail-footer {
+    margin-top: auto; padding-top: 14px; border-top: 1px solid #1c1c1c;
+  }
+  .rail-settings-btn {
+    width: 100%; display: flex; align-items: center; gap: 10px;
+    border: 1px solid transparent; border-radius: 8px; background: transparent;
+    color: #888; font: inherit; font-size: 13px; font-weight: 500;
+    padding: 10px 12px; cursor: pointer; transition: all .15s ease;
+  }
+  .rail-settings-btn:hover {
+    background: #181818; color: #ddd;
+  }
+  .rail-settings-btn.active {
+    background: #2a6eff1a; color: #2a6eff; border-color: #2a6eff33;
+  }
 
   /* 手机滑动布局 → 三栏 grid；panes 宽度归 100%，关掉 transform */
   .panes {

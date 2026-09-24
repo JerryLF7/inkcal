@@ -209,4 +209,11 @@ onMounted(load);
 }
 .btn-save:disabled { opacity: .6; }
 .btn-save:active { background: #1a5aee; }
+
+/* 桌面端居中限宽，排版更精致 */
+@media (min-width: 1024px) {
+  .topbar { padding: 16px 20px 12px; }
+  .topbar .sticky-date { max-width: 680px; width: 100%; margin: 0 auto; }
+  .scroll { max-width: 680px; width: 100%; margin: 0 auto; padding: 20px 0 40px; }
+}
 </style>

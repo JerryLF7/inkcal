@@ -234,8 +234,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **API 端点**：`GET/PUT/POST /api/burn`；`/api/records` 与 `/api/today` 自动同级返回 `burn`，`/api/week` 的 `by_day` 字典与顶层返回 `burns`，供前端直接按日读取计算缺口。
 - **回归测试**：`scripts/test_daily_burn.py`（25 checks 覆盖 DB / CLI / API）。
 - **体征参数与 BMR（2026-09-23）**：`app_settings` 存 `user_height`/`user_weight`/`user_birthdate`/`user_gender`；`db.compute_bmr()` 用 Mifflin-St Jeor（男 +5 / 女 −161，年龄按 HKT 当日动态算），`db.get_user_bmr()` 聚合；`PUT /api/settings` 校验范围（身高 50–260、体重 20–300、gender ∈ male/female、日期 `_valid_date`）且**只更新请求中出现的键**（部分更新不得 KeyError），GET 返回体征+`bmr`。
-- **设置 Tab（2026-09-23）**：`web/ui/src/components/SettingsPane.vue`——体征表单 + BMR 实时结果 + 原 Calo 滑动窗口迁移至此；`App.vue` 三 Tab（记录/Calo/设置），滑动手势在设置页禁用，桌面左栏 rail-quick 增「设置」入口；Calo 齿轮按钮与弹窗已删。
-- **Cron 同步**：`0 8-23 * * *` 每小时 + `57 23 * * *` 收口，跑 `/home/jerry/heytap-pull.py`（含启动后下拉刷新手势）并直写 `inkcal burn`；日志 `~/heytap-pull.log`。
+- **设置 Tab（2026-09-23）**：`web/ui/src/components/SettingsPane.vue`——体征表单 + BMR 实时结果 + 原 Calo 滑动窗口迁移至此；`App.vue` 三 Tab（记录/Calo/设置），滑动手势在设置页禁用，桌面左栏底部固定常驻「⚙️ 设置」入口（主区原位展示设置并限宽居中，右侧 Calo 侧栏完整保留不被挤走）；Calo 齿轮按钮与弹窗已删。
+- **Cron 同步**：`0 8-23 * * *` 抓今天每小时增量更新；`0 1 * * *` 凌晨 1 点执行 `scripts/burn_sources/heytap_ui.py --yesterday` 回溯昨日终值锁定收口；均直写 `inkcal burn`，日志 `~/heytap-pull.log`。保留 `~/heytap-pull.py` 软链接兼容旧调用。
 
 ### 后续任务
 
