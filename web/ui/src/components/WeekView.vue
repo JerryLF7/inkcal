@@ -1,8 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import {
-  API, DAILY_TARGET_KCAL, fmtDate, parseDate, hktNow, mondayOf, addDays,
-  shortDate, weekdayLabel,
+  API, fmtDate, parseDate, hktNow, mondayOf, addDays,
+  shortDate, weekdayLabel, tdeeOf, deficitOf,
 } from '../utils/format.js';
 import { store } from '../store.js';
 import MealCard from './MealCard.vue';
@@ -53,30 +53,41 @@ function shiftWeek(delta) {
   load();
 }
 
+// 双层柱状图：底层 = 当日总消耗 TDEE，上层 = 摄入；摄入超过 TDEE 变红
 const chartDays = computed(() => {
   if (!data.value) return [];
   const dates = Object.keys(data.value.by_day).sort();
-  const vals = dates.map(d => data.value.by_day[d].summary.calories);
-  const max = Math.max(DAILY_TARGET_KCAL * 1.15, ...vals, 1);
-  return dates.map((d, i) => ({
-    date: d,
-    kcal: vals[i],
-    label: dayNames[(parseDate(d).getDay() + 6) % 7],
-    height: vals[i] > 0 ? Math.max((vals[i] / max) * 100, 2) : 0,
-    over: vals[i] > DAILY_TARGET_KCAL,
-    none: vals[i] === 0,
+  const rows = dates.map(d => {
+    const day = data.value.by_day[d];
+    const kcal = day.summary.calories;
+    const burn = tdeeOf(day.burn, store.bmr);
+    return { date: d, kcal, burn };
+  });
+  const max = Math.max(...rows.map(r => Math.max(r.kcal, r.burn)), 1);
+  return rows.map(r => ({
+    ...r,
+    label: dayNames[(parseDate(r.date).getDay() + 6) % 7],
+    height: r.kcal > 0 ? Math.max((r.kcal / max) * 100, 2) : 0,
+    burnHeight: Math.max((r.burn / max) * 100, 2),
+    over: r.kcal > r.burn,
+    none: r.kcal === 0,
   }));
 });
 
-// 本周已记录天数 / 日均
+// 本周已记录天数 / 日均 / 累计缺口（仅统计有记录的天，未记录视为漏记不计入）
 const weekStats = computed(() => {
-  if (!data.value) return { days: 0, avg: 0 };
+  if (!data.value) return { days: 0, avg: 0, deficit: 0 };
   const dates = Object.keys(data.value.by_day);
   const recorded = dates.filter(d => data.value.by_day[d].records.length > 0);
   const total = data.value.summary.calories || 0;
+  const deficit = recorded.reduce((s, d) => {
+    const day = data.value.by_day[d];
+    return s + deficitOf(day.summary.calories, day.burn, store.bmr);
+  }, 0);
   return {
     days: recorded.length,
     avg: recorded.length ? Math.round(total / recorded.length) : 0,
+    deficit: Math.round(deficit),
   };
 });
 
@@ -113,19 +124,25 @@ defineExpose({ reload: load, resetToCurrentWeek });
     <div v-if="loading && !data" class="hint">加载中...</div>
     <template v-else-if="data">
       <div class="week-chart">
-        <div v-for="d in chartDays" :key="d.date" class="wbar">
-          <div
-            class="bar"
-            :class="{ over: d.over, none: d.none }"
-            :style="d.none ? {} : { height: d.height + '%' }"
-          ></div>
+        <div v-for="d in chartDays" :key="d.date" class="wbar" :title="`${shortDate(d.date)} · 摄入 ${Math.round(d.kcal).toLocaleString()} / 消耗 ${Math.round(d.burn).toLocaleString()} kcal`">
+          <div class="bars">
+            <div class="burn" :style="{ height: d.burnHeight + '%' }"></div>
+            <div
+              class="bar"
+              :class="{ over: d.over, none: d.none }"
+              :style="d.none ? {} : { height: d.height + '%' }"
+            ></div>
+          </div>
           <div class="dl">{{ d.label }}</div>
         </div>
       </div>
       <div class="week-sum-row">
         <button class="wk-arrow" @click="shiftWeek(-1)">‹</button>
         <div class="week-sum">
-          本周已记录 <b>{{ weekStats.days }}</b> 天 · 日均 <b>{{ weekStats.avg.toLocaleString() }}</b> kcal / 目标 {{ DAILY_TARGET_KCAL.toLocaleString() }}
+          本周已记录 <b>{{ weekStats.days }}</b> 天 · 日均 <b>{{ weekStats.avg.toLocaleString() }}</b> kcal ·
+          <template v-if="weekStats.days">
+            累计<b class="def-num" :class="{ neg: weekStats.deficit < 0 }">{{ weekStats.deficit < 0 ? '盈余' : '缺口' }} {{ Math.abs(weekStats.deficit).toLocaleString() }}</b> kcal
+          </template>
         </div>
         <button class="wk-arrow" :disabled="isCurrentWeek" @click="shiftWeek(1)">›</button>
       </div>
@@ -142,7 +159,7 @@ defineExpose({ reload: load, resetToCurrentWeek });
               <span class="c">C {{ Math.round(day.summary.carbs) }}</span> ·
               <span class="f">F {{ Math.round(day.summary.fat) }}</span>
             </span>
-            <span class="sep-cals" :class="{ over: day.summary.calories > DAILY_TARGET_KCAL }">
+            <span class="sep-cals" :class="{ over: day.summary.calories > tdeeOf(data.by_day[day.date].burn, store.bmr) }">
               {{ Math.round(day.summary.calories).toLocaleString() }}<small> kcal</small>
             </span>
           </div>
@@ -173,10 +190,21 @@ defineExpose({ reload: load, resetToCurrentWeek });
   flex: 1; display: flex; flex-direction: column; align-items: center;
   gap: 6px; height: 100%; justify-content: flex-end;
 }
-.wbar .bar { width: 60%; border-radius: 4px 4px 0 0; background: #2a6eff; }
+.wbar .bars {
+  position: relative; width: 100%; flex: 1;
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.wbar .burn {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: #2c313a; border-radius: 4px 4px 0 0;
+}
+.wbar .bar { position: relative; width: 55%; border-radius: 4px 4px 0 0; background: #2a6eff; }
 .wbar .bar.over { background: #ff6b6b; }
 .wbar .bar.none { background: #2a2a2a; height: 3px; }
 .wbar .dl { font-size: 10px; color: #666; }
+
+.week-sum .def-num { color: #4cda8b; }
+.week-sum .def-num.neg { color: #ff6b6b; }
 
 .week-sum-row { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
 .wk-arrow {

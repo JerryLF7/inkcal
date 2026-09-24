@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
-import { API, DAILY_TARGET_KCAL, fmtDate, hktNow } from '../utils/format.js';
+import { API, fmtDate, hktNow, tdeeOf } from '../utils/format.js';
 import { store } from '../store.js';
 
 const emit = defineEmits(['title', 'select']);
@@ -13,6 +13,7 @@ const props = defineProps({
 const now0 = hktNow();
 const cursor = ref(new Date(now0.getFullYear(), now0.getMonth(), 1));
 const kcalByDay = ref({});   // { 'YYYY-MM-DD': kcal }
+const burnByDay = ref({});   // { 'YYYY-MM-DD': burn 行（active_kcal/steps/source） }
 const loading = ref(true);
 
 const dayNames = ['一', '二', '三', '四', '五', '六', '日'];
@@ -45,6 +46,7 @@ async function load() {
       map[rec.date] = (map[rec.date] || 0) + (rec.calories || 0);
     }
     kcalByDay.value = map;
+    burnByDay.value = data.burns || {};
     emitTitle();
   } catch { /* 保留旧数据 */ }
   finally { loading.value = false; }
@@ -58,7 +60,7 @@ function emitTitle() {
   });
 }
 
-// 日历格子：周一起；每日热量环 = 当日 kcal / 目标
+// 日历格子：周一起；每日热量环 = 当日 kcal / 当日 TDEE（无体征时退固定目标）
 const cells = computed(() => {
   const y = cursor.value.getFullYear(), m = cursor.value.getMonth();
   const firstDow = (new Date(y, m, 1).getDay() + 6) % 7;
@@ -68,13 +70,13 @@ const cells = computed(() => {
   for (let d = 1; d <= daysInMonth; d++) {
     const ds = fmtDate(new Date(y, m, d));
     const kcal = kcalByDay.value[ds] || 0;
-    const pct = kcal / DAILY_TARGET_KCAL;
+    const pct = kcal / tdeeOf(burnByDay.value[ds], store.bmr);
     out.push({
       key: ds, day: d, ds, kcal,
       today: ds === todayStr,
       ring: kcal > 0 ? {
         dash: (Math.min(pct, 1) * 97.4).toFixed(1),
-        cls: pct > 1 ? 'over' : pct > 0.85 ? 'warn' : 'ok',
+        cls: pct > 1 ? 'over' : 'ok',   // 二值缺口语义：绿 = 有缺口，红 = 超消耗
       } : null,
     });
   }
@@ -114,9 +116,8 @@ defineExpose({ reload: load });
       </div>
     </div>
     <div v-if="!compact" class="cal-legend">
-      <span><i style="background:#2a6eff"></i>达标内</span>
-      <span><i style="background:#51cf66"></i>接近目标</span>
-      <span><i style="background:#ff6b6b"></i>超标</span>
+      <span><i style="background:#4cda8b"></i>有缺口</span>
+      <span><i style="background:#ff6b6b"></i>超消耗</span>
     </div>
     <div v-if="loading" class="hint">加载中...</div>
   </div>
@@ -150,8 +151,7 @@ defineExpose({ reload: load });
   pointer-events: none;
 }
 .ring .bg { stroke: #222; }
-.ring .ok { stroke: #2a6eff; }
-.ring .warn { stroke: #51cf66; }
+.ring .ok { stroke: #4cda8b; }
 .ring .over { stroke: #ff6b6b; }
 
 .cal-day .num {

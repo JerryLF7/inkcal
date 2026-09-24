@@ -2,6 +2,17 @@
 
 export const DAILY_TARGET_KCAL = 2500;
 
+// 当日总消耗（TDEE）：BMR + 手表活动量；无活动量退到仅 BMR；未填体征退到固定目标
+export function tdeeOf(burn, bmr) {
+  if (bmr) return bmr + ((burn && burn.active_kcal) || 0);
+  return DAILY_TARGET_KCAL;
+}
+
+// 缺口 = TDEE − 摄入（正数 = 有缺口，负数 = 超标）
+export function deficitOf(kcal, burn, bmr) {
+  return tdeeOf(burn, bmr) - (kcal || 0);
+}
+
 export const SOURCE_LABELS = { manual: '手动', immich: 'Immich', photoprism: 'PhotoPrism' };
 export const CONF_LABELS = { high: '高', medium: '中', low: '低' };
 export const CONF_TITLES = { high: '置信度：高', medium: '置信度：中', low: '置信度：低' };

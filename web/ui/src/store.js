@@ -8,7 +8,21 @@ export const store = reactive({
   bump: 0,
   toastMsg: '',
   toastType: '',
+  bmr: null,        // 基础代谢（来自 /api/settings）；null = 未填体征
+  bmrLoaded: false,
 });
+
+// BMR 全局缓存：App 挂载时拉一次；设置页保存体征后 force 刷新
+export async function ensureBmr(force) {
+  if (store.bmrLoaded && !force) return;
+  try {
+    const r = await fetch(`${API}/api/settings`);
+    if (!r.ok) return;
+    const d = await r.json();
+    store.bmr = d.bmr ?? null;
+    store.bmrLoaded = true;
+  } catch { /* 静默，视图自动退到固定目标 */ }
+}
 
 let _toastTimer = null;
 

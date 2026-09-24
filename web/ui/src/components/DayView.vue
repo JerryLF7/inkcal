@@ -1,8 +1,8 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue';
 import {
-  API, DAILY_TARGET_KCAL, fmtDate, parseDate, hktNow, addDays,
-  shortDate, weekdayLabel,
+  API, fmtDate, parseDate, hktNow, addDays,
+  shortDate, weekdayLabel, tdeeOf, deficitOf,
 } from '../utils/format.js';
 import { store } from '../store.js';
 import MealCard from './MealCard.vue';
@@ -28,7 +28,11 @@ function hasMacros(s) {
   return s && (s.protein || s.carbs || s.fat);
 }
 
-function groupRecords(recordList) {
+// 当日总消耗与缺口（随 store.bmr 响应式更新）
+function dayTdee(day) { return tdeeOf(day.burn, store.bmr); }
+function dayDeficit(day) { return deficitOf(day.summary.calories, day.burn, store.bmr); }
+
+function groupRecords(recordList, burns) {
   const byDate = new Map();
   for (const r of recordList) {
     if (!byDate.has(r.date)) byDate.set(r.date, []);
@@ -37,6 +41,7 @@ function groupRecords(recordList) {
   return [...byDate.entries()]
     .map(([date, records]) => ({
       date,
+      burn: (burns && burns[date]) || null,
       records: records.sort((a, b) =>
         (b.photo_time || '').localeCompare(a.photo_time || '') ||
         (b.asset_id || '').localeCompare(a.asset_id || '')
@@ -76,7 +81,7 @@ async function loadChunk() {
     if (minDate.value && end < minDate.value) { exhausted.value = true; return; }
     const start = fmtDate(addDays(parseDate(end), -(CHUNK_DAYS - 1)));
     const data = await fetchRange(start, end);
-    days.value = days.value.concat(groupRecords(data.records || []));
+    days.value = days.value.concat(groupRecords(data.records || [], data.burns));
     loadedUntil.value = start;
     if (minDate.value && loadedUntil.value <= minDate.value) exhausted.value = true;
   } catch { /* 下次滚动到底再试 */ }
@@ -93,7 +98,7 @@ async function reload() {
   if (!loadedUntil.value) { await loadChunk(); return; }
   try {
     const data = await fetchRange(loadedUntil.value, todayStr);
-    days.value = groupRecords(data.records || []);
+    days.value = groupRecords(data.records || [], data.burns);
     await nextTick();
     setupGroupObserver();
   } catch { /* 保留旧数据 */ }
@@ -202,8 +207,20 @@ const isEmpty = computed(() => !initialLoading.value && days.value.length === 0)
             <span class="c">C {{ Math.round(day.summary.carbs) }}</span> ·
             <span class="f">F {{ Math.round(day.summary.fat) }}</span>
           </span>
-          <span class="sep-cals" :class="{ over: day.summary.calories > DAILY_TARGET_KCAL }">
+          <span class="sep-cals" :class="{ over: day.summary.calories > dayTdee(day) }">
             {{ Math.round(day.summary.calories).toLocaleString() }}<small> kcal</small>
+          </span>
+          <span
+            v-if="day.summary.calories > 0"
+            class="sep-deficit"
+            :class="{ neg: dayDeficit(day) < 0, partial: day.date === todayStr }"
+            :title="day.date === todayStr
+              ? `TDEE ${Math.round(dayTdee(day))} kcal · 今日消耗与摄入均为截至目前数据`
+              : `TDEE ${Math.round(dayTdee(day))} kcal`"
+          >
+            {{ day.date === todayStr ? '~' : '' }}{{ dayDeficit(day) < 0
+              ? '超 ' + Math.round(-dayDeficit(day)).toLocaleString()
+              : '缺口 ' + Math.round(dayDeficit(day)).toLocaleString() }}
           </span>
         </div>
       </div>
@@ -262,6 +279,16 @@ const isEmpty = computed(() => !initialLoading.value && days.value.length === 0)
 .sep-cals.over {
   color: #ff6b6b;
 }
+
+.sep-deficit {
+  font-size: 11px; font-weight: 600; color: #4cda8b;
+  background: #0e1a13; border: 1px solid #1e4030;
+  border-radius: 8px; padding: 1px 7px; white-space: nowrap;
+}
+.sep-deficit.neg {
+  color: #ff6b6b; background: #1a0f0f; border-color: #402020;
+}
+.sep-deficit.partial { opacity: 0.75; }
 
 .hint { text-align: center; color: #888; font-size: 14px; padding: 40px 0; }
 .empty-hint .icon { font-size: 40px; margin-bottom: 10px; }

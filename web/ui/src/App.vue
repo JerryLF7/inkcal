@@ -7,7 +7,7 @@ import MealLightbox from './components/MealLightbox.vue';
 import PhotoPicker from './components/PhotoPicker.vue';
 import ChatPane from './components/ChatPane.vue';
 import SettingsPane from './components/SettingsPane.vue';
-import { store, startDataVersionPolling } from './store.js';
+import { store, startDataVersionPolling, ensureBmr } from './store.js';
 import { fmtDate, addDays, hktNow } from './utils/format.js';
 
 // 双 pane：记录 / Calo 对话（原型 docs/prototypes/two-tab-proto.html）
@@ -83,6 +83,7 @@ function onMqChange(e) {
 onMounted(() => {
   mqDesktop.addEventListener('change', onMqChange);
   startDataVersionPolling();
+  ensureBmr();
 });
 onBeforeUnmount(() => mqDesktop.removeEventListener('change', onMqChange));
 

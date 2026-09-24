@@ -63,6 +63,10 @@ async function save() {
     if (res.ok) {
       const d = await res.json();
       bmr.value = d.bmr;
+      // 全局 BMR 缓存同步刷新，日/周/月视图缺口跟着更新
+      store.bmr = d.bmr ?? null;
+      store.bmrLoaded = true;
+      touch();
       toast('设置已保存');
     } else {
       const err = await res.json().catch(() => ({}));

@@ -238,9 +238,25 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **Cron 同步**：`0 8-23 * * *` 抓今天每小时增量更新；`0 1 * * *` 凌晨 1 点执行 `scripts/burn_sources/heytap_ui.py --yesterday` 回溯昨日终值锁定收口；均直写 `inkcal burn`，日志 `~/heytap-pull.log`。保留 `~/heytap-pull.py` 软链接兼容旧调用。
 - **redroid 资产归档（2026-09-24）**：全部收敛至 `~/Docker/redroid/`——compose 文件与 `.env`、`data/` 数据卷（登录态/adb_keys，`~/rd` 软链兼容）、`apk/`（官方原件 + 防截屏补丁版）、`apktool-work/` 逆向工作区、`scripts/`（post-start / hide-root / install / heyweb 等全套维护脚本）、`build/` 镜像构建工程。镜像 `redroid:14.0.0_heytap`（su 改名、release-keys、zh-CN 等文件级伪装已 `docker commit` 固化）。日常管理：`~/.local/bin/docker-compose -f ~/Docker/redroid/docker-compose.yml up -d` 之后**必须跑 `scripts/post-start.sh`**（binder 权限 + bind-ro 运行时伪装；compose 无 post-start 钩子，漏跑则欢太健康重新弹 root 框）。详见该目录 `README.md`。
 
+### Phase 6.5：热量缺口前端展示（已实现，2026-09-24）
+
+缺口公式 **TDEE = BMR + active_kcal，缺口 = TDEE − 摄入**，前端三级降级链集中在 `tdeeOf()` / `deficitOf()`（`web/ui/src/utils/format.js`）：
+
+- 有 BMR + 当天 burn 行 → BMR + active_kcal（正式口径）
+- 有 BMR、当天 burn 未同步 → 仅 BMR（偏保守，历史日期常态）
+- 未填体征 → 固定 2500（`DAILY_TARGET_KCAL` 已降级为纯兜底常量，不再是正式基准；日/周/月视图的「超标变红」阈值一律走 TDEE）
+
+各视图实现：
+
+- **BMR 全局缓存**：`store.bmr` + `store.ensureBmr()`，`App.vue` onMounted 拉取一次；`SettingsPane` 保存体征后直接写缓存并 `touch()` 联动全部视图。
+- **日视图**：吸顶分隔线摄入数后加缺口 chip（绿「缺口 N」/ 红「超 N」，`.sep-deficit`，悬停 title 显示当日 TDEE）；**今天**加 `~` 前缀 + `.partial` 弱化 + title 注明「截至目前」半天数据（已拍板：照显不隐藏）。
+- **周视图**：双层柱状图（已拍板）——底层灰柱（`.burn`，#2c313a）= 当日 TDEE，上层蓝柱（55% 宽）= 摄入，摄入超过 TDEE 变红，悬停显示「摄入 X / 消耗 Y」；汇总行改为「本周已记录 N 天 · 日均 X kcal · 累计缺口/盈余 Z kcal」，**累计缺口只统计有记录的天**（未记录视为漏记不计入，避免 0 摄入虚增缺口；已拍板不换算体重）。
+- **月视图**：圆环分母 = 当日 TDEE；**二值缺口语义**（已拍板，取代原三档蓝/绿/红）：绿环 = 有缺口、红环 = 超消耗，数字保持中性白（颜色只由圆环承载，避免双语义打架）；图例两项「有缺口 / 超消耗」。
+
+已知口径：无 burn 数据的历史日期按仅 BMR 计算，绿红判定偏严格属真实反映；手表历史数据回溯同步未做（需要时另议）。
+
 ### 后续任务
 
-- 缺口展示：日视图吸顶栏/周视图渲染 `TDEE(BMR+active_kcal) − intake`（正缺口绿色、超标红色），等 UI 细节拍板后动工。
 - 主动确认队列：`/api/data-version` 已有 `pending: 0` 占位；在设计确认前不要自造 schema。
 - Lightbox 内部能力扩展：重分析入口、宏营养素手动编辑。
 - SSE：后端当前刻意是非流式，因为 relay SSE 能力未验证。先完成可靠同步模式，再决定流式和降级策略。
