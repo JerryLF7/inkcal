@@ -212,7 +212,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **双删除入口**：行内 ✕ 两步确认（`mode:"photo"`，独立武装态）与「删除整餐」两步确认（`mode:"meal"`）互不干扰。单张移除后**原地刷新**（`DELETE /api/record` photo 分支响应含 `promoted` 字段——删主行时前端按新主行锚点重拉 `/api/records?date=`）；形态 A 删主行晋升 0 值行时 toast 提示需要重估。组不存在时兜底关闭 + touch()。
 - AI 决策区块匹配范围扩到**组内全部 asset_id**（含 target_asset_id）。
 - 回归：`scripts/test_lightbox_smoke.py`（26 checks，隔离库，覆盖 photos 字段/形态 B 组头累加与餐名拼接/删从行/晋升/整餐删/404）。注意该脚本预置 `INKCAL_USER=""` 空串防 `.env` 被 load_dotenv 注入鉴权变量。
-- 未做（刻意）：lightbox 内重分析入口、编辑宏营养素、跨零点组审计聚合。C 类历史数据（同分钟聚类）处理方式仍未讨论。
+- 未做（刻意）：lightbox 内编辑宏营养素、跨零点组审计聚合。C 类历史数据（同分钟聚类）处理方式仍未讨论。
+- **Lightbox 重分析入口（2026-09-26 实现）**：`.lb-actions` 新增「重新分析」幽灵按钮 + 内联表单（notes 必填，与 API 400 契约一致），走既有 `POST /api/reanalyze`（组级联合重估，后端自解析组根）；成功后复用 `refreshGroup(promoted, successMsg)` 原地重拉（形态 B 从行会被清零，photos 显示必须重拉，不能只用响应体替换 rec）。纯文本补录（全组无图）记录隐藏入口（`canReanalyze`），后端恒 502。表单打开时解除删除武装态互斥。回归：`test_lightbox_smoke.py` 第 7 节补 4 个参数校验 check（Gemini 联合路径由 `test_group_reanalyze.py` 覆盖）。
 
 ### Phase 5：接通 Calo 聊天 Pane（已实现，2026-09-16）
 
@@ -260,7 +261,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 ### 后续任务
 
 - 主动确认队列：`/api/data-version` 已有 `pending: 0` 占位；在设计确认前不要自造 schema。
-- Lightbox 内部能力扩展：重分析入口、宏营养素手动编辑。
+- Lightbox 内部能力扩展：宏营养素手动编辑。
 - SSE：后端当前刻意是非流式，因为 relay SSE 能力未验证。先完成可靠同步模式，再决定流式和降级策略。
 - 聊天传图、同餐分组缩略图可视化、时间轴 skip 卡均不在一期。
 

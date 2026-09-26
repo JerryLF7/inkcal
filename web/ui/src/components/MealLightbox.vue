@@ -23,6 +23,9 @@ function open(r) {
   rec.value = r ? { ...r, photos: [...(r.photos || [])] } : null;
   selectedId.value = r ? r.asset_id : '';
   decisionOpen.value = false;
+  reanOpen.value = false;
+  reanNotes.value = '';
+  reanRunning.value = false;
   disarmMeal();
   disarmPhoto();
   if (r && r.date) ensureDecisions(r.date);
@@ -192,8 +195,46 @@ function onRemovePhoto(p) {
     .finally(() => { removingPhoto.value = ''; });
 }
 
-// ── 原地刷新：移除后按新主行锚点重拉当天分组 ─────────────────────
-async function refreshGroup(promoted) {
+// ── 重新分析（组级联合重估，走既有 POST /api/reanalyze）──────────
+const reanOpen = ref(false);
+const reanNotes = ref('');
+const reanRunning = ref(false);
+
+// 纯文本补录（无图）记录没有原图可重估，后端恒 502——直接隐藏入口
+const canReanalyze = computed(() =>
+  photosList.value.some(p => p.thumbnail_url || p.replacement_image));
+
+function toggleReanalyze() {
+  if (reanRunning.value) return;
+  reanOpen.value = !reanOpen.value;
+  if (reanOpen.value) { disarmMeal(); disarmPhoto(); }
+}
+
+async function onReanalyze() {
+  const notes = reanNotes.value.trim();
+  if (!rec.value || !notes || reanRunning.value) return;
+  reanRunning.value = true;
+  try {
+    const r = await fetch(`${API}/api/reanalyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asset_id: rec.value.asset_id, notes }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    reanOpen.value = false;
+    reanNotes.value = '';
+    // 复用原地刷新：重分析会把形态 B 从行清零，photos 显示必须重拉
+    await refreshGroup(undefined, `已更新：${data.record?.calories ?? '?'} kcal`);
+  } catch (err) {
+    toast('重新分析失败: ' + (err.message || '请重试'), 'error');
+  } finally {
+    reanRunning.value = false;
+  }
+}
+
+// ── 原地刷新：移除/重分析后按锚点重拉当天分组 ────────────────────
+async function refreshGroup(promoted, successMsg) {
   const anchor = promoted || rec.value.asset_id;
   const knownIds = new Set(rec.value.photos.map(p => p.asset_id));
   try {
@@ -207,19 +248,20 @@ async function refreshGroup(promoted) {
       emit('deleted');
       emit('close');
       touch();
-      toast('已移除，该餐没有剩余照片');
+      toast(successMsg ? '记录已不存在' : '已移除，该餐没有剩余照片');
       return;
     }
     rec.value = g;
     selectedId.value = g.asset_id;
     touch();
+    if (successMsg) { toast(successMsg); return; }
     // 形态 A 删主行 → 晋升行是 0 值，这餐变 0 kcal，提示用户重估
     const zeroed = promoted && !(g.calories || g.protein_g || g.carbs_g || g.fat_g);
     toast(zeroed
-      ? '已移除主照片，这餐数值需要重新估算（可让 Calo 重分析）'
+      ? '已移除主照片，这餐数值需要重新估算（可点下方「重新分析」）'
       : '已移除照片，记录已更新');
   } catch {
-    toast('已移除，但刷新失败——关闭后页面会自动更新', 'error');
+    toast('操作已完成，但刷新失败——关闭后页面会自动更新', 'error');
   }
 }
 </script>
@@ -313,9 +355,29 @@ async function refreshGroup(promoted) {
         </div>
 
         <div class="lb-actions">
+          <button v-if="canReanalyze" class="lb-reanalyze" type="button"
+                  :disabled="reanRunning" @click="toggleReanalyze">
+            {{ reanOpen ? '收起' : '重新分析' }}
+          </button>
           <button class="lb-delete" :class="{ armed: armedMeal }" :disabled="deletingMeal" @click="onDeleteMeal">
             {{ deletingMeal ? '删除中…' : armedMeal ? '确认删除整餐？' : '删除整餐' }}
           </button>
+        </div>
+
+        <!-- 重分析内联表单：notes 必填，驱动 Gemini 联合重估 -->
+        <div v-if="reanOpen" class="lb-rean">
+          <textarea v-model="reanNotes" class="lb-rean-input" rows="3"
+                    :disabled="reanRunning"
+                    placeholder="修正说明，例：米饭只吃了一半 / 其实是玉米猪肉馅"></textarea>
+          <div class="lb-rean-bar">
+            <button class="lb-rean-submit" type="button"
+                    :disabled="reanRunning || !reanNotes.trim()"
+                    @click="onReanalyze">
+              {{ reanRunning ? '分析中…（约半分钟）' : '开始分析' }}
+            </button>
+            <button class="lb-rean-cancel" type="button"
+                    :disabled="reanRunning" @click="reanOpen = false">取消</button>
+          </div>
         </div>
       </div>
     </div>
@@ -436,7 +498,14 @@ async function refreshGroup(promoted) {
   display: block; font-size: 10px; color: #555; margin-bottom: 2px;
 }
 
-.lb-actions { margin-top: 14px; display: flex; justify-content: flex-end; }
+.lb-actions { margin-top: 14px; display: flex; justify-content: flex-end; gap: 10px; }
+.lb-reanalyze {
+  background: none; border: 1px solid #2a2a2a; color: #999;
+  border-radius: 8px; padding: 8px 16px; font-size: 13px;
+  cursor: pointer; font-family: inherit;
+}
+.lb-reanalyze:hover { color: #e0e0e0; border-color: #444; }
+.lb-reanalyze:disabled { opacity: 0.6; cursor: not-allowed; }
 .lb-delete {
   background: none; border: 1px solid #ff6b6b33; color: #ff6b6b;
   border-radius: 8px; padding: 8px 16px; font-size: 13px;
@@ -444,6 +513,33 @@ async function refreshGroup(promoted) {
 }
 .lb-delete.armed { background: #ff6b6b; border-color: #ff6b6b; color: #fff; }
 .lb-delete:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* 重新分析内联表单 */
+.lb-rean {
+  margin-top: 10px; background: #141414; border: 1px solid #242424;
+  border-radius: 10px; padding: 10px 12px;
+}
+.lb-rean-input {
+  width: 100%; resize: vertical; min-height: 56px;
+  background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px;
+  color: #ddd; font-size: 13px; line-height: 1.5; padding: 8px 10px;
+  font-family: inherit; box-sizing: border-box;
+}
+.lb-rean-input:focus { outline: none; border-color: #2a6eff; }
+.lb-rean-input:disabled { opacity: 0.6; }
+.lb-rean-bar { display: flex; gap: 8px; margin-top: 8px; }
+.lb-rean-submit {
+  background: #2a6eff; border: 1px solid #2a6eff; color: #fff;
+  border-radius: 8px; padding: 6px 14px; font-size: 13px;
+  cursor: pointer; font-family: inherit;
+}
+.lb-rean-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.lb-rean-cancel {
+  background: none; border: 1px solid #333; color: #888;
+  border-radius: 8px; padding: 6px 14px; font-size: 13px;
+  cursor: pointer; font-family: inherit;
+}
+.lb-rean-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── 桌面端：左图右栏 ── */
 @media (min-width: 1024px) {

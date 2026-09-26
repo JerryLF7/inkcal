@@ -135,6 +135,16 @@ def main():
     check("404 record not found",
           client.delete("/api/record", json={"asset_id": "nope", "mode": "photo"}).status_code == 404)
 
+    # ── 7. /api/reanalyze 参数校验（Gemini 联合重估由 test_group_reanalyze 覆盖）──
+    check("reanalyze 缺 asset_id → 400",
+          client.post("/api/reanalyze", json={"notes": "x"}).status_code == 400)
+    check("reanalyze 缺 notes → 400",
+          client.post("/api/reanalyze", json={"asset_id": "b-fruit"}).status_code == 400)
+    check("reanalyze 空白 notes → 400",
+          client.post("/api/reanalyze", json={"asset_id": "b-fruit", "notes": "  "}).status_code == 400)
+    check("reanalyze 未知记录 → 404",
+          client.post("/api/reanalyze", json={"asset_id": "nope", "notes": "x"}).status_code == 404)
+
     print(f"\nall passed ({ok} checks)")
 
 
