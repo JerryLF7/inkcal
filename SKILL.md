@@ -16,7 +16,6 @@ Trigger phrases: "记一下吃了", "午饭吃了", "热量", "卡路里", "蛋�
 
 - Project: `~/Coding/inkcal/`
 - Database: `data/inkcal.db` (SQLite, WAL mode)
-- Fine-tuned model: `data/finetuned-model/` (auto-loaded if present)
 
 ## Command Cheat Sheet
 

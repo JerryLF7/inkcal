@@ -86,7 +86,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `main.py` | CLI 入口：run/view/add/edit/search/stats/delete/label/replace/analyze/reanalyze/explain/events/migrate/merge 等；`_run_agent_batch` 负责 cron 侧 Luna 决策落地（含同餐分组与 update 幂等） |
 | `src/db.py` | SQLite schema 与全部数据访问；WAL、FTS、records、审计、chat 表 |
 | `src/immich_client.py` / `src/photoprism_client.py` | 照片源客户端与时间解析 |
-| `src/food_detector.py` | SigLIP2 本地过滤；可自动加载 `data/finetuned-model/` |
+| `src/food_detector.py` | SigLIP2 本地过滤（仅基础模型）；判定线 `FOOD_THRESHOLD`（唯一来源，当前 0.35）与擦边区 `GREY_ZONE` 在此定义 |
 | `src/calorie_analyzer.py` | Gemini/OpenAI-compatible 视觉估算 |
 | `src/pipeline_ops.py` | CLI 和 Web 共用的强制分析/重新分析业务路径 |
 | `src/resolver.py` | CLI 记录指代解析：`--ref` / `--id` / `--last` / `--meal + --date` |
@@ -339,12 +339,12 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 1. 仅使用 venv Python；系统 Python 缺 `pillow-heif`、`imagehash`、Gemini 相关依赖，上传可能表面成功、实际失败。
 2. 用 `fuser -k <port>/tcp` 释放端口；`pkill -f web/server.py` 可能留下绑定。
 3. `inkcal run` 有 flock 互斥锁（`data/inkcal-run.lock`）：Luna harness 一轮可跑 ~11 分钟，超过 cron 10 分钟间隔时重叠 run 会直接退出，防止重复入库与孤儿审计决策。若锁残留（进程被 kill -9），手动删除 lockfile 即可。
-4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。
+4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。**判定线 2026-09-27 由 0.5 下调至 0.35**（`src/food_detector.py::FOOD_THRESHOLD`）：基础模型对中餐/米饭类漏检严重（当晚晚餐照仅 0.436 被误杀并永久进 `classified_non_food`）。标定依据为近两周 175 张拒收样本的 Gemini 真值标注——≥0.4 段真食物占 36%、0.3~0.4 占 33%、0.2~0.3 占 21%、<0.2 仅 7%，曲线平缓，0.35 以下收益快速衰减。代价是多放少量非食物进 Luna，由 Luna skip 契约兜底。
 5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
 6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
 6b. **变更 FTS 虚拟表结构（重建 `records_fts`、改触发器）必须先停 Flask server 再迁移**。2026-09-13 在 server 运行中重建 FTS5 虚拟表，导致跨表写入触发器损坏（UPDATE 触发 FTS 写入报 `database disk image is malformed`，表本身 quick_check 却 OK，热修无效）。最终走「干净导出业务表 → 全新 init_db → 导入 → 重建 FTS」无损恢复。加列（`ALTER TABLE ADD COLUMN`）类迁移可在线做，重建虚拟表/触发器不行。
 7. `inkcal migrate` 检测到已有数据库会拒绝；`--force` 会清空再迁移，只能在确有意图时使用。
-8. `~/Coding/food-classifier/` 是独立的 SigLIP2 微调项目，模型产物写入本项目 `data/finetuned-model/` 并由检测器自动加载。
+8. **SigLIP2 微调路线已放弃**（2026-09-27）：检测器只加载 HuggingFace 基础模型，`data/finetuned-model/` 与 `~/Coding/food-classifier/` 的加载链路已从代码和文档中删除，不要再接回来；漏检靠调 `FOOD_THRESHOLD` 与“选择照片”兜底。
 9. **Luna 网关静默忽略 `previous_response_id`**（详见 §5）。症状是聊天"失忆"或批处理悄悄降级回 Gemini，**不报错**。换 endpoint 后必须实测：带 `previous_response_id` 问上一轮内容 + 确认图片进缓存，再看 `agent_decisions` 是否有新行。模型 id 也用连字符形式（`gpt-5-6-luna`），点号形式会被上游拒为 `unknown provider for model`。
 
 ---

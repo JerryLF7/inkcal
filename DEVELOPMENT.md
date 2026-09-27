@@ -47,7 +47,6 @@
 换成 `prithivMLmods/Food-or-Not-SigLIP2`：
 - CPU 推理 ~0.3s/张，快 6 倍
 - 专为食物/非食物二分类训练，准确率明显更高
-- 支持本地微调，可以持续改进
 
 **教训：** 不要用通用模型做特定分类任务，找专门训练的模型省时省力。
 
@@ -208,7 +207,7 @@ inkcal migrate --force # 强制重新迁移（会清空现有 DB）
 ### src/food_detector.py — 食物检测（60行）
 
 - 延迟加载 torch/transformers（只在实际调用时 import，加快 CLI 启动）
-- 模型路径优先级：本地微调模型 > HuggingFace 基础模型
+- 只加载 HuggingFace 基础模型（离线缓存）；食物/非食物判定线在 `FOOD_THRESHOLD`
 - `is_food()` 返回 bool，异常时返回 False（宁可漏过不可崩溃）
 
 ### src/calorie_analyzer.py — 热量分析（121行）

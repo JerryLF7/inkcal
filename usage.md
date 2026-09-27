@@ -135,6 +135,5 @@ user: 看看周一吃了什么
 
 - Records: `~/Coding/inkcal/data/inkcal.db` (SQLite, WAL mode)
 - Tables: `records`, `reanalysis_history`, `ignored_assets`, `classified_non_food`, `pipeline_events`, `records_fts`
-- Fine-tuned model (optional): `data/finetuned-model/`
 - Replacement images: `data/images/` (only for unmatched uploads)
 - Migrated JSON backups: `data/migrated-json-backup/`

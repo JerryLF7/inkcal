@@ -246,10 +246,10 @@ def _run_source(
         logger.info("  🔍 检测 [%s...] (拍摄于 %s)", aid[:8], photo_time)
 
         score = detector.score(thumb)
-        if score < 0.5:
+        if score < FOOD_THRESHOLD:
             logger.info("  ❌ 不是食物，跳过")
             db.add_classified_non_food(aid, decided_by="siglip2")
-            if score >= 0.4:  # grey zone — worth a human look
+            if score >= GREY_ZONE:  # grey zone — worth a human look
                 db.add_event(run_id, "classifier_unsure", aid,
                              {"score": round(score, 3)})
             continue
@@ -543,7 +543,7 @@ def cmd_run(args):
 
     db.init_db()
 
-    from src.food_detector import FoodDetector
+    from src.food_detector import FoodDetector, FOOD_THRESHOLD, GREY_ZONE
     from src.calorie_analyzer import CalorieAnalyzer
 
     config = load_config()
