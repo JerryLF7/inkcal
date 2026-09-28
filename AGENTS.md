@@ -337,7 +337,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 ### 运行时已知坑
 
 1. 仅使用 venv Python；系统 Python 缺 `pillow-heif`、`imagehash`、Gemini 相关依赖，上传可能表面成功、实际失败。
-2. 用 `fuser -k <port>/tcp` 释放端口；`pkill -f web/server.py` 可能留下绑定。
+2. **Web server 只由用户级 systemd 单元 `inkcal-web.service` 管理**（`systemctl --user restart inkcal-web.service`），**不要**手动 `python web/server.py`。2026-09-28 事故：9月23 手动起的一个实例占住 5800 端口，systemd 单元因此空转重启 82049 次；那个孤儿进程还持着 SQLite 写锁，此后**所有** cron run 都在写 `run_summary` 时 `database is locked` 静默失败（管线实际瘫痪近 20 小时）。排查：`fuser -v data/inkcal.db` 看谁持锁、`systemctl --user status inkcal-web.service` 看 restart 计数。
 3. `inkcal run` 有 flock 互斥锁（`data/inkcal-run.lock`）：Luna harness 一轮可跑 ~11 分钟，超过 cron 10 分钟间隔时重叠 run 会直接退出，防止重复入库与孤儿审计决策。若锁残留（进程被 kill -9），手动删除 lockfile 即可。
 4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。**判定线 2026-09-27 由 0.5 下调至 0.35**（`src/food_detector.py::FOOD_THRESHOLD`）：基础模型对中餐/米饭类漏检严重（当晚晚餐照仅 0.436 被误杀并永久进 `classified_non_food`）。标定依据为近两周 175 张拒收样本的 Gemini 真值标注——≥0.4 段真食物占 36%、0.3~0.4 占 33%、0.2~0.3 占 21%、<0.2 仅 7%，曲线平缓，0.35 以下收益快速衰减。代价是多放少量非食物进 Luna，由 Luna skip 契约兜底。
 5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
@@ -346,6 +346,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 7. `inkcal migrate` 检测到已有数据库会拒绝；`--force` 会清空再迁移，只能在确有意图时使用。
 8. **SigLIP2 微调路线已放弃**（2026-09-27）：检测器只加载 HuggingFace 基础模型，`data/finetuned-model/` 与 `~/Coding/food-classifier/` 的加载链路已从代码和文档中删除，不要再接回来；漏检靠调 `FOOD_THRESHOLD` 与“选择照片”兜底。
 9. **Luna 网关静默忽略 `previous_response_id`**（详见 §5）。症状是聊天"失忆"或批处理悄悄降级回 Gemini，**不报错**。换 endpoint 后必须实测：带 `previous_response_id` 问上一轮内容 + 确认图片进缓存，再看 `agent_decisions` 是否有新行。模型 id 也用连字符形式（`gpt-5-6-luna`），点号形式会被上游拒为 `unknown provider for model`。
+10. **cron 的 stdout/stderr 不落盘**（无 `MAILTO`、无 mail spool），run 崩溃或写库失败只会表现为"照片不进来"，没有任何报错。排查入口：`pipeline_events` 里 `run_summary` 是否按 10 分钟断档、`data/inkcal-run.lock` 的 PID 是否已死、`journalctl --user -u inkcal-web.service`。无副作用复现：`inkcal run --date <一个没有照片的日期>`（会真的写 1 条 run_summary 事件与若干 `classified_non_food`）。
 
 ---
 

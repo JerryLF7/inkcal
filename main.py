@@ -174,6 +174,9 @@ def _run_source(
     run_id: str = "",
 ):
     """Run the full pipeline for a single photo source."""
+    # 判定线在 cmd_run 里 import 会只落在那个函数作用域，这里必须自己取一次。
+    from src.food_detector import FOOD_THRESHOLD, GREY_ZONE
+
     if source == "immich":
         from src.immich_client import ImmichClient, format_photo_time
 
@@ -543,7 +546,7 @@ def cmd_run(args):
 
     db.init_db()
 
-    from src.food_detector import FoodDetector, FOOD_THRESHOLD, GREY_ZONE
+    from src.food_detector import FoodDetector
     from src.calorie_analyzer import CalorieAnalyzer
 
     config = load_config()
