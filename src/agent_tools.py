@@ -250,12 +250,9 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
     )
 
     # Single photo: use the shipped analyze.md template so the loop path and
-    # the manual-upload/legacy path run the SAME prompt. Deliberately the
-    # packaged default (not get_analyze_prompt()): the user-override slot
-    # exists for tuning, and system invariants must not depend on it —
-    # task_frame + format_anchor already pin the hard rules either way.
+    # the manual-upload/legacy path run the SAME prompt.
     if len(images) == 1:
-        body = prompt_loader.load_packaged_analyze()
+        body = prompt_loader.get_analyze_prompt()
         text = task_frame + "\n\n" + body + format_anchor
     else:
         # Pin the output contract at the very end, closest to generation:

@@ -37,7 +37,7 @@ Immich / PhotoPrism
 - SigLIP2 是隐私门槛；用户从相册明确选择照片或手动上传时，才可绕过食物过滤。`AGENT_ENABLED=1` 时绕过 SigLIP2 的照片仍进入 Luna（skip 契约保留），失败降级直送 Gemini；`AGENT_ENABLED=0` 时直送 Gemini。
 - Gemini 只负责估算，不负责同餐关系；Luna 只负责视觉判断/编排，不应自己编造热量。
 - Luna 写给 Gemini 的 `prompt_for_gemini` 只准描述照片关系（同餐/顺序/以哪张为准），禁止餐次结论、食物内容预判、纳入/排除决定（2026-08-31 晚餐案例：Luna 排除啤酒导致漏算）。食物内容与纳入范围由 Gemini 依照片自行判断。
-- `analyze_with_gemini` 单张照片时不经 Luna 提示词：Gemini 收到 固定 task_frame（全摄入基准等）+ 打包版 `analyze.md` + JSON 锚点，Luna 传入的任何文本被忽略。多张照片时 Luna 才必填 `prompt_for_gemini`（只写照片关系）。
+- `analyze_with_gemini` 单张照片时不经 Luna 提示词：Gemini 收到 固定 task_frame（全摄入基准等）+ `analyze.md` + JSON 锚点，Luna 传入的任何文本被忽略。多张照片时 Luna 才必填 `prompt_for_gemini`（只写照片关系）。
 - `analyze_with_gemini` 的份量估算规则由系统固定注入（`agent_tools.py::_gemini_multi_image` 的 task_frame）：全摄入基准（饮品一律计入）、拿不准时计入并降 confidence（宁可多算可纠错，不可漏算无感知）、非真实食物全零。该框架在 Luna 文本之前发送；不要把它合并回 prompt 或删除。
 - **Gemini 输出标题化（2026-09-13 起）**：`meal` = 短标题（≤10 字餐型概括，如「中式外卖盒饭」，不堆菜品清单），`meal_detail` = 菜品明细与份量说明。两条 Gemini 路径（`prompts/analyze.md`、`agent_tools` 的 task_frame/format_anchor）与 `reanalyze.md` 都输出这两个字段；落库为 `records.meal_detail` 列，FTS 同时索引两列。**旧记录不回填**（meal 保持整句话、detail 为空，已拍板）。
 
@@ -89,6 +89,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `src/immich_client.py` / `src/photoprism_client.py` | 照片源客户端与时间解析 |
 | `src/food_detector.py` | SigLIP2 本地过滤（仅基础模型）；判定线 `FOOD_THRESHOLD`（唯一来源，当前 0.35）与擦边区 `GREY_ZONE` 在此定义 |
 | `src/calorie_analyzer.py` | Gemini/OpenAI-compatible 视觉估算 |
+| `src/prompts/` | 提示词模板 `analyze.md` / `reanalyze.md` / `analyze_text.md`，`loader.py` 只做 `read_text`（2026-09-30 起无用户覆盖层、无内联兜底，文件缺失直接报错；改提示词就改仓库里的 `.md`） |
 | `src/pipeline_ops.py` | CLI 和 Web 共用的强制分析/重新分析业务路径；`analyze_asset` 也是 cron 降级路径（`main._legacy_analyze_single`）的唯一实现，记录行组装统一走 `_build_record`（`main.append_log` 亦委托它），`analyzer=` 参数可复用 cron 的共享 Gemini 客户端 |
 | `src/resolver.py` | CLI 记录指代解析：`--ref` / `--id` / `--last` / `--meal + --date` |
 
@@ -362,7 +363,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
 6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
 6b. **变更 FTS 虚拟表结构（重建 `records_fts`、改触发器）必须先停 Flask server 再迁移**。2026-09-13 在 server 运行中重建 FTS5 虚拟表，导致跨表写入触发器损坏（UPDATE 触发 FTS 写入报 `database disk image is malformed`，表本身 quick_check 却 OK，热修无效）。最终走「干净导出业务表 → 全新 init_db → 导入 → 重建 FTS」无损恢复。加列（`ALTER TABLE ADD COLUMN`）类迁移可在线做，重建虚拟表/触发器不行。
-7. 旧 JSON→SQLite 迁移已完成，`inkcal migrate`、`db.migrate_from_json` 与 `scripts/migrate_to_sqlite.py` 于 2026-09-30 删除；项目也不再做 skill 适配（`SKILL.md`、`usage.md` 已删），文档入口仅 `AGENTS.md` 与 `README.md`；`DEVELOPMENT.md` 已于同日删除，仍有效的选型与踩坑并入 §7「选型与设计沿革」。
+7. 旧 JSON→SQLite 迁移已完成，`inkcal migrate`、`db.migrate_from_json` 与 `scripts/migrate_to_sqlite.py` 于 2026-09-30 删除；项目也不再做 skill 适配（`SKILL.md`、`usage.md` 已删），文档入口仅 `AGENTS.md` 与 `README.md`；根目录 `scan.py` 与 4 个打真实 Luna 网关的事故复现脚本（`test_pipeline_reproduce_21` / `test_luna_lunch` / `test_luna_cron_two_photos` / `test_luna_cache`）同日删除，保留的回归以 §2 命令清单为准；`DEVELOPMENT.md` 已于同日删除，仍有效的选型与踩坑并入 §7「选型与设计沿革」。
 8. **SigLIP2 微调路线已放弃**（2026-09-27）：检测器只加载 HuggingFace 基础模型，`data/finetuned-model/` 与 `~/Coding/food-classifier/` 的加载链路已从代码和文档中删除，不要再接回来；漏检靠调 `FOOD_THRESHOLD` 与“选择照片”兜底。
 9. **Luna 网关静默忽略 `previous_response_id`**（详见 §5）。症状是聊天"失忆"或批处理悄悄降级回 Gemini，**不报错**。换 endpoint 后必须实测：带 `previous_response_id` 问上一轮内容 + 确认图片进缓存，再看 `agent_decisions` 是否有新行。模型 id 也用连字符形式（`gpt-5-6-luna`），点号形式会被上游拒为 `unknown provider for model`。
 10. **cron 的 stdout/stderr 不落盘**（无 `MAILTO`、无 mail spool），run 崩溃或写库失败只会表现为"照片不进来"，没有任何报错。排查入口：`pipeline_events` 里 `run_summary` 是否按 10 分钟断档、`data/inkcal-run.lock` 的 PID 是否已死、`journalctl --user -u inkcal-web.service`。无副作用复现：`inkcal run --date <一个没有照片的日期>`（会真的写 1 条 run_summary 事件与若干 `classified_non_food`）。

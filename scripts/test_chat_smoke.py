@@ -119,12 +119,12 @@ assert r.get_json()["chat_window"] == 5
 print("  ok  /api/settings chat_window 读写与边界约束正常")
 
 # 7. 验证 analyze_text 提示词模板与 add_record 工具
-from src.prompts.loader import get_analyze_text_prompt, list_placeholders
+from src.prompts.loader import get_analyze_text_prompt
 from src.agent_tools import call_chat_tool
 from unittest.mock import MagicMock, patch
 
 text_prompt = get_analyze_text_prompt()
-assert "description" in list_placeholders(text_prompt), "提示词必须包含 {description} 占位符"
+assert "{description}" in text_prompt, "提示词必须包含 {description} 占位符"
 assert "not real food" in text_prompt, "提示词必须包含非真实食物过滤规则"
 assert "all-intake baseline" in text_prompt, "提示词必须包含全摄入基准"
 print("  ok  get_analyze_text_prompt() 模板与占位符完整")

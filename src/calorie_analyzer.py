@@ -18,8 +18,7 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 5
 RETRY_BACKOFF = 2  # seconds, doubles each retry
 
-# Prompts live in src/prompts/{analyze,reanalyze}.md and can be overridden
-# by ~/.inkcal/prompts/{analyze,reanalyze}.md — see src/prompts/loader.py.
+# Prompts live in src/prompts/*.md — see src/prompts/loader.py.
 
 
 class CalorieAnalyzer:
