@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  默认只允许 HTTPS。局域网直连 inkcal 走的是明文 HTTP，所以逐个列出私网地址放行，
+  而不是全局打开 cleartext。
+
+  换服务器地址（局域网 IP 变了、或换一台机器）时，要在这里加一行并重新构建——
+  network-security-config 不支持网段（CIDR），只能逐个写。走 HTTPS 的反代域名不用加。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- NUC 局域网地址 -->
+        <domain includeSubdomains="false">your-server-host</domain>
+        <!-- NUC 的 Tailscale 地址，手机装 Tailscale 后外网也能直连 -->
+        <domain includeSubdomains="false">your-tailscale-host</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

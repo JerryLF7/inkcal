@@ -153,6 +153,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 没有 `keystore.properties` 时 release 自动退回 debug 签名，保证 `assembleRelease` 永远出可安装包。
 - 发布走 GitHub Release 滚动 tag `android-latest`，用 `android/release.sh`（内部 `gh release upload --clobber`），下载地址固定：`https://github.com/JerryLF7/inkcal/releases/download/android-latest/inkcal.apk`。仓库是 private，手机需登录态；用 `curl` 直接拉会 404，验证请用 `gh release download android-latest -p inkcal.apk`。用户自己装 APK 测试，agent 无法点真机。
 
+局域网明文 HTTP：Android 从 targetSdk 28 起默认禁明文，`android/app/src/main/res/xml/network_security_config.xml` 逐个列出了放行的地址（NUC 局域网 IP、Tailscale IP、localhost、10.0.2.2），**不全局放开**。换服务器地址而 IP 不在表里时，App 会直接连不上，需要改这个文件并重新构建（该配置不支持网段）。
+
 ---
 
 ## 4. 已拍板的产品与 UI 约束
