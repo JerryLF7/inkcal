@@ -12,7 +12,7 @@ import {
 const props = defineProps({
   record: { type: Object, default: null },
 });
-const emit = defineEmits(['close', 'deleted']);
+const emit = defineEmits(['close']);
 
 // ── 打开/重置：prop 拷贝进内部 rec，prop 只作打开信号 ────────────
 // 单张移除后组会变（主行可能晋升），刷新由组件自己拉取并更新 rec。
@@ -163,7 +163,6 @@ function onDeleteMeal() {
   deletingMeal.value = true;
   apiDelete(rec.value.asset_id, 'meal')
     .then(() => {
-      emit('deleted');
       emit('close');
       touch();
       toast('已删除整餐，照片不会再被同步');
@@ -245,7 +244,6 @@ async function refreshGroup(promoted, successMsg) {
     const g = groups.find(x => x.asset_id === anchor) ||
               groups.find(x => (x.photos || []).some(p => knownIds.has(p.asset_id)));
     if (!g) {                       // 边界：组已不存在（防御）
-      emit('deleted');
       emit('close');
       touch();
       toast(successMsg ? '记录已不存在' : '已移除，该餐没有剩余照片');

@@ -124,6 +124,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 |---|---|
 | `web/server.py` | Flask API、可选认证、图片代理、手动上传、相册选择、聊天 API；根路由 `/` 提供 Vue UI，`/app/` 重定向到 `/` |
 | `web/ui/` | 新 Vue 3 + Vite 源码 |
+| `web/ui/src/components/ChatPane.vue` | Calo 聊天主体：会话/消息状态、发送、输入框；三块子视图已拆出（2026-09-30）：`ToolSteps.vue`（过程层折叠步骤链，props: `tools`）、`ChatArtifact.vue`（产物层单个工具结果卡片，含分流规则 `recordsArtifactVisible` 与删除确认卡请求；props: `tool`/`msg`，emit `open`）、`SessionDrawer.vue`（历史会话抽屉，props: `sessions`/`currentId`，emit `close`/`create`/`select`）。会话状态仍全部由 ChatPane 持有 |
 | `web/static/` | Vue 生产构建产物（`index.html` + `assets/`）；**需要与源码一同提交** |
 | `docs/prototypes/two-tab-proto.html` | 已交付、已确认的 UI 原型；不要再重画 |
 
