@@ -58,6 +58,10 @@ INKCAL_PORT=5800 venv/bin/python web/server.py
 # 构建 Vue 前端；产物会写入 web/static/
 npm --prefix web/ui run build
 
+# Android 客户端（android/ 是独立 Gradle 根，与 web/ 平级）
+cd android && ./gradlew :app:assembleRelease   # 产物 app/build/outputs/apk/release/app-release.apk
+cd android && ./gradlew :app:testDebugUnitTest
+
 # 现有回归与语法检查
 PYTHONPATH=. venv/bin/python scripts/test_contract_parse.py
 PYTHONPATH=. venv/bin/python scripts/test_merge_groups.py
@@ -127,6 +131,27 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `web/ui/src/components/ChatPane.vue` | Calo 聊天主体：会话/消息状态、发送、输入框；三块子视图已拆出（2026-09-30）：`ToolSteps.vue`（过程层折叠步骤链，props: `tools`）、`ChatArtifact.vue`（产物层单个工具结果卡片，含分流规则 `recordsArtifactVisible` 与删除确认卡请求；props: `tool`/`msg`，emit `open`）、`SessionDrawer.vue`（历史会话抽屉，props: `sessions`/`currentId`，emit `close`/`create`/`select`）。会话状态仍全部由 ChatPane 持有 |
 | `web/static/` | Vue 生产构建产物（`index.html` + `assets/`）；**需要与源码一同提交** |
 | `docs/prototypes/two-tab-proto.html` | 已交付、已确认的 UI 原型；不要再重画 |
+
+### Android 客户端（`android/`，2026-09-30 起）
+
+| 路径 | 职责 |
+|---|---|
+| `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
+| `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
+
+当前状态：**只有官方 `empty-activity` 模板骨架**（Hello 页），三 Tab、网络层、登录均未实现。包名 `com.jerrylf.inkcal`。
+
+本机（NUC）构建环境的三个坑，已修好，不要改回去：
+
+1. `services.gradle.org` 会 307 跳 GitHub，国内必超时。`android/gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 指腾讯镜像，文件 sha256 与官方一致（`distributionSha256Sum` 保留有效）。
+2. `maven.google.com` 直连超时；`google()`（Gradle 实际走 `dl.google.com/dl/android/maven2`）可用，`android/settings.gradle.kts` 另加阿里云镜像加速 Maven Central 与 Gradle 插件门户。
+3. 机器只有 JDK 21，而模板要求 JDK 17 工具链、foojay 又去 GitHub 拉包会失败。已删掉 foojay 插件，改用 `android/app/build.gradle.kts` 里的 `compilerOptions.jvmTarget = JVM_17`（JDK 21 编译，产出 Java 17 字节码）。同理，新增需要工具链的插件前先确认它不会触发自动下载。
+
+签名与发布：
+
+- keystore 在仓库外 `~/.android-keystore/inkcal-release.jks`（RSA 4096），口令在 `android/keystore.properties`（已 gitignore，绝不提交）。
+- 没有 `keystore.properties` 时 release 自动退回 debug 签名，保证 `assembleRelease` 永远出可安装包。
+- 发布走 GitHub Release 滚动 tag `android-latest`，每次 `gh release upload --clobber` 覆盖，下载地址固定不变（仓库 private，手机需登录态）。用户自己装 APK 测试，agent 无法点真机。
 
 ---
 

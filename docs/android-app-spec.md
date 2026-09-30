@@ -120,14 +120,14 @@ id、session_date、action（add/update/skip）、relation（new_meal/same_meal/
 ### 读
 | 方法 路径 | 参数 | 返回 |
 |---|---|---|
-| GET /api/dates | 无 | 有记录日期的字符串数组。网页版取最后一项当最早日期，据此推断为新→旧排序；实现时用真实响应确认 |
+| GET /api/dates | 无 | 有记录日期的字符串数组，**新→旧**（`src/db.py::get_available_dates` 为 `ORDER BY d DESC`）。最后一项即最早日期，用来判断时间轴是否到底 |
 | GET /api/records | date，或 start+end（不超过 366 天）；都缺省=今天 | 单日：date、records、summary、burn。区间：start、end、records、summary、burns（日期到 Burn 的字典） |
 | GET /api/today | 无 | 同单日 |
 | GET /api/week | start（任意日期，服务端取该周周一；缺省本周） | start、end、by_day（日期到 records/summary/burn）、summary、burns |
 | GET /api/data-version | 无 | version（字符串）、pending |
 | GET /api/decisions | date（必填） | date、decisions |
 | GET /api/burn | date（缺省今天） | date、burn |
-| GET /api/settings | 无 | chat_window、user_height、user_weight、user_birthdate、user_gender、bmr。体征未填时为空串，bmr 为 null 表示未填齐 |
+| GET /api/settings | 无 | chat_window、user_height、user_weight、user_birthdate、user_gender、bmr。身高/体重/出生日期未填时为空串，user_gender 默认返回 "male"（不会空）；bmr 为 null 表示未填齐。不要拿空串自己判断是否填齐——BMR 由服务端给 |
 | GET /api/album-photos | cursor（缺省今天）、days（1 到 30，默认 7） | dates（date + photos[asset_id、thumbnail_url、photo_time、source、classified_non_food]）、next_cursor |
 | GET /api/chat/sessions | 无 | sessions，新→旧 |
 | GET /api/chat/messages | session_id（缺省或无效=最新会话） | session_id、messages；一条会话都没有时 session_id 为 null、messages 为空 |
@@ -252,7 +252,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 
 (b) 本地上传（对应网页的拖拽/粘贴/选文件）：
 - 用系统 Photo Picker 选一张图，POST /api/manual-upload（multipart，字段名 image；**不传 date 参数**，网页版不传）。
-- 日期判定在服务端：服务端读 EXIF，有 EXIF 按拍摄时间入库；无 EXIF 用当天兜底，并在响应里标 `_date_source: "fallback"`。**客户端不需要读 EXIF，不需要预先弹日期选择**。
+- 日期判定在服务端：服务端读 EXIF，有 EXIF 按拍摄时间入库；无 EXIF 用当天兜底。`_date_source` 是三态：`"exif"`（读到 EXIF）、`"user"`（调用方传了 date 参数，App 不传，不会出现）、`"fallback"`（都没，用当天）。**客户端只需要判 `== "fallback"`，不需要读 EXIF，不需要预先弹日期选择**。
 - 响应：成功 ok、record、matched、date、_date_source；409 already processed（提示「此照片已在记录中」）；422 not food（提示「此图片不是真实食物，无法记录」）；400 unsupported mime 或 invalid image；500 缺 Gemini key（提示「上传失败: …」）。成功且 _date_source 不是 fallback → Snackbar「已添加记录」并关闭。
 - **无 EXIF 的日期修正（_date_source 为 fallback 时）**：上传已入库，此时显示日期修正区：文案「未能读取拍摄日期：{record.meal 或 上传记录}」+ 日期输入（原生用 DatePicker，默认值 = 响应的 date）+ 两个动作：
   - 保存：POST /api/move-record {asset_id, date}，成功 → Snackbar「已添加记录」并关闭；失败 → 「调整日期失败: {error}」。
@@ -396,4 +396,4 @@ domain/ 下全是纯 Kotlin 函数（无 Android 依赖），这是测试重点�
 6. 周、月视图。
 7. 选择照片（相册），再做本地上传。
 8. Calo（先基础收发，再步骤折叠与产物分流，最后删除确认卡）。
-9. 轮询刷新、收尾、分享入口与小组件。
+9. 轮询刷新、收尾。（§8.8 的分享入口与小组件不在首期，别在这里排进去）

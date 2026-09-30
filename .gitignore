@@ -6,3 +6,8 @@ data/
 data-backup-*/
 .venv/
 node_modules/
+
+# Android（gradle/build 产物由 android/.gitignore、android/app/.gitignore 覆盖）
+android/keystore.properties
+*.jks
+*.keystore
