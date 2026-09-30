@@ -401,3 +401,4 @@ venv/bin/python -m compileall -q main.py src web/server.py
 - [`docs/prototypes/two-tab-proto.html`](./docs/prototypes/two-tab-proto.html)：已确认 UI 原型。
 - [`docs/references/photoprism-api.md`](./docs/references/photoprism-api.md)：PhotoPrism API 备忘（改 `photoprism_client.py` 时查）。
 - [`docs/references/synology-photos-api.md`](./docs/references/synology-photos-api.md)：Synology Photos API 备忘（尚未接入，仅备查）。
+- [`docs/android-app-spec.md`](./docs/android-app-spec.md)：原生 Android 客户端实现文档（2026-09-30 交付，待实现；实现者从这里开始，API 契约与功能规格全在里面）。

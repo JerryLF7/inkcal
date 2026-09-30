@@ -1,152 +1,153 @@
 # inkcal
 
-自动食物热量追踪流水线。
+拍一张饮食照片,热量自动记好。
 
-**拍照 → Immich/PhotoPrism → SigLIP2 本地过滤 → Gemini 分析热量 → SQLite**
+手机把照片备份到 Immich 或 PhotoPrism,inkcal 每 10 分钟去拉一次新照片,判断是不是食物,估算热量和蛋白质、碳水、脂肪,写进本地 SQLite。打开网页就能看,估错了可以改。
 
-## 架构
+我做它是因为手动记饮食坚持不下去,而把食物照片直接传给云端又不放心。所以有一道本地过滤:不是食物的照片不会离开你的内网。
+
+## 处理流程
 
 ```
-        ┌──────────┐     ┌──────────────┐     ┌─────────┐
- 拍照 → │  Immich  │ ──→ │   SigLIP2    │ ──→ │ Gemini  │
-        │PhotoPrism│     │ (本地过滤食物) │     │ (热量分析)│
-        └──────────┘     └──────────────┘     └─────────┘
-                               │                    │
-                          不是食物→跳过           ↓
-                                           data/inkcal.db (SQLite)
+Immich / PhotoPrism
+  → SigLIP2      本机 CPU 判断是不是食物,不是就丢弃
+  → Luna         可选。判断同餐、新餐还是跳过,只负责编排
+  → Gemini       估算热量和宏量营养素
+  → SQLite       data/inkcal.db
+  → Flask API + Vue 页面
 ```
 
-多源支持：通过 `SOURCE=immich,photoprism` 同时从多个照片库拉取。
+Luna 和 Gemini 各管一段:哪几张照片算一餐由 Luna 判断,热量数字只由 Gemini 给,两边不越界。Luna 默认关着(`AGENT_ENABLED=0`),这时食物照片直接送 Gemini,一张一条记录。
 
-三步走：
-1. **Immich / PhotoPrism** — 拉指定日期的照片列表
-2. **SigLIP2**（本地 CPU 推理 ~0.3s/张） — 判断图片里有没有食物，不是食物的直接跳过，**不出内网**
-3. **Gemini**（OpenAI 兼容格式） — 分析食物热量、蛋白质、碳水、脂肪，记入 SQLite
+## 快速开始
 
-## 前置
-
-| 组件 | 要求 |
-|------|------|
-| [Immich](https://immich.app) 或 [PhotoPrism](https://www.photoprism.app/) | 至少一个运行中的实例 |
-| Gemini API key | 或任何 OpenAI 兼容的视觉模型 endpoint |
-| Python 3.11+ | |
-
-## 设置
+需要 Python 3.11 以上,以及一个 Immich 或 PhotoPrism。
 
 ```bash
-cd ~/Coding/inkcal
-cp .env.example .env
-# 编辑 .env 填入照片库地址、API key 和 Gemini key
+git clone git@github.com:JerryLF7/inkcal.git
+cd inkcal
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
 
-pip install -r requirements.txt
+cp .env.example .env    # 填上照片源和 Gemini 的地址、密钥
+./setup.sh              # 生成 ~/.local/bin/inkcal,并加一条每 10 分钟的 cron
 ```
 
-## 自动化
+所有 Python 命令都用 `venv/bin/python` 跑。系统自带的 Python 缺 `pillow-heif`、`imagehash` 这些依赖,上传和 HEIC 处理会悄悄失败。
+
+第一次用 SigLIP2 会从 HuggingFace 下载模型,之后走本地缓存。
+
+启动网页:
 
 ```bash
-./setup.sh   # 创建 ~/.local/bin/inkcal + 配置 cron（每 10 分钟自动运行）
+INKCAL_PORT=5800 venv/bin/python web/server.py
 ```
 
-流水线幂等，重复运行不会产生重复记录。手动管理 cron：`crontab -e`。
+默认只监听本机 `127.0.0.1:5800`。长期运行请交给 systemd 用户单元(`systemctl --user restart inkcal-web.service`),不要手动起进程。手动起的进程一旦占住端口,systemd 那份会不停重启,孤儿进程还可能一直握着数据库写锁,让 cron 静默失败。
 
-## CLI 用法
+## 配置
+
+全部写在 `.env` 里,完整清单以 `.env.example` 为准。最常改的几项:
+
+| 变量 | 作用 |
+|---|---|
+| `SOURCE` | 照片源,`immich`、`photoprism` 或 `immich,photoprism` |
+| `IMMICH_URL` `IMMICH_API_KEY` | Immich 地址和密钥 |
+| `PHOTOPRISM_URL` `PHOTOPRISM_API_KEY` | 用 PhotoPrism 时才需要 |
+| `GEMINI_API_KEY` `GEMINI_BASE_URL` `GEMINI_MODEL` | 热量估算,走 OpenAI 兼容格式 |
+| `LUNA_*` `AGENT_ENABLED` | Luna 的接入和开关,默认关闭 |
+| `INKCAL_USER` `INKCAL_PASS` | 网页登录。要么都填,要么都空 |
+| `INKCAL_SECRET` | 会话签名密钥,必须固定,否则每次重启都要重新登录 |
+| `INKCAL_HOST` `INKCAL_PORT` | 监听地址和端口 |
+| `INKCAL_HTTPS` | 放在 HTTPS 反向代理后面时设为 1 |
+
+Flask 自带的服务器不适合直接暴露到公网。要从手机或外网访问,请挂 Caddy 或 nginx 之类的反向代理,并打开登录。
+
+## 命令行
 
 ```bash
-# 分析今天的照片
-inkcal run
+inkcal run                          # 跑一遍流水线(cron 就是调它)
+inkcal view --date 2026-09-30       # 看某天;还有 --week、--month、--from/--to
+inkcal stats --last 7d --group-by day
+inkcal search 咖喱                  # 全文搜索餐名和明细
 
-# 分析指定日期
-inkcal run --date 2026-05-13
+inkcal add --meal "拿铁" --calories 190 --protein 9 --carbs 15 --fat 10
+inkcal edit --last --new-meal "美式" --calories 5
+inkcal reanalyze --last --notes "米饭只吃了一半"
+inkcal delete --meal 汉堡 --date 2026-09-30
+inkcal merge <主记录> <从记录>       # 把两张照片并成同一餐
 
-# 手动记录
-inkcal add --meal "红烧肉" --calories 600 --protein 25 --carbs 30 --fat 20
-
-# 查看记录
-inkcal view                          # 今天
-inkcal view --date 2026-05-13        # 指定日期
-inkcal view --week                   # 本周
-inkcal view --month 2026-05          # 整月
-inkcal view --from 2026-07-01 --to 2026-07-14  # 日期范围
-
-# 聚合统计
-inkcal stats --last 7d               # 最近一周
-inkcal stats --from 2026-07-01 --to 2026-07-14 --group-by day
-
-# 搜索记录（全文搜索）
-inkcal search 咖喱
-
-# 直接修改记录（旧值自动留痕）
-inkcal edit --ref 42 --calories 300 --note "两人份减半"
-inkcal edit --meal 红烧肉 --date 2026-07-21 --protein 30
-
-# 删除记录（自动加入忽略列表）
-inkcal delete --last
-
-# 标注正误（用于分类器训练）
-inkcal label --list                  # 列出未标注记录
-inkcal label --ref 42 --label correct
-
-# 替换图片（pHash 匹配 Immich 原图）
-inkcal replace --ref 42 --image ~/path/to/image.jpg
-
-# 照片去向追溯
-inkcal explain --id <asset前缀>       # 单张照片的决策路径
-inkcal explain --date 2026-07-21      # 当日全量对账
-
-# 强制分析（分类器漏判的照片）
-inkcal analyze --id <asset-id> --source immich
-
-# 补充细节重新估算
-inkcal reanalyze --ref 42 --notes "少算了一份米饭"
-
-# 拉取流水线事件
-inkcal events
+inkcal analyze --id <asset_id>      # 强制分析被过滤器漏掉的照片
+inkcal explain --id <asset_id>      # 这张照片在流水线里去哪了
+inkcal decisions --date 2026-09-30  # Luna 当天的决策记录
+inkcal burn --date 2026-09-30 --kcal 480 --steps 8200
 ```
 
-所有读命令支持 `--json` 输出结构化数据。写命令支持四种定位方式：`--ref <id>`（记录 ID）、`--id <前缀>`（asset ID）、`--last`（最近一条）、`--meal <关键词> --date <日期>`。
+读命令都支持 `--json`。改、删、重估这类命令用四种方式指定记录:`--ref <记录 ID>`、`--id <asset_id 前缀>`、`--last`、`--meal <关键词> --date <日期>`。关键词匹配到多条时会列出候选,让你换成精确的 `--ref` 再执行。
 
-## Web 查看器
+## 网页
+
+底部有三个 Tab(桌面端 Calo 固定在右侧)。
+
+记录页按日、周、月看餐食。每餐一张卡片,点开能看大图、逐张照片的明细和 AI 的决策过程,也可以在这里重新分析或删除。
+
+Calo 是对话助手。你可以问"昨天午餐吃了什么",或者说"记一下下午吃了包薯片",它会去查库、估算、写入。它不能自己删记录,只能弹出确认卡,由你点了才删。
+
+设置页填身高、体重、出生日期和性别,用来算基础代谢(BMR),也能调 Calo 记住多少轮对话。
+
+日视图和周视图会显示热量缺口:总消耗 = 基础代谢 + 当天活动消耗,缺口 = 总消耗 − 摄入。没填体征时按固定 2500 kcal 兜底。
+
+「选择照片」按钮(桌面在左侧栏,手机在顶栏)用来补漏。SigLIP2 对透明杯饮料、咖啡、奶茶偶尔判不准,你可以从相册里手动挑,或者本地上传,这些照片会跳过食物过滤。
+
+## 几个容易踩到的点
+
+日期按照片拍摄地的当地日历日算,不按 UTC,所以凌晨拍的照片不会被算到前一天。
+
+每张照片靠 `asset_id` 去重。删掉一条记录后,那张照片会进忽略列表,cron 不会再把它捡回来。
+
+同一餐的多张照片挂在一条主记录下(`records.merged_into`),页面上只显示一张卡片,右上角有 `×N`。
+
+改数据请走命令行或网页,不要直接开 SQLite 改。服务在跑的时候也别删 `data/` 下的 `.db-wal` 和 `.db-shm`。
+
+更细的规则和踩过的坑在 `AGENTS.md`。
+
+## 开发
 
 ```bash
-inkcal run --command serve           # 或直接用 python web/server.py
-# 默认 http://127.0.0.1:5800（仅本机）
+npm --prefix web/ui install
+npm --prefix web/ui run build       # 产物写到 web/static/,需要一并提交
 ```
 
-如需在手机/其他设备访问，建议在 `.env` 配 `INKCAL_HOST=0.0.0.0` 或前面挂 caddy/nginx 反向代理（生产推荐配 HTTPS + `INKCAL_HTTPS=1`）。**Flask 自带 server 不适合直接暴露公网**。
+前端是 Vue 3 + Vite,源码在 `web/ui/src/`。`web/static/` 是构建产物,生产环境直接用它,所以改了前端要重新构建并提交。
 
-反向代理/FRP 场景下，登录限速会自动读取 `X-Forwarded-For` / `X-Real-IP`，按真实访客 IP 隔离（仅在本地回环连接时信任该头，防止伪造）。
+回归测试(都用隔离的临时数据库,不碰真实数据):
 
-功能：
-- **日历日期选择器**：有记录的日期显示绿点，点击跳转
-- **响应式布局**：移动端单列，桌面端侧边栏日历 + 双列卡片
-- **卡片缩略图** + 点击灯箱查看大图
-- **选择照片**：从 Immich/PhotoPrism 相册挑选被 SigLIP2 漏检的照片，跳过食物检测直接送 Gemini 分析
-- **手动上传**：拖拽 / 粘贴 / 选文件 → Gemini 分析 → Immich pHash 匹配 → 自动刷新
-- **重新分析**：在 lightbox 中补充细节（如份量、遗漏食材），Gemini 重新估算
-- **人工标注**：每张图片可标记「正确/有误」，数据写入 SQLite
-- **替换图片**：上传新图自动用 pHash 匹配 Immich 中的原图，替换误识别记录
-- **删除记录**：删除后自动加入忽略列表，cron 不再重复处理
-- **可选认证**：`.env` 配 `INKCAL_USER` + `INKCAL_PASS`（必须同时设；登录有 IP 限速）。固定 `INKCAL_SECRET` 让 session 跨重启保留。
+```bash
+PYTHONPATH=. venv/bin/python scripts/test_contract_parse.py
+PYTHONPATH=. venv/bin/python scripts/test_merge_groups.py
+PYTHONPATH=. venv/bin/python scripts/test_lightbox_smoke.py
+PYTHONPATH=. venv/bin/python scripts/test_legacy_path.py
+PYTHONPATH=. venv/bin/python scripts/test_chat_smoke.py
+PYTHONPATH=. venv/bin/python scripts/test_group_reanalyze.py
+PYTHONPATH=. venv/bin/python scripts/test_daily_burn.py
+```
 
-## 数据存储
+`test_cross_batch_update.py` 会真的调用 Luna 和 Gemini,需要网关可用,跑一次大约一分半钟,不适合放进日常回归。
 
-SQLite（`data/inkcal.db`），六张表：
+代码布局:
 
-- `records` — 主记录（餐食、热量、宏量、时间、标注、替换图片路径）
-- `reanalysis_history` — 重新分析历史，外键级联删除
-- `ignored_assets` — 已删除/忽略的资产 ID，cron 跳过
-- `classified_non_food` — 分类器/Gemini 判定非食物的资产 ID，Web 相册可见
-- `pipeline_events` — 流水线事件（agent 主动通知用）
-- `records_fts` — 全文搜索索引（FTS5）
+```
+main.py            命令行入口
+src/               业务逻辑:数据库、照片源、食物检测、热量估算、Luna 批处理、聊天
+src/prompts/       提示词模板(.md)
+web/server.py      Flask API
+web/ui/            Vue 前端源码
+web/static/        前端构建产物
+scripts/           回归测试和热量消耗同步脚本
+docs/              界面原型和照片库 API 备忘
+```
 
-WAL 模式支持并发读写，Flask 多线程共享连接。
+## 相关文档
 
-## 隐私
-
-SigLIP2 在本地 CPU 推理，食物过滤阶段**图片不离开机器**。只有确认是食物的图片才发往 Gemini 云端分析。照片库内网可达，不暴露公网。
-
-## 设计原则
-
-- **隐私优先**：本地分类器过滤后才走云 API
-- **幂等**：已处理的 asset_id 不会重复分析
-- **Gemini prompt 防误识别**：自动拦截截图、海报、菜单、屏幕等假食物图片
+- `AGENTS.md`:项目的交接说明,包含已拍板的规则、事故复盘和下一步。改代码前先读它。
+- `docs/references/`:PhotoPrism 和 Synology Photos 的 API 备忘。
