@@ -101,9 +101,6 @@ inkcal reanalyze --ref 42 --notes "少算了一份米饭"
 
 # 拉取流水线事件
 inkcal events
-
-# JSON → SQLite 迁移（首次使用）
-inkcal migrate
 ```
 
 所有读命令支持 `--json` 输出结构化数据。写命令支持四种定位方式：`--ref <id>`（记录 ID）、`--id <前缀>`（asset ID）、`--last`（最近一条）、`--meal <关键词> --date <日期>`。

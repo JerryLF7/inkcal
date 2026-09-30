@@ -120,23 +120,10 @@ def load_ignored() -> set[str]:
 def append_log(date_str: str, asset_id: str, photo_time: str,
                thumbnail_url: str, result: dict, source_type: str = "immich",
                merged_into: str | None = None):
-    record = {
-        "asset_id": asset_id,
-        "source_type": source_type,
-        "source_id": asset_id,
-        "photo_time": photo_time,
-        "thumbnail_url": thumbnail_url,
-        "meal": result.get("meal", "unknown"),
-        "meal_detail": result.get("meal_detail", ""),
-        "calories": result.get("calories", 0),
-        "protein_g": result.get("protein_g", 0),
-        "carbs_g": result.get("carbs_g", 0),
-        "fat_g": result.get("fat_g", 0),
-        "confidence": result.get("confidence", "low"),
-        "analyzed_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
-        "merged_into": merged_into,
-    }
-    return db.insert_record(record)
+    from src.pipeline_ops import _build_record
+    return db.insert_record(_build_record(asset_id, source_type, photo_time,
+                                          thumbnail_url, result,
+                                          merged_into=merged_into))
 
 
 def load_records(date_str: str) -> list[dict]:
@@ -290,33 +277,30 @@ def _run_source(
 
 
 def _legacy_analyze_single(item: dict, analyzer, run_id: str = ""):
-    """Legacy path: send one photo straight to Gemini and save the record."""
+    """Fallback path: one photo straight to Gemini (no Luna), via pipeline_ops."""
+    from src.pipeline_ops import analyze_asset
     aid = item["aid"]
-    result = analyzer.analyze(item["original"])
-
-    # Gemini may reject non-real-food images (screenshots, menus, etc.).
-    # Treat this as an automatic (not user-initiated) non-food decision so
-    # the photo remains visible in the album picker for manual correction.
-    if result.get("meal") in ("not real food", "unknown"):
+    rec, err = analyze_asset(aid, item["source"], {}, item["photo_time"],
+                             item["thumbnail_url"], item["original"],
+                             analyzer=analyzer)
+    if err in ("not_food", "analysis_failed"):
+        # Automatic (not user-initiated) non-food decision: the photo stays
+        # visible in the album picker for manual correction.
         logger.info("  ❌ Gemini 判定非真实食物，加入自动非食物缓存")
         db.add_classified_non_food(aid, decided_by="gemini")
         db.add_event(run_id, "gemini_rejected", aid, None)
         return
-
-    rec = append_log(_date_of(item["photo_time"]), aid, item["photo_time"],
-                     item["thumbnail_url"], result,
-                     source_type=item["source"])
-    logger.info("  ✅ %s ~%skcal", result.get("meal", "?"),
-                result.get("calories", 0))
-
+    if err:  # already_processed / download_failed: nothing to record
+        logger.warning("  ⚠️ legacy 路径跳过 %s: %s", aid[:8], err)
+        return
+    logger.info("  ✅ %s ~%skcal", rec.get("meal", "?"), rec.get("calories", 0))
     db.add_event(run_id, "meal_recorded", aid, {
         "record_id": rec.get("id"),
         "meal": rec.get("meal"),
         "calories": rec.get("calories"),
     })
     if rec.get("confidence") == "low":
-        db.add_event(run_id, "low_confidence", aid,
-                     {"record_id": rec.get("id")})
+        db.add_event(run_id, "low_confidence", aid, {"record_id": rec.get("id")})
 
 
 def _date_of(photo_time: str) -> str:
@@ -1576,38 +1560,6 @@ def cmd_replace(args):
         print(f"⚠️ 未匹配到 Immich 照片，已保存本地: {filepath}")
 
 
-# ── subcommand: migrate ────────────────────────────────────────────────
-
-def cmd_migrate(args):
-    db_path = DATA_DIR / "inkcal.db"
-    if db_path.exists() and not args.force:
-        print(f"❌ 数据库已存在: {db_path}")
-        print("   使用 --force 强制重新迁移（会清空现有数据）")
-        sys.exit(1)
-
-    db.init_db(db_path)
-    if args.force:
-        conn = db._get_conn()
-        conn.execute("DELETE FROM reanalysis_history")
-        conn.execute("DELETE FROM records")
-        conn.execute("DELETE FROM ignored_assets")
-        conn.commit()
-
-    print("🔄 开始迁移 JSON 数据到 SQLite...")
-    records, history, ignored = db.migrate_from_json(DATA_DIR)
-    print(f"✅ 迁移完成: {records} 条记录, {history} 条历史, {ignored} 条忽略")
-
-    # Backup JSON files
-    backup_dir = DATA_DIR / "migrated-json-backup"
-    backup_dir.mkdir(exist_ok=True)
-    import shutil
-    for f in DATA_DIR.glob("*.json"):
-        if f.stem.count("-") == 2 or f.name == "ignored.json":
-            dest = backup_dir / f.name
-            shutil.move(str(f), str(dest))
-    print(f"📦 原 JSON 文件已移至: {backup_dir}")
-
-
 # ── subcommand: serve ─────────────────────────────────────────────────
 
 def cmd_serve(args):
@@ -1727,10 +1679,6 @@ def main():
     p_stats.add_argument("--group-by", choices=["day"], help="Break down by day")
     add_json_flag(p_stats)
 
-    p_migrate = sub.add_parser("migrate", help="Migrate JSON files to SQLite")
-    p_migrate.add_argument("--force", action="store_true",
-                           help="Force re-migration (clears existing DB)")
-
     p_explain = sub.add_parser("explain", help="Explain where a photo ended up in the pipeline")
     p_explain.add_argument("--id", help="Asset ID (prefix match)")
     p_explain.add_argument("--date", help="List pipeline status of all photos on a date")
@@ -1783,8 +1731,6 @@ def main():
         cmd_label(args)
     elif args.command == "replace":
         cmd_replace(args)
-    elif args.command == "migrate":
-        cmd_migrate(args)
     elif args.command == "explain":
         cmd_explain(args)
     elif args.command == "delete":

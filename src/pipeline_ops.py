@@ -27,9 +27,13 @@ def analyze_asset(
     photo_time: str = "",
     thumbnail_url: str = "",
     image_bytes: bytes | None = None,
+    analyzer=None,
 ) -> tuple[dict | None, str | None]:
     """Download original from photo source, run Gemini (skip food detection),
     save record, and remove from classified_non_food.
+
+    analyzer: optional shared CalorieAnalyzer (cron reuses one client); when
+    None a short-lived one is built from config and closed here.
 
     image_bytes: optional pre-downloaded original (used by the agent-path
     fallback in web/server.py to avoid a second download).
@@ -55,13 +59,18 @@ def analyze_asset(
     if not photo_time:
         photo_time = _resolve_photo_time(asset_id, source, config)
 
-    analyzer = CalorieAnalyzer(
-        config.get("gemini_key", ""),
-        base_url=config.get("gemini_base_url"),
-        model=config.get("gemini_model", "gemini-3-flash-preview"),
-    )
-    result = analyzer.analyze(image_bytes)
-    analyzer.close()
+    own = analyzer is None
+    if own:
+        analyzer = CalorieAnalyzer(
+            config.get("gemini_key", ""),
+            base_url=config.get("gemini_base_url"),
+            model=config.get("gemini_model", "gemini-3-flash-preview"),
+        )
+    try:
+        result = analyzer.analyze(image_bytes)
+    finally:
+        if own:
+            analyzer.close()
 
     if result.get("meal") == "not real food":
         logger.info("Gemini rejected %s as non-food", asset_id[:8])
@@ -80,22 +89,8 @@ def analyze_asset(
             photoprism_url = config.get("photoprism_url", "").rstrip("/")
             thumbnail_url = f"{photoprism_url}/api/v1/t/{asset_id}/tile_224"
 
-    record = {
-        "asset_id": asset_id,
-        "source_type": source,
-        "source_id": asset_id,
-        "photo_time": photo_time or datetime.now(HKT).isoformat(),
-        "thumbnail_url": thumbnail_url,
-        "meal": result.get("meal", "unknown"),
-        "meal_detail": result.get("meal_detail", ""),
-        "calories": result.get("calories", 0),
-        "protein_g": result.get("protein_g", 0),
-        "carbs_g": result.get("carbs_g", 0),
-        "fat_g": result.get("fat_g", 0),
-        "confidence": result.get("confidence", "low"),
-        "analyzed_at": datetime.now(HKT).isoformat(),
-    }
-    db.insert_record(record)
+    record = _build_record(asset_id, source, photo_time, thumbnail_url, result)
+    record = db.insert_record(record)  # read-back row carries the id
     db.remove_classified_non_food(asset_id)
 
     return record, None

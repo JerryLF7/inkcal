@@ -62,6 +62,7 @@ npm --prefix web/ui run build
 PYTHONPATH=. venv/bin/python scripts/test_contract_parse.py
 PYTHONPATH=. venv/bin/python scripts/test_merge_groups.py
 PYTHONPATH=. venv/bin/python scripts/test_lightbox_smoke.py
+PYTHONPATH=. venv/bin/python scripts/test_legacy_path.py
 PYTHONPATH=. venv/bin/python scripts/test_chat_smoke.py
 venv/bin/python -m compileall -q main.py src web/server.py
 git diff --check
@@ -83,12 +84,12 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 | 路径 | 职责 |
 |---|---|
-| `main.py` | CLI 入口：run/view/add/edit/search/stats/delete/label/replace/analyze/reanalyze/explain/events/migrate/merge 等；`_run_agent_batch` 负责 cron 侧 Luna 决策落地（含同餐分组与 update 幂等） |
+| `main.py` | CLI 入口：run/view/add/edit/search/stats/delete/label/replace/analyze/reanalyze/explain/events/merge 等；`_run_agent_batch` 负责 cron 侧 Luna 决策落地（含同餐分组与 update 幂等） |
 | `src/db.py` | SQLite schema 与全部数据访问；WAL、FTS、records、审计、chat 表 |
 | `src/immich_client.py` / `src/photoprism_client.py` | 照片源客户端与时间解析 |
 | `src/food_detector.py` | SigLIP2 本地过滤（仅基础模型）；判定线 `FOOD_THRESHOLD`（唯一来源，当前 0.35）与擦边区 `GREY_ZONE` 在此定义 |
 | `src/calorie_analyzer.py` | Gemini/OpenAI-compatible 视觉估算 |
-| `src/pipeline_ops.py` | CLI 和 Web 共用的强制分析/重新分析业务路径 |
+| `src/pipeline_ops.py` | CLI 和 Web 共用的强制分析/重新分析业务路径；`analyze_asset` 也是 cron 降级路径（`main._legacy_analyze_single`）的唯一实现，记录行组装统一走 `_build_record`（`main.append_log` 亦委托它），`analyzer=` 参数可复用 cron 的共享 Gemini 客户端 |
 | `src/resolver.py` | CLI 记录指代解析：`--ref` / `--id` / `--last` / `--meal + --date` |
 
 ### Luna 批处理层
@@ -281,6 +282,24 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - `pipeline_events`：运行事件。
 - `chat_sessions`、`chat_messages`、`app_settings`：聊天层。
 
+### 选型与设计沿革
+
+- **分类器**：最初用 moondream（~2s/张、误判多），换成 `prithivMLmods/Food-or-Not-SigLIP2`（CPU ~0.3s/张）。教训：特定分类任务用专门训练的模型，不用通用模型。
+- **LLM 兜底拒绝列表**：SigLIP2 之后仍会漏进截图、菜单、海报、包装。`prompts/analyze.md` 直接列出要拒绝的场景（比抽象描述有效，也比调阈值有效），Gemini 返回 `not real food` 即跳过。
+- **替换图片的 pHash 匹配**（`ImmichClient`）：上传图一定来自 Immich，不落本地。取上传图 EXIF 时间 ±5 分钟窗口搜 Immich，`imagehash.phash` 汉明距离 ≤2 提前确认，阈值内取最优；PhotoPrism 无此 API，`web/server.py` 对其仍是 TODO。
+- **多源相册**：`SOURCE=immich,photoprism`，`_resolve_sources()` 由 `main.py` 与 `server.py` 共用；每个 source 独立跑完整管线、错误互不影响；`asset_id` 同时容纳 Immich UUID 与 PhotoPrism UID，格式不同天然不冲突。`PhotoPrismClient` 的 `get_date_assets` / `download_thumbnail` / `download_original` / `close` 签名与 `ImmichClient` 对齐，两者可互换。
+  PhotoPrism 与 Immich 差异：认证 `Authorization: Bearer` vs `x-api-key`；缩略图 key 为文件 SHA1 `hash`（token 取自搜索响应 `X-Preview-Token`）vs `asset_id`；`TakenAtLocal` 尾部 `Z` 只是格式占位，真实时区取 `TimeZone` 字段（IANA 名）。
+- **选择照片弹窗的取舍**：用户主动选图 = 已确认是食物，故跳过 SigLIP2；`POST /api/analyze-album-photo` 在调 Gemini **之前**再查一次 `get_record_by_asset_id`，已存在返回 409（弹窗打开期间 cron 可能已处理同一张）。分页用 `cursor=YYYY-MM-DD&days=7`，每天对每个源单独查询，局域网延迟可接受。
+- **Gemini 调用韧性**：`CalorieAnalyzer` `MAX_RETRIES=5`、`RETRY_BACKOFF=2`（2/4/8/16/32s 指数退避），`response_format=json_object` 强制结构化输出，解析失败返回零值而不阻塞管线（零值会被契约层映射为 skip）。
+- **Flask session 丢失（已踩过）**：`app.secret_key` 若每次重启随机生成，旧 cookie 全部失效、反复要求重新登录。必须固定 `INKCAL_SECRET`。
+- **FRP / 慢网**：卡片缩略图用 Immich `size=thumbnail`（~7KB）而非 `preview`（~157KB），灯箱才用 preview；Vue 端保留请求序号防旧响应覆盖、图片失败重试一次的防御。
+- **设计原则**：隐私优先（分类器本地、非食物照片不出内网）；幂等（`asset_id`）；渐进增强（CLI 为底、Web 为锦上添花）；存储走标准库 `sqlite3`、零额外依赖。
+
+### 部署与环境变量
+
+- 安装：`setup.sh` 创建 `~/.local/bin/inkcal` wrapper（调 venv Python）并幂等添加 cron `*/10 * * * * inkcal run`。burn 同步 cron 见 Phase 6。
+- 环境变量以 `.env.example` 为唯一清单（含 `SOURCE`、`PHOTOPRISM_*`、`LUNA_*`、`AGENT_ENABLED`、`AGENT_BATCH_SIZE`、`INKCAL_DEBUG`、`INKCAL_DB`）；新增变量必须同步写入该文件。`INKCAL_DB` 供测试隔离数据库路径。
+
 ### 鉴权与图片
 
 - Web 认证为可选；`INKCAL_USER` 和 `INKCAL_PASS` 必须同时有或同时为空。
@@ -313,7 +332,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 数据库是 `data/inkcal.db`，包含 records、重分析历史、忽略资产、非食物、Agent 审计、事件和聊天表；所有 schema 以 `src/db.py` 为准。
 - 不直接用 SQLite shell 修改业务数据。优先走 CLI、`src/db.py` 既有业务函数或 Flask API；变更后用 `inkcal view`、`inkcal label --status` 或对应 API 验证。
 - 环境变量放根目录 `.env`；关键值为 `IMMICH_URL`、`IMMICH_API_KEY`、`GEMINI_API_KEY`、`INKCAL_SECRET`、`INKCAL_USER` 和 `INKCAL_PASS`。后两者必须同时设置或同时为空。
-- 项目曾从 `intake` 改名为 `inkcal`。发现旧脚本或配置引用时，统一使用 `INKCAL_*`、`inkcal` 与 `data/inkcal.db`。
+- 项目曾从 `intake`（更早为 foodlens）改名为 `inkcal`。发现旧脚本或配置引用时，统一使用 `INKCAL_*`、`inkcal` 与 `data/inkcal.db`。
 
 ### Flask 服务与安全约定
 
@@ -343,7 +362,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
 6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
 6b. **变更 FTS 虚拟表结构（重建 `records_fts`、改触发器）必须先停 Flask server 再迁移**。2026-09-13 在 server 运行中重建 FTS5 虚拟表，导致跨表写入触发器损坏（UPDATE 触发 FTS 写入报 `database disk image is malformed`，表本身 quick_check 却 OK，热修无效）。最终走「干净导出业务表 → 全新 init_db → 导入 → 重建 FTS」无损恢复。加列（`ALTER TABLE ADD COLUMN`）类迁移可在线做，重建虚拟表/触发器不行。
-7. `inkcal migrate` 检测到已有数据库会拒绝；`--force` 会清空再迁移，只能在确有意图时使用。
+7. 旧 JSON→SQLite 迁移已完成，`inkcal migrate`、`db.migrate_from_json` 与 `scripts/migrate_to_sqlite.py` 于 2026-09-30 删除；项目也不再做 skill 适配（`SKILL.md`、`usage.md` 已删），文档入口仅 `AGENTS.md` 与 `README.md`；`DEVELOPMENT.md` 已于同日删除，仍有效的选型与踩坑并入 §7「选型与设计沿革」。
 8. **SigLIP2 微调路线已放弃**（2026-09-27）：检测器只加载 HuggingFace 基础模型，`data/finetuned-model/` 与 `~/Coding/food-classifier/` 的加载链路已从代码和文档中删除，不要再接回来；漏检靠调 `FOOD_THRESHOLD` 与“选择照片”兜底。
 9. **Luna 网关静默忽略 `previous_response_id`**（详见 §5）。症状是聊天"失忆"或批处理悄悄降级回 Gemini，**不报错**。换 endpoint 后必须实测：带 `previous_response_id` 问上一轮内容 + 确认图片进缓存，再看 `agent_decisions` 是否有新行。模型 id 也用连字符形式（`gpt-5-6-luna`），点号形式会被上游拒为 `unknown provider for model`。
 10. **cron 的 stdout/stderr 不落盘**（无 `MAILTO`、无 mail spool），run 崩溃或写库失败只会表现为"照片不进来"，没有任何报错。排查入口：`pipeline_events` 里 `run_summary` 是否按 10 分钟断档、`data/inkcal-run.lock` 的 PID 是否已死、`journalctl --user -u inkcal-web.service`。无副作用复现：`inkcal run --date <一个没有照片的日期>`（会真的写 1 条 run_summary 事件与若干 `classified_non_food`）。
@@ -378,6 +397,5 @@ venv/bin/python -m compileall -q main.py src web/server.py
 ## 10. 深入资料索引
 
 - [`docs/prototypes/two-tab-proto.html`](./docs/prototypes/two-tab-proto.html)：已确认 UI 原型。
-- [`DEVELOPMENT.md`](./DEVELOPMENT.md)：项目早期技术沿革与事故复盘，需要背景时再查。
-- [`references/pipeline-web.md`](./references/pipeline-web.md)：照片管线、部署与环境变量。
-- [`references/cli-workflows.md`](./references/cli-workflows.md)：CLI/NL 记录工作流。
+- [`docs/references/photoprism-api.md`](./docs/references/photoprism-api.md)：PhotoPrism API 备忘（改 `photoprism_client.py` 时查）。
+- [`docs/references/synology-photos-api.md`](./docs/references/synology-photos-api.md)：Synology Photos API 备忘（尚未接入，仅备查）。
