@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.jerrylf.inkcal.theme.InkcalTheme
+import com.jerrylf.inkcal.ui.app.AppRoot
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -16,7 +17,11 @@ class MainActivity : ComponentActivity() {
 
     enableEdgeToEdge()
     setContent {
-      InkcalTheme { Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { MainNavigation() } }
+      InkcalTheme {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+          AppRoot()
+        }
+      }
     }
   }
 }

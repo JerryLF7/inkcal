@@ -139,7 +139,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态：**只有官方 `empty-activity` 模板骨架**（Hello 页），三 Tab、网络层、登录均未实现。包名 `com.jerrylf.inkcal`。
+当前状态（里程碑 A 已完成，2026-10-01）：三 Tab 骨架（记录 / Calo / 设置）、服务器地址配置向导、登录/登出（Flask 会话 cookie 持久化）、OkHttp + Retrofit + kotlinx.serialization 网络层、DataStore 存储。**记录页与 Calo 页仍是占位文案**，业务功能按 `docs/android-app-spec.md` §15 的顺序往下做。包名 `com.jerrylf.inkcal`。
 
 本机（NUC）构建环境的三个坑，已修好，不要改回去：
 
@@ -151,7 +151,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 - keystore 在仓库外 `~/.android-keystore/inkcal-release.jks`（RSA 4096），口令在 `android/keystore.properties`（已 gitignore，绝不提交）。
 - 没有 `keystore.properties` 时 release 自动退回 debug 签名，保证 `assembleRelease` 永远出可安装包。
-- 发布走 GitHub Release 滚动 tag `android-latest`，每次 `gh release upload --clobber` 覆盖，下载地址固定不变（仓库 private，手机需登录态）。用户自己装 APK 测试，agent 无法点真机。
+- 发布走 GitHub Release 滚动 tag `android-latest`，用 `android/release.sh`（内部 `gh release upload --clobber`），下载地址固定：`https://github.com/JerryLF7/inkcal/releases/download/android-latest/inkcal.apk`。仓库是 private，手机需登录态；用 `curl` 直接拉会 404，验证请用 `gh release download android-latest -p inkcal.apk`。用户自己装 APK 测试，agent 无法点真机。
 
 ---
 

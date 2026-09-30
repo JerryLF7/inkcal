@@ -19,7 +19,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "0.1.0"
     }
 
     signingConfigs {
@@ -108,4 +108,13 @@ dependencies {
   implementation(libs.androidx.navigation3.ui)
   implementation(libs.androidx.navigation3.runtime)
   implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+
+  // 网络、序列化、本地存储
+  implementation(libs.okhttp)
+  implementation(libs.retrofit)
+  implementation(libs.retrofit.kotlinx.serialization)
+  implementation(libs.kotlinx.serialization.json)
+  implementation(libs.androidx.datastore.preferences)
+  implementation(libs.kotlinx.coroutines.android)
+  implementation(libs.androidx.compose.material.icons.core)
 }
