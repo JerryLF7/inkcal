@@ -18,8 +18,8 @@ android {
         applicationId = "com.jerrylf.inkcal"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2"
     }
 
     signingConfigs {
@@ -117,4 +117,8 @@ dependencies {
   implementation(libs.androidx.datastore.preferences)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.androidx.compose.material.icons.core)
+
+  // 图片加载
+  implementation(libs.coil.compose)
+  implementation(libs.coil.network.okhttp)
 }

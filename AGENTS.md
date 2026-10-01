@@ -139,7 +139,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（里程碑 A 已完成，2026-10-01）：三 Tab 骨架（记录 / Calo / 设置）、服务器地址配置向导、登录/登出（Flask 会话 cookie 持久化）、OkHttp + Retrofit + kotlinx.serialization 网络层、DataStore 存储。**记录页与 Calo 页仍是占位文案**，业务功能按 `docs/android-app-spec.md` §15 的顺序往下做。包名 `com.jerrylf.inkcal`。
+当前状态（0.2，2026-10-01）：三 Tab 骨架 + 服务器配置向导 + 登录/登出 + **记录页日视图**（时间轴无限下拉、日期吸顶汇总含缺口 chip、餐卡含缩略图/×N/emoji 占位/P·C·F）。`domain/` 纯函数（TimeFmt / Tdee / ImageUrl / MealGrouping）有 22 个 JVM 单测。**周视图、月视图、餐卡详情页、Calo 页仍是占位**，按 `docs/android-app-spec.md` §15 顺序往下做。包名 `com.jerrylf.inkcal`。
+
+依赖版本的硬约束：AGP 9.0.1 的 compileSdk 上限是 36，**任何新增依赖都必须 `minCompileSdk <= 36`**，否则编译直接失败。已因此钉住 `okhttp = 5.4.0`（5.5.0 要 37）、`coil = 3.5.0`（3.6.x 要 37）。升级这类依赖前先确认不再受 compileSdk 限制，或同时升 AGP + compileSdk 到 37。
 
 本机（NUC）构建环境的三个坑，已修好，不要改回去：
 

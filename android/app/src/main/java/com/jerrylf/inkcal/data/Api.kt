@@ -1,7 +1,9 @@
 package com.jerrylf.inkcal.data
 
 import com.jerrylf.inkcal.domain.ServerUrl
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNamingStrategy
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -9,16 +11,32 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.Query
 
 /**
- * inkcal Flask API。一期只用到这几个端点，其余按 docs/android-app-spec.md §6 逐个添加。
+ * inkcal Flask API。端点按 docs/android-app-spec.md §6 逐个补。
  *
- * 路径不带前导 `/`：baseUrl 已规范化成以 `/` 结尾。
+ * 路径不带前导 `/`：baseUrl 已由 [ServerUrl.normalize] 规范成以 `/` 结尾。
  */
 interface InkcalApi {
 
   @GET("api/data-version")
   suspend fun dataVersion(): DataVersionDto
+
+  @GET("api/dates")
+  suspend fun dates(): List<String>
+
+  @GET("api/records")
+  suspend fun recordsOfDay(@Query("date") date: String): DayResponse
+
+  @GET("api/records")
+  suspend fun recordsInRange(
+    @Query("start") start: String,
+    @Query("end") end: String,
+  ): RangeResponse
+
+  @GET("api/settings")
+  suspend fun settings(): SettingsDto
 
   @POST("api/login")
   suspend fun login(@Body body: LoginRequest): OkDto
@@ -29,13 +47,16 @@ interface InkcalApi {
 
 object ApiFactory {
 
+  @OptIn(ExperimentalSerializationApi::class)
   val json: Json = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
     coerceInputValues = true
+    // 服务端是 snake_case（thumbnail_url / protein_g），DTO 写 camelCase
+    namingStrategy = JsonNamingStrategy.SnakeCase
   }
 
-  /** baseUrl 必须是 [ServerUrl.normalize] 过的形式。 */
+  /** baseUrl 必须已规范化。 */
   fun create(baseUrl: String, client: OkHttpClient): InkcalApi =
     Retrofit.Builder()
       .baseUrl(baseUrl)

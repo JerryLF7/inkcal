@@ -2,7 +2,94 @@ package com.jerrylf.inkcal.data
 
 import kotlinx.serialization.Serializable
 
-/** 字段都可能缺省，DTO 一律给默认值；解析器开了 ignoreUnknownKeys。 */
+/**
+ * API 契约。字段名靠 ApiFactory.json 的 SnakeCase 命名策略做映射，
+ * 所以这里写惯用的 camelCase，不需要每个字段挂 @SerialName。
+ *
+ * 一律给默认值：服务端有若干"有值才输出"的可选字段（emoji、merged_into、
+ * replacement_image），缺失时按缺省处理，不要让解析失败。
+ */
+
+@Serializable
+data class PhotoDto(
+  val assetId: String = "",
+  val thumbnailUrl: String = "",
+  val photoTime: String = "",
+  val meal: String = "",
+  val mealDetail: String = "",
+  val calories: Double = 0.0,
+  val proteinG: Double = 0.0,
+  val carbsG: Double = 0.0,
+  val fatG: Double = 0.0,
+  val emoji: String = "",
+)
+
+/** 已分组的一餐（只含主记录），photos 是组内全部照片。 */
+@Serializable
+data class RecordDto(
+  val id: Int = 0,
+  val assetId: String = "",
+  val sourceType: String = "",
+  val photoTime: String = "",
+  /** 区间查询才有，单日查询没有；客户端统一用 photoTime 前 10 位取日期。 */
+  val date: String = "",
+  val thumbnailUrl: String = "",
+  /** 本地替换图路径，经 /api/local-image 取。 */
+  val replacementImage: String = "",
+  val meal: String = "",
+  val mealDetail: String = "",
+  val calories: Double = 0.0,
+  val proteinG: Double = 0.0,
+  val carbsG: Double = 0.0,
+  val fatG: Double = 0.0,
+  val confidence: String = "",
+  /** 纯文本补录时的占位图标（无图才用）。 */
+  val emoji: String = "",
+  /** 主记录恒为 null。 */
+  val mergedInto: String? = null,
+  val photos: List<PhotoDto> = emptyList(),
+) {
+  /** 无图记录（典型是聊天补录）靠 emoji 顶替餐盘。 */
+  val hasImage: Boolean get() = thumbnailUrl.isNotBlank() || replacementImage.isNotBlank()
+}
+
+/** 键名不带 _g，且是原始行求和（不是按主记录）。 */
+@Serializable
+data class SummaryDto(
+  val calories: Double = 0.0,
+  val protein: Double = 0.0,
+  val carbs: Double = 0.0,
+  val fat: Double = 0.0,
+  val meals: Int = 0,
+)
+
+/** 当天没有数据时整个对象为 null。 */
+@Serializable
+data class BurnDto(
+  val date: String = "",
+  val activeKcal: Double = 0.0,
+  val steps: Int = 0,
+  val source: String = "",
+)
+
+/** GET /api/records?date= or /api/today */
+@Serializable
+data class DayResponse(
+  val date: String = "",
+  val records: List<RecordDto> = emptyList(),
+  val summary: SummaryDto = SummaryDto(),
+  val burn: BurnDto? = null,
+)
+
+/** GET /api/records?start=&end= —— 注意是 burns（字典）不是 burn。 */
+@Serializable
+data class RangeResponse(
+  val start: String = "",
+  val end: String = "",
+  val records: List<RecordDto> = emptyList(),
+  val summary: SummaryDto = SummaryDto(),
+  val burns: Map<String, BurnDto> = emptyMap(),
+)
 
 @Serializable
 data class DataVersionDto(
@@ -19,3 +106,14 @@ data class LoginRequest(
 
 @Serializable
 data class OkDto(val ok: Boolean = false)
+
+/** GET /api/settings —— 体征未填是空串，bmr 为 null 表示没填齐。 */
+@Serializable
+data class SettingsDto(
+  val chatWindow: Int = 20,
+  val userHeight: String = "",
+  val userWeight: String = "",
+  val userBirthdate: String = "",
+  val userGender: String = "male",
+  val bmr: Double? = null,
+)

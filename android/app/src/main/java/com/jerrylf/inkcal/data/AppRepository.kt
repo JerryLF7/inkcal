@@ -5,7 +5,7 @@ import okhttp3.OkHttpClient
 import retrofit2.HttpException
 import java.util.concurrent.TimeUnit
 
-/** 与服务器的连接状态。整个 App 的顶层状态机。 */
+/** 与服务器的连接状态，App 的顶层状态机。 */
 sealed interface ConnState {
   data object Loading : ConnState
 
@@ -21,7 +21,7 @@ sealed interface ConnState {
 }
 
 /**
- * 连接与认证。业务数据访问后续按 docs/android-app-spec.md 加在这里。
+ * 连接、认证与业务数据访问。
  *
  * 启动时不做探测，直接请求 /api/data-version：200 就是免登录或已登录，401 才要登录页。
  */
@@ -30,11 +30,21 @@ class AppRepository(
   private val cookieStore: CookieStore,
 ) {
 
-  private val client = OkHttpClient.Builder()
-    .cookieJar(cookieStore)
-    .connectTimeout(15, TimeUnit.SECONDS)
-    .readTimeout(20, TimeUnit.SECONDS)
-    .build()
+  /** 给 Coil 复用：图片请求要带上同一个会话 cookie。 */
+  val httpClient: OkHttpClient =
+    OkHttpClient.Builder()
+      .cookieJar(cookieStore)
+      .connectTimeout(15, TimeUnit.SECONDS)
+      .readTimeout(20, TimeUnit.SECONDS)
+      .build()
+
+  @Volatile private var cachedApi: Pair<String, InkcalApi>? = null
+
+  private suspend fun api(): InkcalApi {
+    val url = store.currentBaseUrl()
+    cachedApi?.takeIf { it.first == url }?.let { return it.second }
+    return ApiFactory.create(url, httpClient).also { cachedApi = url to it }
+  }
 
   suspend fun savedBaseUrl(): String = store.currentBaseUrl()
 
@@ -46,12 +56,11 @@ class AppRepository(
     return normalized
   }
 
-  suspend fun probeSaved(): ConnState = probe(store.currentBaseUrl())
-
-  suspend fun probe(baseUrl: String): ConnState {
+  suspend fun probe(): ConnState {
+    val baseUrl = store.currentBaseUrl()
     if (baseUrl.isBlank()) return ConnState.NeedServer
     return try {
-      ConnState.Ready(api(baseUrl).dataVersion().version)
+      ConnState.Ready(api().dataVersion().version)
     } catch (e: HttpException) {
       if (e.code() == 401) ConnState.NeedLogin else ConnState.Failed("HTTP ${e.code()}")
     } catch (e: Exception) {
@@ -59,9 +68,9 @@ class AppRepository(
     }
   }
 
-  suspend fun login(baseUrl: String, user: String, password: String): ConnState = try {
-    api(baseUrl).login(LoginRequest(user, password))
-    probe(baseUrl)
+  suspend fun login(user: String, password: String): ConnState = try {
+    api().login(LoginRequest(user, password))
+    probe()
   } catch (e: HttpException) {
     when (e.code()) {
       401 -> ConnState.Failed("账号或密码不正确")
@@ -72,11 +81,21 @@ class AppRepository(
     ConnState.Failed(e.message ?: e.javaClass.simpleName)
   }
 
-  suspend fun logout(baseUrl: String): ConnState {
-    runCatching { api(baseUrl).logout() }
+  suspend fun logout(): ConnState {
+    runCatching { api().logout() }
     cookieStore.clear()
-    return probe(baseUrl)
+    return probe()
   }
 
-  private fun api(baseUrl: String): InkcalApi = ApiFactory.create(baseUrl, client)
+  // ── 业务数据 ────────────────────────────────────────────────────
+
+  suspend fun recordsInRange(start: String, end: String): RangeResponse =
+    api().recordsInRange(start, end)
+
+  suspend fun recordsOfDay(date: String): DayResponse = api().recordsOfDay(date)
+
+  /** 有记录的日期，新→旧。最后一项即最早日期，用来判断时间轴是否到底。 */
+  suspend fun availableDates(): List<String> = api().dates()
+
+  suspend fun settings(): SettingsDto = api().settings()
 }
