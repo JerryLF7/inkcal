@@ -16,13 +16,27 @@ object ImageUrl {
   private fun enc(raw: String): String =
     URLEncoder.encode(raw, "UTF-8").replace("+", "%20")
 
-  /** 卡片缩略图：把上游 original 换成 thumbnail（约 7KB，别用约 157KB 的 preview）。 */
+  /** 卡片缩略图：把上游 URL 降级成 thumbnail（约 7KB，别用约 157KB 的 preview）。 */
   fun thumbnail(base: String, thumbnailUrl: String, replacementImage: String = ""): String? {
     if (replacementImage.isNotBlank()) return local(base, replacementImage)
     if (thumbnailUrl.isBlank()) return null
-    val small = thumbnailUrl.replace("/original", "/thumbnail?size=thumbnail")
-    return endpoint(base, "/api/image?url=${enc(small)}")
+    return endpoint(base, "/api/image?url=${enc(smallVariant(thumbnailUrl))}")
   }
+
+  /**
+   * Immich 的成图有两种形态，都要降到 thumbnail：
+   *   .../assets/{id}/original            -> .../assets/{id}/thumbnail?size=thumbnail
+   *   .../assets/{id}/thumbnail?size=preview -> ...?size=thumbnail
+   *
+   * 只做 `/original` 那一半的替换在真实数据上是空操作——库里存的本来就是
+   * `?size=preview`，卡片会去拉 157KB 的图（网页版目前就是这样）。
+   */
+  internal fun smallVariant(url: String): String =
+    when {
+      url.contains("/original") -> url.replace("/original", "/thumbnail?size=thumbnail")
+      url.contains("size=preview") -> url.replace("size=preview", "size=thumbnail")
+      else -> url
+    }
 
   /** 详情大图：用原始 url，不做替换。 */
   fun full(base: String, thumbnailUrl: String, replacementImage: String = ""): String? {

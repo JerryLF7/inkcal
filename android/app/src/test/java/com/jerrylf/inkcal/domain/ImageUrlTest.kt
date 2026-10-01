@@ -25,6 +25,26 @@ class ImageUrlTest {
   }
 
   @Test
+  fun `库里实际存的是 size=preview，也要降到 thumbnail`() {
+    // 真实数据形态：http://your-immich-host:2283/api/assets/{id}/thumbnail?size=preview
+    val url =
+      ImageUrl.thumbnail(
+        base,
+        "http://your-immich-host:2283/api/assets/a5dff55e/thumbnail?size=preview",
+      )
+    assertTrue("必须降级成 thumbnail", url!!.contains("size%3Dthumbnail"))
+    assertTrue("不能留在 preview", !url.contains("preview"))
+  }
+
+  @Test
+  fun `已经是 thumbnail 的地址不再改动`() {
+    assertEquals(
+      "http://immich.local/api/assets/x/thumbnail?size=thumbnail",
+      ImageUrl.smallVariant("http://immich.local/api/assets/x/thumbnail?size=thumbnail"),
+    )
+  }
+
+  @Test
   fun `大图不替换 original`() {
     val url = ImageUrl.full(base, "http://immich.local/api/assets/abc/original")
     assertTrue(url!!.contains("abc%2Foriginal"))
