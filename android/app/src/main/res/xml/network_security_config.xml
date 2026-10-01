@@ -11,8 +11,10 @@
     <domain-config cleartextTrafficPermitted="true">
         <!-- NUC 局域网地址 -->
         <domain includeSubdomains="false">your-server-host</domain>
-        <!-- NUC 的 Tailscale 地址，手机装 Tailscale 后外网也能直连 -->
+        <!-- NUC 的 Tailscale 地址 -->
         <domain includeSubdomains="false">your-tailscale-host</domain>
+        <!-- 公网入口（裸 TCP 转发到 NUC 的 5800） -->
+        <domain includeSubdomains="false">your-public-host</domain>
         <domain includeSubdomains="false">localhost</domain>
         <domain includeSubdomains="false">10.0.2.2</domain>
     </domain-config>

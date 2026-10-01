@@ -155,7 +155,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 发布前升版本：`versionName` 与 `versionCode` 一起升（`0.1/1` → `0.2/2`），tag 会自动跟着 `versionName` 走。
 - 仓库是 private，手机需登录态；`curl` 直接拉会 404，验证请用 `gh release download <tag> -p inkcal-<version>.apk`。用户自己装 APK 测试，agent 无法点真机。
 
-局域网明文 HTTP：Android 从 targetSdk 28 起默认禁明文，`android/app/src/main/res/xml/network_security_config.xml` 逐个列出了放行的地址（NUC 局域网 IP、Tailscale IP、localhost、10.0.2.2），**不全局放开**。换服务器地址而 IP 不在表里时，App 会直接连不上，需要改这个文件并重新构建（该配置不支持网段）。
+局域网明文 HTTP：Android 从 targetSdk 28 起默认禁明文，`android/app/src/main/res/xml/network_security_config.xml` 逐个列出了放行的地址（NUC 局域网 IP `your-server-host`、Tailscale `your-tailscale-host`、公网入口 `your-public-host`、localhost、10.0.2.2），**不全局放开**。换服务器地址而 IP 不在表里时，App 会直接报 `CLEARTEXT communication ... not permitted`，需要改这个文件并重新构建发版（该配置不支持网段）。这是用户已知的、明确接受的代价；若嫌烦，可改成全局放开——本项目 App 只连用户自己填的地址，白名单的实际防护收益有限。
 
 ---
 
