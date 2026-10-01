@@ -151,7 +151,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 - keystore 在仓库外 `~/.android-keystore/inkcal-release.jks`（RSA 4096），口令在 `android/keystore.properties`（已 gitignore，绝不提交）。
 - 没有 `keystore.properties` 时 release 自动退回 debug 签名，保证 `assembleRelease` 永远出可安装包。
-- 发布走 GitHub Release 滚动 tag `android-latest`，用 `android/release.sh`（内部 `gh release upload --clobber`），下载地址固定：`https://github.com/JerryLF7/inkcal/releases/download/android-latest/inkcal.apk`。仓库是 private，手机需登录态；用 `curl` 直接拉会 404，验证请用 `gh release download android-latest -p inkcal.apk`。用户自己装 APK 测试，agent 无法点真机。
+- 发布用 `android/release.sh`：tag 取 `app/build.gradle.kts` 的 `versionName`（`v0.1`），asset 名带版本号（`inkcal-0.1.apk`），**release 不标 pre-release**——标了 GitHub 就不算 Latest release，仓库首页侧栏会退化成只显示 tag 数量而不是最新版本。固定入口用 GitHub 自带重定向 `https://github.com/JerryLF7/inkcal/releases/latest`。
+- 发布前升版本：`versionName` 与 `versionCode` 一起升（`0.1/1` → `0.2/2`），tag 会自动跟着 `versionName` 走。
+- 仓库是 private，手机需登录态；`curl` 直接拉会 404，验证请用 `gh release download <tag> -p inkcal-<version>.apk`。用户自己装 APK 测试，agent 无法点真机。
 
 局域网明文 HTTP：Android 从 targetSdk 28 起默认禁明文，`android/app/src/main/res/xml/network_security_config.xml` 逐个列出了放行的地址（NUC 局域网 IP、Tailscale IP、localhost、10.0.2.2），**不全局放开**。换服务器地址而 IP 不在表里时，App 会直接连不上，需要改这个文件并重新构建（该配置不支持网段）。
 
