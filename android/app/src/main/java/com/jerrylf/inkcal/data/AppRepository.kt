@@ -103,4 +103,13 @@ class AppRepository(
   suspend fun availableDates(): List<String> = api().dates()
 
   suspend fun settings(): SettingsDto = api().settings()
+
+  suspend fun decisions(date: String): List<DecisionDto> = api().decisions(date).decisions
+
+  suspend fun reanalyze(assetId: String, notes: String): ReanalyzeResponse =
+    api().reanalyze(ReanalyzeRequest(assetId = assetId, notes = notes))
+
+  /** mode 取 "meal"（整餐级联）或 "photo"（仅一张）。 */
+  suspend fun deleteRecord(assetId: String, mode: String): DeleteRecordResponse =
+    api().deleteRecord(DeleteRecordRequest(assetId = assetId, mode = mode))
 }

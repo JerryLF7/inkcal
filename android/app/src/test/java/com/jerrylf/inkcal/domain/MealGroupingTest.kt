@@ -67,4 +67,32 @@ class MealGroupingTest {
     val groups = MealGrouping.groupByDate(listOf(record("x", "2026-10-01T00:30:00+08:00")))
     assertEquals("2026-10-01", groups.single().date)
   }
+
+  @Test
+  fun `详情画廊按拍摄时间升序，后端的主行在前不算全序`() {
+    val rec =
+      RecordDto(
+        assetId = "primary",
+        photoTime = "2026-10-01T12:00:00+08:00",
+        photos =
+          listOf(
+            PhotoDto(assetId = "primary", photoTime = "2026-10-01T12:00:00+08:00"),
+            PhotoDto(assetId = "later", photoTime = "2026-10-01T12:05:00+08:00"),
+            PhotoDto(assetId = "earlier", photoTime = "2026-10-01T11:59:00+08:00"),
+          ),
+      )
+    assertEquals(
+      listOf("earlier", "primary", "later"),
+      MealGrouping.sortedPhotos(rec).map { it.assetId },
+    )
+  }
+
+  @Test
+  fun `没有 photos 时用主记录自身合成一张，详情页不至于空着`() {
+    val rec = RecordDto(assetId = "solo", photoTime = "2026-10-01T12:00:00+08:00", calories = 500.0)
+    val photos = MealGrouping.sortedPhotos(rec)
+    assertEquals(1, photos.size)
+    assertEquals("solo", photos.single().assetId)
+    assertEquals(500.0, photos.single().calories, 0.001)
+  }
 }

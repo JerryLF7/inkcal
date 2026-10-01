@@ -33,6 +33,29 @@ object MealGrouping {
     )
 
   /**
+   * 组内照片按拍摄时间**升序**，详情页画廊用。
+   *
+   * 后端只保证主行排在第一个，不是全序，所以客户端必须自己排。
+   * photos 为空时（理论不该出现）用主记录自身合成一张，免得详情页空着。
+   */
+  fun sortedPhotos(record: RecordDto): List<PhotoDto> =
+    record.photos.sortedBy { it.photoTime }.ifEmpty { listOf(syntheticPhoto(record)) }
+
+  private fun syntheticPhoto(record: RecordDto) =
+    PhotoDto(
+      assetId = record.assetId,
+      thumbnailUrl = record.thumbnailUrl,
+      photoTime = record.photoTime,
+      meal = record.meal,
+      mealDetail = record.mealDetail,
+      calories = record.calories,
+      proteinG = record.proteinG,
+      carbsG = record.carbsG,
+      fatG = record.fatG,
+      emoji = record.emoji,
+    )
+
+  /**
    * 按 photoTime 前 10 位分日，日期倒序、日内倒序。
    *
    * 注意：区间接口返回的记录已按主记录分组，形态 B（独立条目）的值已由服务端累加到

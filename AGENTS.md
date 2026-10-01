@@ -139,7 +139,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.3，2026-10-01）：三 Tab 骨架 + 服务器配置向导 + 登录/登出 + **记录页日视图**（时间轴无限下拉、日期吸顶汇总含缺口 chip、餐卡含缩略图/×N/emoji 占位/P·C·F、下拉刷新、磁盘缓存冷启动秒开）。`domain/` 纯函数（TimeFmt / Tdee / ImageUrl / MealGrouping）与 `RecordsCache` 共 31 个 JVM 单测。**周视图、月视图、餐卡详情页、Calo 页仍是占位**，按 `docs/android-app-spec.md` §15 顺序往下做。包名 `com.jerrylf.inkcal`。
+当前状态（0.4，2026-10-02）：三 Tab 骨架 + 服务器配置向导 + 登录/登出 + **记录页日视图**（时间轴无限下拉、日期吸顶汇总含缺口 chip、餐卡含缩略图/×N/emoji 占位/P·C·F、下拉刷新、磁盘缓存冷启动秒开）+ **餐卡详情**（全屏画廊含双指缩放与多图翻页、照片明细按形态 A/B 区分显示、🤖 AI 决策折叠块、组级重新分析、整餐删除与单张移除两步确认）。`domain/` 纯函数（TimeFmt / Tdee / ImageUrl / MealGrouping / Decisions）与 `RecordsCache` 共 38 个 JVM 单测。**周视图、月视图、Calo 页仍是占位**，按 `docs/android-app-spec.md` §15 顺序往下做。包名 `com.jerrylf.inkcal`。
+
+详情页刻意用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本。组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
 
 记录页缓存策略是 **stale-while-revalidate**：冷启动先画 `filesDir/records-cache.json` 里的上次结果，再后台重拉覆盖。不做「缓存没过期就不请求」——服务端 cron 随时写新记录，缓存永远不算可信。缓存 payload 带 `baseUrl`，换服务器即失效（`saveBaseUrl`/`logout` 也会主动清）。下拉刷新重拉的是**已加载的整个范围**（上限 365 天），不是只重拉最近 7 天，否则会把用户翻过的历史抖掉。
 

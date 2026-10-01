@@ -10,6 +10,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.POST
 import retrofit2.http.Query
 
@@ -37,6 +38,16 @@ interface InkcalApi {
 
   @GET("api/settings")
   suspend fun settings(): SettingsDto
+
+  @GET("api/decisions")
+  suspend fun decisions(@Query("date") date: String): DecisionsResponse
+
+  @POST("api/reanalyze")
+  suspend fun reanalyze(@Body body: ReanalyzeRequest): ReanalyzeResponse
+
+  /** DELETE 带 JSON body，Retrofit 的 @DELETE 不支持，得用 @HTTP。 */
+  @HTTP(method = "DELETE", path = "api/record", hasBody = true)
+  suspend fun deleteRecord(@Body body: DeleteRecordRequest): DeleteRecordResponse
 
   @POST("api/login")
   suspend fun login(@Body body: LoginRequest): OkDto

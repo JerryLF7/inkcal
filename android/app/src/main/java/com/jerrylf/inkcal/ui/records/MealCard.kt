@@ -31,10 +31,15 @@ import com.jerrylf.inkcal.domain.ImageUrl
 import com.jerrylf.inkcal.domain.TimeFmt
 import kotlin.math.roundToInt
 
-/** 餐卡，对应 docs/android-app-spec.md §8.4。 */
+/** 餐卡，对应 docs/android-app-spec.md §8.4。整卡可点，点击进详情。 */
 @Composable
-fun MealCard(record: RecordDto, baseUrl: String, modifier: Modifier = Modifier) {
-  Card(modifier = modifier.fillMaxWidth()) {
+fun MealCard(
+  record: RecordDto,
+  baseUrl: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
     Row(
       modifier = Modifier.padding(12.dp),
       horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -155,21 +160,3 @@ private fun emojiFontSize(emoji: String): TextUnit {
     else -> 20.sp
   }
 }
-
-/** source_type 可能缺失：缺失时 asset_id 以 manual- 开头算手动，其余当 Immich。 */
-private fun sourceLabel(record: RecordDto): String =
-  when {
-    record.sourceType == "manual" -> "手动"
-    record.sourceType == "photoprism" -> "PhotoPrism"
-    record.sourceType == "immich" -> "Immich"
-    record.assetId.startsWith("manual-") -> "手动"
-    else -> "Immich"
-  }
-
-private fun confidenceLabel(confidence: String): String =
-  when (confidence) {
-    "high" -> "置信度高"
-    "medium" -> "置信度中"
-    "low" -> "置信度低"
-    else -> "置信度未知"
-  }

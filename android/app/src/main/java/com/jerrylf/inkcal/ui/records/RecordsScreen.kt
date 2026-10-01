@@ -15,6 +15,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -33,15 +35,41 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jerrylf.inkcal.domain.TimeFmt
 
-/** 日视图时间轴，对应 docs/android-app-spec.md §8.1。 */
+/** 日视图时间轴，对应 docs/android-app-spec.md §8.1；详情见 §8.4。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   val bmr by viewModel.bmr.collectAsStateWithLifecycle()
   val baseUrl by viewModel.baseUrl.collectAsStateWithLifecycle()
+  val detailAnchor by viewModel.detailAnchor.collectAsStateWithLifecycle()
+  val decisions by viewModel.decisions.collectAsStateWithLifecycle()
+  val busy by viewModel.busy.collectAsStateWithLifecycle()
+  val toast by viewModel.toast.collectAsStateWithLifecycle()
+
   val listState = rememberLazyListState()
+  val snackbarHostState = remember { SnackbarHostState() }
   val today = remember { TimeFmt.hktToday() }
+
+  val allRecords = remember(state.groups) { state.groups.flatMap { it.records } }
+
+  // 详情渲染的就是列表状态里的那份记录，所以写操作后重拉列表，详情自动跟着变
+  val detailRecord = detailAnchor?.let { anchor -> allRecords.firstOrNull { it.assetId == anchor } }
+
+  LaunchedEffect(toast) {
+    toast?.let {
+      snackbarHostState.showSnackbar(it)
+      viewModel.consumeToast()
+    }
+  }
+
+  // 组没了（整餐被删、或单张移除后只剩这张）就收起详情。
+  // busy 期间不判：单张移除会把锚点切到晋升的新主行，那一刻它还没出现在列表里。
+  LaunchedEffect(detailAnchor, allRecords, busy) {
+    if (!busy && detailAnchor != null && detailRecord == null && allRecords.isNotEmpty()) {
+      viewModel.closeDetail()
+    }
+  }
 
   // 每个日期头在扁平列表里的下标，用来把「第一个可见项」映射回日期
   val headerDates: List<Pair<Int, String>> =
@@ -92,79 +120,100 @@ fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
       },
     )
 
-    PullToRefreshBox(
-      isRefreshing = state.refreshing,
-      onRefresh = viewModel::refresh,
-      modifier = Modifier.fillMaxSize(),
-    ) {
-      LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-        state.error?.let { message ->
-          item(key = "error") {
-            ErrorBanner(message = message, onRetry = viewModel::refresh)
+    Box(modifier = Modifier.weight(1f)) {
+      PullToRefreshBox(
+        isRefreshing = state.refreshing,
+        onRefresh = viewModel::refresh,
+        modifier = Modifier.fillMaxSize(),
+      ) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+          state.error?.let { message ->
+            item(key = "error") {
+              ErrorBanner(message = message, onRetry = viewModel::refresh)
+            }
           }
-        }
 
-        when {
-          state.groups.isEmpty() && state.initialLoading ->
-            item(key = "initial-loading") {
-              CenteredMessage { CircularProgressIndicator() }
-            }
-
-          state.groups.isEmpty() ->
-            // 空态也放进列表，否则下拉刷新在没数据时没法触发
-            item(key = "empty") {
-              CenteredMessage {
-                Text(
-                  text = "还没有记录。\n拍照备份后会自动入库，也可以下拉刷新。",
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  textAlign = TextAlign.Center,
-                )
+          when {
+            state.groups.isEmpty() && state.initialLoading ->
+              item(key = "initial-loading") {
+                CenteredMessage { CircularProgressIndicator() }
               }
-            }
 
-          else ->
-            state.groups.forEach { group ->
-              stickyHeader(key = "header-${group.date}") {
-                DateSeparator(
-                  date = group.date,
-                  kcal = group.kcal,
-                  protein = group.protein,
-                  carbs = group.carbs,
-                  fat = group.fat,
-                  bmr = bmr,
-                  activeKcal = state.burns[group.date]?.activeKcal,
-                  isToday = group.date == today,
-                )
+            state.groups.isEmpty() ->
+              // 空态也放进列表，否则没数据时下拉刷新没法触发
+              item(key = "empty") {
+                CenteredMessage {
+                  Text(
+                    text = "还没有记录。\n拍照备份后会自动入库，也可以下拉刷新。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                  )
+                }
               }
-              items(group.records, key = { it.assetId }) { record ->
-                MealCard(
-                  record = record,
-                  baseUrl = baseUrl,
-                  modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
-                )
-              }
-            }
-        }
 
-        if (state.loadingMore) {
-          item(key = "loading-more") {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+            else ->
+              state.groups.forEach { group ->
+                stickyHeader(key = "header-${group.date}") {
+                  DateSeparator(
+                    date = group.date,
+                    kcal = group.kcal,
+                    protein = group.protein,
+                    carbs = group.carbs,
+                    fat = group.fat,
+                    bmr = bmr,
+                    activeKcal = state.burns[group.date]?.activeKcal,
+                    isToday = group.date == today,
+                  )
+                }
+                items(group.records, key = { it.assetId }) { record ->
+                  MealCard(
+                    record = record,
+                    baseUrl = baseUrl,
+                    onClick = { viewModel.openDetail(record) },
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+                  )
+                }
+              }
           }
-        }
-        if (state.atEnd && state.groups.isNotEmpty()) {
-          item(key = "end") {
-            Text(
-              text = "已经是最早的记录",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.Center,
-              modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            )
+
+          if (state.loadingMore) {
+            item(key = "loading-more") {
+              LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+            }
+          }
+          if (state.atEnd && state.groups.isNotEmpty()) {
+            item(key = "end") {
+              Text(
+                text = "已经是最早的记录",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+              )
+            }
           }
         }
       }
+
+      SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+      )
     }
+  }
+
+  if (detailRecord != null) {
+    MealDetailDialog(
+      record = detailRecord,
+      baseUrl = baseUrl,
+      decisions = decisions,
+      busy = busy,
+      onClose = viewModel::closeDetail,
+      onDeleteMeal = { viewModel.delete(detailRecord.assetId, photoOnly = false) },
+      onDeletePhoto = { assetId -> viewModel.delete(assetId, photoOnly = true) },
+      onReanalyze = { notes -> viewModel.reanalyze(detailRecord.assetId, notes) },
+    )
   }
 }
 

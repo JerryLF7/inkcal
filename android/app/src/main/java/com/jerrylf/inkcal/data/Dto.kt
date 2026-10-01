@@ -117,3 +117,51 @@ data class SettingsDto(
   val userGender: String = "male",
   val bmr: Double? = null,
 )
+
+/** GET /api/decisions?date= —— Luna 批处理的审计记录。 */
+@Serializable
+data class DecisionDto(
+  val id: Int = 0,
+  val sessionDate: String = "",
+  /** add / update / skip */
+  val action: String = "",
+  /** new_meal / same_meal / rejected，可能为空 */
+  val relation: String = "",
+  val assetIds: List<String> = emptyList(),
+  val targetAssetId: String? = null,
+  val groupWith: String? = null,
+  val reasoning: String = "",
+  val promptForGemini: String? = null,
+  val createdAt: String = "",
+)
+
+@Serializable
+data class DecisionsResponse(
+  val date: String = "",
+  val decisions: List<DecisionDto> = emptyList(),
+)
+
+@Serializable
+data class ReanalyzeRequest(val assetId: String, val notes: String)
+
+@Serializable
+data class ReanalyzeResponse(val ok: Boolean = false, val record: RecordDto? = null)
+
+/**
+ * DELETE /api/record —— 接口用 JSON body 传参。
+ * mode=meal 删整餐（组内全部照片进忽略列表）；mode=photo 只移除一张，
+ * 删的是主行时最早的从行晋升，晋升的 asset_id 放在 promoted。
+ */
+@Serializable
+data class DeleteRecordRequest(val assetId: String, val mode: String = "meal")
+
+@Serializable
+data class DeleteRecordResponse(
+  val ok: Boolean = false,
+  val deleted: List<String> = emptyList(),
+  val promoted: String? = null,
+)
+
+/** 服务端出错时统一是 `{"error": "..."}`。 */
+@Serializable
+data class ErrorDto(val error: String = "")
