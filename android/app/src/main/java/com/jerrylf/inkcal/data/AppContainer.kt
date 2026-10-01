@@ -12,7 +12,8 @@ class AppContainer private constructor(context: Context) {
 
   val settingsStore: SettingsStore = SettingsStore(context)
   val cookieStore: CookieStore = CookieStore(settingsStore)
-  val repository: AppRepository = AppRepository(settingsStore, cookieStore)
+  val recordsCache: RecordsCache = RecordsCache(context.filesDir)
+  val repository: AppRepository = AppRepository(settingsStore, cookieStore, recordsCache)
   val bmrCache: BmrCache = BmrCache(repository)
 
   companion object {

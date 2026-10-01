@@ -28,6 +28,7 @@ sealed interface ConnState {
 class AppRepository(
   private val store: SettingsStore,
   private val cookieStore: CookieStore,
+  private val recordsCache: RecordsCache,
 ) {
 
   /** 给 Coil 复用：图片请求要带上同一个会话 cookie。 */
@@ -48,10 +49,13 @@ class AppRepository(
 
   suspend fun savedBaseUrl(): String = store.currentBaseUrl()
 
-  /** 规范化并保存；地址为空返回 null。换地址时清掉旧 cookie，避免发给新主机。 */
+  /** 规范化并保存；地址为空返回 null。换地址时清掉旧 cookie 与记录缓存，避免串服务器。 */
   suspend fun saveBaseUrl(input: String): String? {
     val normalized = ServerUrl.normalize(input) ?: return null
-    if (normalized != store.currentBaseUrl()) cookieStore.clear()
+    if (normalized != store.currentBaseUrl()) {
+      cookieStore.clear()
+      recordsCache.clear()
+    }
     store.setBaseUrl(normalized)
     return normalized
   }
@@ -84,6 +88,7 @@ class AppRepository(
   suspend fun logout(): ConnState {
     runCatching { api().logout() }
     cookieStore.clear()
+    recordsCache.clear()
     return probe()
   }
 
