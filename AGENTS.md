@@ -159,7 +159,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 没有 `keystore.properties` 时 release 自动退回 debug 签名，保证 `assembleRelease` 永远出可安装包。
 - 发布用 `android/release.sh`：tag 取 `app/build.gradle.kts` 的 `versionName`（`v0.1`），asset 名带版本号（`inkcal-0.1.apk`），**release 不标 pre-release**——标了 GitHub 就不算 Latest release，仓库首页侧栏会退化成只显示 tag 数量而不是最新版本。固定入口用 GitHub 自带重定向 `https://github.com/JerryLF7/inkcal/releases/latest`。
 - 发布前升版本：`versionName` 与 `versionCode` 一起升（`0.1/1` → `0.2/2`），tag 会自动跟着 `versionName` 走。
-- 仓库是 private，手机需登录态；`curl` 直接拉会 404，验证请用 `gh release download <tag> -p inkcal-<version>.apk`。用户自己装 APK 测试，agent 无法点真机。
+- **仓库已转 public（2026-10-02，为了配合 Obtainium 自动更新）**，所以 release 资源匿名可下：`curl -sIL https://github.com/JerryLF7/inkcal/releases/download/<tag>/inkcal-<version>.apk` 应返回 302 → 200。Obtainium 走的是匿名 `api.github.com/repos/JerryLF7/inkcal/releases/latest`，因此 release **必须保持非 prerelease**，否则它拿不到。验证也用 `gh release download <tag> -p inkcal-<version>.apk`。用户自己装 APK 测试，agent 无法点真机。
+- 转 public 的副作用：仓库里的内网地址（`android/app/src/main/res/xml/network_security_config.xml`、`scripts/burn_sources/heytap_ui.py`、`main.py` 与 `.env.example` 的 Immich 默认地址）对外可见。已确认**历史里没有任何真密钥或数据**（`.env`/keystore/`data/` 从未提交，全历史扫 `AIza`/`ghp_`/`PRIVATE KEY` 零命中）。注意把 IP 从仓库删掉并不等于隐藏——它已经编译进 APK，而 APK 现在是匿名可下载的。
 
 局域网明文 HTTP：Android 从 targetSdk 28 起默认禁明文，`android/app/src/main/res/xml/network_security_config.xml` 逐个列出了放行的地址（NUC 局域网 IP `your-server-host`、Tailscale `your-tailscale-host`、公网入口 `your-public-host`、localhost、10.0.2.2），**不全局放开**。换服务器地址而 IP 不在表里时，App 会直接报 `CLEARTEXT communication ... not permitted`，需要改这个文件并重新构建发版（该配置不支持网段）。这是用户已知的、明确接受的代价；若嫌烦，可改成全局放开——本项目 App 只连用户自己填的地址，白名单的实际防护收益有限。
 

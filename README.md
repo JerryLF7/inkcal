@@ -2,6 +2,9 @@
 
 拍一张饮食照片,热量自动记好。
 
+> **还在开发中,功能不完整。** 接口、数据格式和界面都可能随时改,不要拿它当成品用。
+> 后端(Python/Flask + Vue 网页)已能日常使用;原生 Android 客户端还很早期,`docs/android-app-spec.md` §14 有逐项进度。已知没做的:周视图、月视图、选择照片、Calo 聊天。
+
 手机把照片备份到 Immich 或 PhotoPrism,inkcal 每 10 分钟去拉一次新照片,判断是不是食物,估算热量和蛋白质、碳水、脂肪,写进本地 SQLite。打开网页就能看,估错了可以改。
 
 我做它是因为手动记饮食坚持不下去,而把食物照片直接传给云端又不放心。所以有一道本地过滤:不是食物的照片不会离开你的内网。
@@ -99,6 +102,16 @@ Calo 是对话助手。你可以问"昨天午餐吃了什么",或者说"记一�
 
 「选择照片」按钮(桌面在左侧栏,手机在顶栏)用来补漏。SigLIP2 对透明杯饮料、咖啡、奶茶偶尔判不准,你可以从相册里手动挑,或者本地上传,这些照片会跳过食物过滤。
 
+## Android 客户端
+
+`android/` 是原生客户端(Kotlin + Jetpack Compose),只调 Flask API,不共享 Python 或 Vue 代码。
+
+**还没做完**,目前可用的是记录页日视图和餐卡详情(查看、重新分析、删除);周视图、月视图、选择照片、Calo 聊天都还没实现,设置页只有体征参数和服务器两项。
+
+安装包从 [Releases](https://github.com/JerryLF7/inkcal/releases/latest) 下载,也可以把本仓库地址加进 [Obtainium](https://github.com/ImranR98/Obtainium) 自动跟进更新。首次启动填服务器地址(局域网 `IP:端口`,或反代域名)再登录。
+
+自己构建需要 Android SDK;构建、签名和发布方式写在 `AGENTS.md` 里。
+
 ## 几个容易踩到的点
 
 日期按照片拍摄地的当地日历日算,不按 UTC,所以凌晨拍的照片不会被算到前一天。
@@ -143,11 +156,13 @@ src/prompts/       提示词模板(.md)
 web/server.py      Flask API
 web/ui/            Vue 前端源码
 web/static/        前端构建产物
+android/           原生 Android 客户端(独立 Gradle 根)
 scripts/           回归测试和热量消耗同步脚本
-docs/              界面原型和照片库 API 备忘
+docs/              界面原型、照片库 API 备忘、Android 客户端实现文档
 ```
 
 ## 相关文档
 
 - `AGENTS.md`:项目的交接说明,包含已拍板的规则、事故复盘和下一步。改代码前先读它。
+- `docs/android-app-spec.md`:Android 客户端的实现规格与进度。
 - `docs/references/`:PhotoPrism 和 Synology Photos 的 API 备忘。
