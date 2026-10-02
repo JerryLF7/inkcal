@@ -35,6 +35,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
       _baseUrl.value = repo.savedBaseUrl()
       _state.value = repo.probe()
     }
+    // 用着用着会话过期（cron 跑着、服务端重启换了 INKCAL_SECRET）→ 弹回登录页
+    viewModelScope.launch {
+      repo.unauthorized.collect { expired ->
+        if (expired) {
+          _state.value = ConnState.NeedLogin
+          repo.acknowledgeUnauthorized()
+        }
+      }
+    }
   }
 
   fun saveServer(input: String) {

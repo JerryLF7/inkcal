@@ -118,6 +118,20 @@ data class SettingsDto(
   val bmr: Double? = null,
 )
 
+/**
+ * PUT /api/settings —— 只发要改的键。Json 配了 explicitNulls = false，
+ * 值为 null 的字段不会出现在请求体里，正好满足「部分更新」的契约
+ * （服务端只处理出现的键，缺的键不动）。
+ */
+@Serializable
+data class SettingsUpdateRequest(
+  val chatWindow: Int? = null,
+  val userHeight: String? = null,
+  val userWeight: String? = null,
+  val userBirthdate: String? = null,
+  val userGender: String? = null,
+)
+
 /** GET /api/decisions?date= —— Luna 批处理的审计记录。 */
 @Serializable
 data class DecisionDto(

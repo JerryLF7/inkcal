@@ -20,6 +20,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
@@ -36,6 +38,7 @@ import kotlin.math.roundToInt
 fun MealCard(
   record: RecordDto,
   baseUrl: String,
+  hasDecision: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -65,11 +68,21 @@ fun MealCard(
             overflow = TextOverflow.Ellipsis,
           )
         }
-        Text(
-          text = "${TimeFmt.clock(record.photoTime)} · ${sourceLabel(record)} · ${confidenceLabel(record.confidence)}",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Text(
+            text = "${TimeFmt.clock(record.photoTime)} · ${sourceLabel(record)} · ${confidenceLabel(record.confidence)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          if (hasDecision) {
+            // 有覆盖本组的 Luna 决策；无障碍读作「Luna 决策」，展开看明细请进详情
+            Text(
+              text = "  🤖",
+              style = MaterialTheme.typography.labelSmall,
+              modifier = Modifier.semantics { contentDescription = "Luna 决策" },
+            )
+          }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
           MacroRow(record)
           Box(Modifier.weight(1f))

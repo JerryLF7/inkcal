@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jerrylf.inkcal.domain.Decisions
 import com.jerrylf.inkcal.domain.TimeFmt
 
 /** 日视图时间轴，对应 docs/android-app-spec.md §8.1；详情见 §8.4。 */
@@ -43,7 +44,7 @@ fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
   val bmr by viewModel.bmr.collectAsStateWithLifecycle()
   val baseUrl by viewModel.baseUrl.collectAsStateWithLifecycle()
   val detailAnchor by viewModel.detailAnchor.collectAsStateWithLifecycle()
-  val decisions by viewModel.decisions.collectAsStateWithLifecycle()
+  val decisionsByDate by viewModel.decisionsByDate.collectAsStateWithLifecycle()
   val busy by viewModel.busy.collectAsStateWithLifecycle()
   val toast by viewModel.toast.collectAsStateWithLifecycle()
 
@@ -154,7 +155,10 @@ fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
 
             else ->
               state.groups.forEach { group ->
+                val dayDecisions = decisionsByDate[group.date].orEmpty()
                 stickyHeader(key = "header-${group.date}") {
+                  // 滚到这天就去取它的决策（每天只请求一次），供卡片角标与详情块使用
+                  LaunchedEffect(group.date) { viewModel.ensureDecisions(group.date) }
                   DateSeparator(
                     date = group.date,
                     kcal = group.kcal,
@@ -170,6 +174,7 @@ fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
                   MealCard(
                     record = record,
                     baseUrl = baseUrl,
+                    hasDecision = Decisions.forRecord(record, dayDecisions).isNotEmpty(),
                     onClick = { viewModel.openDetail(record) },
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                   )
@@ -207,7 +212,7 @@ fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
     MealDetailDialog(
       record = detailRecord,
       baseUrl = baseUrl,
-      decisions = decisions,
+      decisions = decisionsByDate[TimeFmt.dateOf(detailRecord.photoTime)].orEmpty(),
       busy = busy,
       onClose = viewModel::closeDetail,
       onDeleteMeal = { viewModel.delete(detailRecord.assetId, photoOnly = false) },

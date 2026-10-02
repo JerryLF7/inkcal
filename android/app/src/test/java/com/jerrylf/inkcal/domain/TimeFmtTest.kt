@@ -50,4 +50,20 @@ class TimeFmtTest {
     assertEquals("2026-09-30", TimeFmt.minusDays("2026-10-01", 1))
     assertEquals("2026-09-30", TimeFmt.minusDays("2026-10-25", 25))
   }
+
+  @Test
+  fun `DatePicker 的毫秒数按 UTC 午夜解释，东八区不会差一天`() {
+    val millis = TimeFmt.pickerMillis("1999-06-21")!!
+    // 必须是 UTC 零点整：按 Asia/Hong_Kong 解释会变成前一天 16:00，日期倒退一天
+    assertEquals(0L, millis % 86_400_000L)
+    assertEquals("1999-06-21", TimeFmt.dateFromPickerMillis(millis))
+  }
+
+  @Test
+  fun `picker 互转遇到非法输入不抛异常`() {
+    assertNull(TimeFmt.pickerMillis(""))
+    assertNull(TimeFmt.pickerMillis("不是日期"))
+    // 0 是 epoch，能正常转出来
+    assertEquals("1970-01-01", TimeFmt.dateFromPickerMillis(0L))
+  }
 }

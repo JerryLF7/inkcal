@@ -75,7 +75,7 @@ fun MainScaffold(version: String, viewModel: AppViewModel) {
         entryProvider {
           entry<RecordsRoute> { RecordsScreen() }
           entry<CaloRoute> { CaloScreen() }
-          entry<SettingsRoute> { SettingsScreen(version = version, viewModel = viewModel) }
+          entry<SettingsRoute> { SettingsScreen(version = version, appViewModel = viewModel) }
         },
     )
   }

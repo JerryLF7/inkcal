@@ -1,6 +1,9 @@
 package com.jerrylf.inkcal.data
 
 import com.jerrylf.inkcal.domain.ServerUrl
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import retrofit2.HttpException
 import java.util.concurrent.TimeUnit
@@ -40,6 +43,26 @@ class AppRepository(
       .build()
 
   @Volatile private var cachedApi: Pair<String, InkcalApi>? = null
+
+  /** 会话在使用中失效（任何数据请求收到 401）时置 true，由 AppViewModel 弹回登录页。 */
+  private val _unauthorized = MutableStateFlow(false)
+  val unauthorized: StateFlow<Boolean> = _unauthorized.asStateFlow()
+
+  fun acknowledgeUnauthorized() {
+    _unauthorized.value = false
+  }
+
+  /**
+   * 包一层请求：401 说明会话过期了（cron 跑着跑着、或服务端重启换了 INKCAL_SECRET），
+   * 这时要把人送回登录页，而不是让"HTTP 401"当成普通错误挂在列表顶上。
+   */
+  private suspend fun <T> call(block: suspend (InkcalApi) -> T): T =
+    try {
+      block(api())
+    } catch (e: HttpException) {
+      if (e.code() == 401) _unauthorized.value = true
+      throw e
+    }
 
   private suspend fun api(): InkcalApi {
     val url = store.currentBaseUrl()
@@ -95,21 +118,24 @@ class AppRepository(
   // ── 业务数据 ────────────────────────────────────────────────────
 
   suspend fun recordsInRange(start: String, end: String): RangeResponse =
-    api().recordsInRange(start, end)
+    call { it.recordsInRange(start, end) }
 
-  suspend fun recordsOfDay(date: String): DayResponse = api().recordsOfDay(date)
+  suspend fun recordsOfDay(date: String): DayResponse = call { it.recordsOfDay(date) }
 
   /** 有记录的日期，新→旧。最后一项即最早日期，用来判断时间轴是否到底。 */
-  suspend fun availableDates(): List<String> = api().dates()
+  suspend fun availableDates(): List<String> = call { it.dates() }
 
-  suspend fun settings(): SettingsDto = api().settings()
+  suspend fun settings(): SettingsDto = call { it.settings() }
 
-  suspend fun decisions(date: String): List<DecisionDto> = api().decisions(date).decisions
+  suspend fun updateSettings(body: SettingsUpdateRequest): SettingsDto =
+    call { it.updateSettings(body) }
+
+  suspend fun decisions(date: String): List<DecisionDto> = call { it.decisions(date).decisions }
 
   suspend fun reanalyze(assetId: String, notes: String): ReanalyzeResponse =
-    api().reanalyze(ReanalyzeRequest(assetId = assetId, notes = notes))
+    call { it.reanalyze(ReanalyzeRequest(assetId = assetId, notes = notes)) }
 
   /** mode 取 "meal"（整餐级联）或 "photo"（仅一张）。 */
   suspend fun deleteRecord(assetId: String, mode: String): DeleteRecordResponse =
-    api().deleteRecord(DeleteRecordRequest(assetId = assetId, mode = mode))
+    call { it.deleteRecord(DeleteRecordRequest(assetId = assetId, mode = mode)) }
 }

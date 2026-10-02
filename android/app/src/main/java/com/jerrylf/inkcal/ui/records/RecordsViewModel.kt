@@ -75,8 +75,16 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
   private val _detailAnchor = MutableStateFlow<String?>(null)
   val detailAnchor: StateFlow<String?> = _detailAnchor.asStateFlow()
 
-  private val _decisions = MutableStateFlow<List<DecisionDto>>(emptyList())
-  val decisions: StateFlow<List<DecisionDto>> = _decisions.asStateFlow()
+  /**
+   * 决策按日期缓存。卡片的 🤖 角标与详情的决策块共用这一份。
+   *
+   * 懒加载而不是一次性全取：跨年翻到底会有几百天，per-date 一个请求全取完不现实；
+   * 只有真正滚到的那几天才请求（见 RecordsScreen 里 stickyHeader 的 LaunchedEffect）。
+   */
+  private val _decisionsByDate = MutableStateFlow<Map<String, List<DecisionDto>>>(emptyMap())
+  val decisionsByDate: StateFlow<Map<String, List<DecisionDto>>> = _decisionsByDate.asStateFlow()
+
+  private val decisionsRequested = mutableSetOf<String>()
 
   /** 详情页写操作进行中，用于禁用按钮防重复提交。 */
   private val _busy = MutableStateFlow(false)
@@ -140,10 +148,16 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
 
   fun openDetail(record: RecordDto) {
     _detailAnchor.value = record.assetId
-    _decisions.value = emptyList()
-    val date = TimeFmt.dateOf(record.photoTime)
+    ensureDecisions(TimeFmt.dateOf(record.photoTime))
+  }
+
+  /** 取某天的 Luna 决策，每个日期只请求一次；失败就允许下次重试。 */
+  fun ensureDecisions(date: String) {
+    if (date.isBlank() || !decisionsRequested.add(date)) return
     viewModelScope.launch {
-      _decisions.value = runCatching { repo.decisions(date) }.getOrDefault(emptyList())
+      runCatching { repo.decisions(date) }
+        .onSuccess { list -> _decisionsByDate.update { it + (date to list) } }
+        .onFailure { decisionsRequested.remove(date) }
     }
   }
 

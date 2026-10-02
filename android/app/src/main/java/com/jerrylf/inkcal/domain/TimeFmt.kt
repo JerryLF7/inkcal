@@ -1,7 +1,9 @@
 package com.jerrylf.inkcal.domain
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 
 /**
  * photo_time 是照片拍摄地当地日历日的时间串（形如 `2026-09-30T12:34:56+08:00`）。
@@ -60,4 +62,20 @@ object TimeFmt {
   /** 日期往前推 n 天。 */
   fun minusDays(date: String, days: Long): String =
     runCatching { LocalDate.parse(date).minusDays(days).toString() }.getOrDefault(date)
+
+  /**
+   * Material DatePicker 收发的毫秒数按 **UTC 午夜** 定义。
+   *
+   * 换算必须也用 UTC：若按 Asia/Hong_Kong（UTC+8）去解释，选 1999-06-21 会算成
+   * 1999-06-20 的本地零点再转回，日期差一天。出生日期是没有时区的纯日历日，
+   * 这里的 UTC 用法和 photo_time 的「禁止解析成 Instant」不冲突——那条是怕给
+   * 拍摄时间套上错误的时区，而这里本来就只处理日期。
+   */
+  fun dateFromPickerMillis(millis: Long): String =
+    runCatching { Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().toString() }
+      .getOrDefault("")
+
+  fun pickerMillis(date: String): Long? =
+    runCatching { LocalDate.parse(date).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }
+      .getOrNull()
 }

@@ -12,6 +12,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.HTTP
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Query
 
 /**
@@ -38,6 +39,9 @@ interface InkcalApi {
 
   @GET("api/settings")
   suspend fun settings(): SettingsDto
+
+  @PUT("api/settings")
+  suspend fun updateSettings(@Body body: SettingsUpdateRequest): SettingsDto
 
   @GET("api/decisions")
   suspend fun decisions(@Query("date") date: String): DecisionsResponse
