@@ -404,7 +404,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 2. **Web server 只由用户级 systemd 单元 `inkcal-web.service` 管理**（`systemctl --user restart inkcal-web.service`），**不要**手动 `python web/server.py`。2026-09-28 事故：9月23 手动起的一个实例占住 5800 端口，systemd 单元因此空转重启 82049 次；那个孤儿进程还持着 SQLite 写锁，此后**所有** cron run 都在写 `run_summary` 时 `database is locked` 静默失败（管线实际瘫痪近 20 小时）。排查：`fuser -v data/inkcal.db` 看谁持锁、`systemctl --user status inkcal-web.service` 看 restart 计数。
 3. `inkcal run` 有 flock 互斥锁（`data/inkcal-run.lock`）：Luna harness 一轮可跑 ~11 分钟，超过 cron 10 分钟间隔时重叠 run 会直接退出，防止重复入库与孤儿审计决策。若锁残留（进程被 kill -9），手动删除 lockfile 即可。
 4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。**判定线默认 0.35**：2026-09-27 由 0.5 下调（基础模型对中餐/米饭类漏检严重，当晚晚餐照仅 0.436 被误杀并永久进 `classified_non_food`），标定依据是当时近两周 175 张拒收样本的 Gemini 真值标注。
-   **2026-10-02 改成环境变量 `FOOD_THRESHOLD`（默认 0.35），且每次分类现取**，改 `.env` 后不用重启即生效（长驻的 Flask 进程启动时 `load_dotenv()` 只快照一次，所以实现是直接回读 `.env` 文件；非法值回退默认并告警，避免把 `45` 当成 45 而静默判掉全部照片）。回归：`scripts/test_food_threshold.py`。
+   **2026-10-02 改成环境变量 `FOOD_THRESHOLD`（默认 0.35），且每次分类时现取**：实现是直接回读 `.env` 文件（不是只读 `os.environ`——长驻进程启动时 `load_dotenv()` 只快照一次，只读环境变量会需要重启）。注意分类**只在管线里跑**（`inkcal run`，cron 每 10 分钟一个全新进程），Web 路径不跑 SigLIP2，所以实际**生效延迟 = 下一次 cron（≤10 分钟）**。非法值回退默认并告警，避免把 `45` 当成 45 而静默判掉全部照片。回归：`scripts/test_food_threshold.py`。
    **2026-10-02 复核结论：不要往上调**。对 130 张重新打分（50 张漏放的非食物 + 80 张真食物，同一缩略图同一模型）：非食物中位数 **0.782**、真食物 **0.791**，两组几乎完全重叠，漏放样本里低于 0.35 的有 0 张、低于 0.5 的仅 2 张。调到 0.55 只能拦住 9/50，却要误杀 12/80 真餐。漏放的都是截图、自拍、菜单、毛绒玩具这类「食物相关但不是真餐」的图，模型确实给高分——靠 Luna/Gemini 的 skip 契约兜底才是有效路径（那 50 张全部被正确拦掉，没有一条垃圾记录进库，代价只是白跑一次调用）。真想减少噪音，杠杆在上游按「截图」过滤，不在阈值。
 5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
 6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
