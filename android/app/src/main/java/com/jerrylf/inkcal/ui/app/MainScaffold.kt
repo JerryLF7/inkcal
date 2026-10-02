@@ -18,7 +18,7 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.jerrylf.inkcal.ui.calo.CaloScreen
-import com.jerrylf.inkcal.ui.records.RecordsScreen
+import com.jerrylf.inkcal.ui.records.RecordsTab
 import com.jerrylf.inkcal.ui.settings.SettingsScreen
 import kotlinx.serialization.Serializable
 
@@ -73,7 +73,7 @@ fun MainScaffold(version: String, viewModel: AppViewModel) {
       modifier = Modifier.padding(inner),
       entryProvider =
         entryProvider {
-          entry<RecordsRoute> { RecordsScreen() }
+          entry<RecordsRoute> { RecordsTab() }
           entry<CaloRoute> { CaloScreen() }
           entry<SettingsRoute> { SettingsScreen(version = version, appViewModel = viewModel) }
         },

@@ -93,6 +93,10 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
   private val _toast = MutableStateFlow<String?>(null)
   val toast: StateFlow<String?> = _toast.asStateFlow()
 
+  /** 月视图跳过来的目标日期；日视图滚动到位后清空。 */
+  private val _scrollTarget = MutableStateFlow<String?>(null)
+  val scrollTarget: StateFlow<String?> = _scrollTarget.asStateFlow()
+
   /** 跨分片累积的原始记录，是 groups 的唯一来源，也是写缓存的内容。 */
   private var loadedRecords: List<RecordDto> = emptyList()
   private var burns: Map<String, BurnDto> = emptyMap()
@@ -124,23 +128,45 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
     val current = _state.value
     if (current.initialLoading || current.refreshing || current.loadingMore || current.atEnd) return
     val earliest = earliestLoaded ?: return
+    viewModelScope.launch { loadMoreSync(earliest) }
+  }
 
+  /**
+   * 月视图点了某天要跳到日视图：先把范围一格格往前拉，直到覆盖该日期。
+   *
+   * 上限 60 片（约一年多）兜底，避免日期非法或服务端异常时无限循环。
+   */
+  fun jumpTo(date: String) {
     viewModelScope.launch {
-      val mine = ++seq
-      _state.update { it.copy(loadingMore = true) }
-      val end = TimeFmt.minusDays(earliest, 1)
-      val start = TimeFmt.minusDays(end, CHUNK_DAYS - 1)
-      try {
-        val resp = repo.recordsInRange(start, end)
-        if (mine != seq) return@launch
-        loadedRecords = loadedRecords + resp.records
-        burns = burns + resp.burns
-        earliestLoaded = start
-        publishResult()
-      } catch (e: Exception) {
-        if (mine != seq) return@launch
-        _state.update { it.copy(loadingMore = false, error = friendly(e)) }
+      var guard = 0
+      while (true) {
+        val earliest = earliestLoaded ?: break
+        if (earliest <= date || _state.value.atEnd || guard++ >= 60) break
+        loadMoreSync(earliest)
       }
+      _scrollTarget.value = date
+    }
+  }
+
+  fun consumeScrollTarget() {
+    _scrollTarget.value = null
+  }
+
+  private suspend fun loadMoreSync(earliest: String) {
+    val mine = ++seq
+    _state.update { it.copy(loadingMore = true) }
+    val end = TimeFmt.minusDays(earliest, 1)
+    val start = TimeFmt.minusDays(end, CHUNK_DAYS - 1)
+    try {
+      val resp = repo.recordsInRange(start, end)
+      if (mine != seq) return
+      loadedRecords = loadedRecords + resp.records
+      burns = burns + resp.burns
+      earliestLoaded = start
+      publishResult()
+    } catch (e: Exception) {
+      if (mine != seq) return
+      _state.update { it.copy(loadingMore = false, error = friendly(e)) }
     }
   }
 

@@ -63,6 +63,10 @@ object TimeFmt {
   fun minusDays(date: String, days: Long): String =
     runCatching { LocalDate.parse(date).minusDays(days).toString() }.getOrDefault(date)
 
+  /** 日期往后推 n 天。 */
+  fun plusDays(date: String, days: Long): String =
+    runCatching { LocalDate.parse(date).plusDays(days).toString() }.getOrDefault(date)
+
   /**
    * Material DatePicker 收发的毫秒数按 **UTC 午夜** 定义。
    *

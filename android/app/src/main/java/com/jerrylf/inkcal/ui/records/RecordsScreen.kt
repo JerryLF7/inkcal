@@ -15,8 +15,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -33,44 +31,31 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jerrylf.inkcal.data.RecordDto
 import com.jerrylf.inkcal.domain.Decisions
 import com.jerrylf.inkcal.domain.TimeFmt
 
-/** 日视图时间轴，对应 docs/android-app-spec.md §8.1；详情见 §8.4。 */
+/**
+ * 日视图时间轴，对应 docs/android-app-spec.md §8.1。
+ *
+ * 详情弹窗、Snackbar、写操作都在 [RecordsTab] 那一层——周/月视图的卡片也要能进详情，
+ * 放在这里会让三个视图各需一份。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
+fun RecordsScreen(
+  viewModel: RecordsViewModel,
+  scrollTarget: String?,
+  onScrollHandled: () -> Unit,
+  onOpenDetail: (RecordDto) -> Unit,
+) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   val bmr by viewModel.bmr.collectAsStateWithLifecycle()
   val baseUrl by viewModel.baseUrl.collectAsStateWithLifecycle()
-  val detailAnchor by viewModel.detailAnchor.collectAsStateWithLifecycle()
   val decisionsByDate by viewModel.decisionsByDate.collectAsStateWithLifecycle()
-  val busy by viewModel.busy.collectAsStateWithLifecycle()
-  val toast by viewModel.toast.collectAsStateWithLifecycle()
 
   val listState = rememberLazyListState()
-  val snackbarHostState = remember { SnackbarHostState() }
   val today = remember { TimeFmt.hktToday() }
-
-  val allRecords = remember(state.groups) { state.groups.flatMap { it.records } }
-
-  // 详情渲染的就是列表状态里的那份记录，所以写操作后重拉列表，详情自动跟着变
-  val detailRecord = detailAnchor?.let { anchor -> allRecords.firstOrNull { it.assetId == anchor } }
-
-  LaunchedEffect(toast) {
-    toast?.let {
-      snackbarHostState.showSnackbar(it)
-      viewModel.consumeToast()
-    }
-  }
-
-  // 组没了（整餐被删、或单张移除后只剩这张）就收起详情。
-  // busy 期间不判：单张移除会把锚点切到晋升的新主行，那一刻它还没出现在列表里。
-  LaunchedEffect(detailAnchor, allRecords, busy) {
-    if (!busy && detailAnchor != null && detailRecord == null && allRecords.isNotEmpty()) {
-      viewModel.closeDetail()
-    }
-  }
 
   // 每个日期头在扁平列表里的下标，用来把「第一个可见项」映射回日期
   val headerDates: List<Pair<Int, String>> =
@@ -94,6 +79,15 @@ fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
   }
   LaunchedEffect(nearEnd, state.atEnd, state.groups.size) {
     if (nearEnd && !state.atEnd && state.groups.isNotEmpty()) viewModel.loadMore()
+  }
+
+  // 月视图点某天后滚到那一天。目标日期可能没有记录（点了空白天），
+  // 那就退到不晚于它的最近一天；headerDates 是日期倒序，第一个命中的就是最近的。
+  LaunchedEffect(scrollTarget, headerDates) {
+    val target = scrollTarget ?: return@LaunchedEffect
+    val index = headerDates.firstOrNull { it.second <= target }?.first ?: return@LaunchedEffect
+    listState.scrollToItem(index)
+    onScrollHandled()
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
@@ -175,7 +169,7 @@ fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
                     record = record,
                     baseUrl = baseUrl,
                     hasDecision = Decisions.forRecord(record, dayDecisions).isNotEmpty(),
-                    onClick = { viewModel.openDetail(record) },
+                    onClick = { onOpenDetail(record) },
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                   )
                 }
@@ -200,25 +194,7 @@ fun RecordsScreen(viewModel: RecordsViewModel = viewModel()) {
           }
         }
       }
-
-      SnackbarHost(
-        hostState = snackbarHostState,
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
-      )
     }
-  }
-
-  if (detailRecord != null) {
-    MealDetailDialog(
-      record = detailRecord,
-      baseUrl = baseUrl,
-      decisions = decisionsByDate[TimeFmt.dateOf(detailRecord.photoTime)].orEmpty(),
-      busy = busy,
-      onClose = viewModel::closeDetail,
-      onDeleteMeal = { viewModel.delete(detailRecord.assetId, photoOnly = false) },
-      onDeletePhoto = { assetId -> viewModel.delete(assetId, photoOnly = true) },
-      onReanalyze = { notes -> viewModel.reanalyze(detailRecord.assetId, notes) },
-    )
   }
 }
 
