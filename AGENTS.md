@@ -163,6 +163,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - 发布前升版本：`versionName` 与 `versionCode` 一起升（`0.1/1` → `0.2/2`），tag 会自动跟着 `versionName` 走。
 - **仓库已转 public（2026-10-02，为了配合 Obtainium 自动更新）**，所以 release 资源匿名可下：`curl -sIL https://github.com/JerryLF7/inkcal/releases/download/<tag>/inkcal-<version>.apk` 应返回 302 → 200。Obtainium 走的是匿名 `api.github.com/repos/JerryLF7/inkcal/releases/latest`，因此 release **必须保持非 prerelease**，否则它拿不到。验证也用 `gh release download <tag> -p inkcal-<version>.apk`。用户自己装 APK 测试，agent 无法点真机。
 - 转 public 的副作用：仓库里的内网地址（`android/app/src/main/res/xml/network_security_config.xml`、`scripts/burn_sources/heytap_ui.py`、`main.py` 与 `.env.example` 的 Immich 默认地址）对外可见。已确认**历史里没有任何真密钥或数据**（`.env`/keystore/`data/` 从未提交，全历史扫 `AIza`/`ghp_`/`PRIVATE KEY` 零命中）。注意把 IP 从仓库删掉并不等于隐藏——它已经编译进 APK，而 APK 现在是匿名可下载的。
+- **2026-10-02 做过一次历史重写**：用 `git filter-repo --replace-text <map> --replace-message <map>` 把四个真实地址（两个内网、一个 Tailscale、一个公网入口）在所有提交的内容**和提交信息**里替换成占位符，然后 force-push。**所有 2026-10-02 之前的 SHA 都变了**，旧克隆需要 `git fetch && git reset --hard origin/master`。重写前的完整镜像备份在 `~/inkcal-backup-before-scrub.git`（确认无碍后可删）。
+- 教训：`--replace-text` **只改文件内容，不改提交信息**。第一次重写漏掉了两处写在 commit message 里的地址，靠全历史 `git log --format=%B` 扫描才发现。**以后写提交信息也不要贴真实地址或主机名**，否则下次清理要重写两遍。另外 `filter-repo` 会在 `.git/filter-repo/already_ran` 留标记，旧于一天再跑会弹交互确认，在无 TTY 环境会 EOF 退出——删掉该目录即可按全新运行。
 
 明文 HTTP：Android 从 targetSdk 28 起默认禁明文。**这里不放地址白名单**——白名单要求把真实域名/IP 写进仓库和 APK，而 APK 是公开下载的，等于把内网拓扑一起发出去；而且 `network-security-config` 不支持网段，每换一次地址都得改代码重新发版（早期版本就是这么做的，用户因此撞过一次 `CLEARTEXT communication ... not permitted`）。当前 `android/app/src/main/res/xml/network_security_config.xml` 是 `cleartextTrafficPermitted="true"`，为的是兼容只有 HTTP 的自建服务；**服务器上了 HTTPS 之后应该把它改成 `false` 收紧**（改完要重新构建发版）。
 
