@@ -161,8 +161,8 @@ def _run_source(
     run_id: str = "",
 ):
     """Run the full pipeline for a single photo source."""
-    # 判定线在 cmd_run 里 import 会只落在那个函数作用域，这里必须自己取一次。
-    from src.food_detector import FOOD_THRESHOLD, GREY_ZONE
+    # 判定线每次现取（不是模块常量）：改 .env 后不用重启就生效。
+    from src.food_detector import food_threshold, GREY_ZONE_WIDTH
 
     if source == "immich":
         from src.immich_client import ImmichClient, format_photo_time
@@ -236,10 +236,12 @@ def _run_source(
         logger.info("  🔍 检测 [%s...] (拍摄于 %s)", aid[:8], photo_time)
 
         score = detector.score(thumb)
-        if score < FOOD_THRESHOLD:
-            logger.info("  ❌ 不是食物，跳过")
+        # 每张照片取一次，同一次判定里的两条比较用同一个值，避免读两次拿到不同结果
+        threshold = food_threshold()
+        if score < threshold:
+            logger.info("  ❌ 不是食物，跳过（%.3f < %.2f）", score, threshold)
             db.add_classified_non_food(aid, decided_by="siglip2")
-            if score >= GREY_ZONE:  # grey zone — worth a human look
+            if score >= threshold - GREY_ZONE_WIDTH:  # grey zone — worth a human look
                 db.add_event(run_id, "classifier_unsure", aid,
                              {"score": round(score, 3)})
             continue

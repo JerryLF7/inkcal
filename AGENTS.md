@@ -63,6 +63,7 @@ cd android && ./gradlew :app:assembleRelease   # 产物 app/build/outputs/apk/re
 cd android && ./gradlew :app:testDebugUnitTest
 
 # 现有回归与语法检查
+PYTHONPATH=. venv/bin/python scripts/test_food_threshold.py
 PYTHONPATH=. venv/bin/python scripts/test_contract_parse.py
 PYTHONPATH=. venv/bin/python scripts/test_merge_groups.py
 PYTHONPATH=. venv/bin/python scripts/test_lightbox_smoke.py
@@ -91,7 +92,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `main.py` | CLI 入口：run/view/add/edit/search/stats/delete/label/replace/analyze/reanalyze/explain/events/merge 等；`_run_agent_batch` 负责 cron 侧 Luna 决策落地（含同餐分组与 update 幂等） |
 | `src/db.py` | SQLite schema 与全部数据访问；WAL、FTS、records、审计、chat 表 |
 | `src/immich_client.py` / `src/photoprism_client.py` | 照片源客户端与时间解析 |
-| `src/food_detector.py` | SigLIP2 本地过滤（仅基础模型）；判定线 `FOOD_THRESHOLD`（唯一来源，当前 0.35）与擦边区 `GREY_ZONE` 在此定义 |
+| `src/food_detector.py` | SigLIP2 本地过滤（仅基础模型）；判定线由 `food_threshold()` / `grey_zone()` **每次调用现取**（读 `.env` 的 `FOOD_THRESHOLD`，默认 0.35），不是模块常量——改配置不用重启 |
 | `src/calorie_analyzer.py` | Gemini/OpenAI-compatible 视觉估算 |
 | `src/prompts/` | 提示词模板 `analyze.md` / `reanalyze.md` / `analyze_text.md`，`loader.py` 只做 `read_text`（2026-09-30 起无用户覆盖层、无内联兜底，文件缺失直接报错；改提示词就改仓库里的 `.md`） |
 | `src/pipeline_ops.py` | CLI 和 Web 共用的强制分析/重新分析业务路径；`analyze_asset` 也是 cron 降级路径（`main._legacy_analyze_single`）的唯一实现，记录行组装统一走 `_build_record`（`main.append_log` 亦委托它），`analyzer=` 参数可复用 cron 的共享 Gemini 客户端 |
@@ -402,12 +403,14 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 1. 仅使用 venv Python；系统 Python 缺 `pillow-heif`、`imagehash`、Gemini 相关依赖，上传可能表面成功、实际失败。
 2. **Web server 只由用户级 systemd 单元 `inkcal-web.service` 管理**（`systemctl --user restart inkcal-web.service`），**不要**手动 `python web/server.py`。2026-09-28 事故：9月23 手动起的一个实例占住 5800 端口，systemd 单元因此空转重启 82049 次；那个孤儿进程还持着 SQLite 写锁，此后**所有** cron run 都在写 `run_summary` 时 `database is locked` 静默失败（管线实际瘫痪近 20 小时）。排查：`fuser -v data/inkcal.db` 看谁持锁、`systemctl --user status inkcal-web.service` 看 restart 计数。
 3. `inkcal run` 有 flock 互斥锁（`data/inkcal-run.lock`）：Luna harness 一轮可跑 ~11 分钟，超过 cron 10 分钟间隔时重叠 run 会直接退出，防止重复入库与孤儿审计决策。若锁残留（进程被 kill -9），手动删除 lockfile 即可。
-4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。**判定线 2026-09-27 由 0.5 下调至 0.35**（`src/food_detector.py::FOOD_THRESHOLD`）：基础模型对中餐/米饭类漏检严重（当晚晚餐照仅 0.436 被误杀并永久进 `classified_non_food`）。标定依据为近两周 175 张拒收样本的 Gemini 真值标注——≥0.4 段真食物占 36%、0.3~0.4 占 33%、0.2~0.3 占 21%、<0.2 仅 7%，曲线平缓，0.35 以下收益快速衰减。代价是多放少量非食物进 Luna，由 Luna skip 契约兜底。
+4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。**判定线默认 0.35**：2026-09-27 由 0.5 下调（基础模型对中餐/米饭类漏检严重，当晚晚餐照仅 0.436 被误杀并永久进 `classified_non_food`），标定依据是当时近两周 175 张拒收样本的 Gemini 真值标注。
+   **2026-10-02 改成环境变量 `FOOD_THRESHOLD`（默认 0.35），且每次分类现取**，改 `.env` 后不用重启即生效（长驻的 Flask 进程启动时 `load_dotenv()` 只快照一次，所以实现是直接回读 `.env` 文件；非法值回退默认并告警，避免把 `45` 当成 45 而静默判掉全部照片）。回归：`scripts/test_food_threshold.py`。
+   **2026-10-02 复核结论：不要往上调**。对 130 张重新打分（50 张漏放的非食物 + 80 张真食物，同一缩略图同一模型）：非食物中位数 **0.782**、真食物 **0.791**，两组几乎完全重叠，漏放样本里低于 0.35 的有 0 张、低于 0.5 的仅 2 张。调到 0.55 只能拦住 9/50，却要误杀 12/80 真餐。漏放的都是截图、自拍、菜单、毛绒玩具这类「食物相关但不是真餐」的图，模型确实给高分——靠 Luna/Gemini 的 skip 契约兜底才是有效路径（那 50 张全部被正确拦掉，没有一条垃圾记录进库，代价只是白跑一次调用）。真想减少噪音，杠杆在上游按「截图」过滤，不在阈值。
 5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
 6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
 6b. **变更 FTS 虚拟表结构（重建 `records_fts`、改触发器）必须先停 Flask server 再迁移**。2026-09-13 在 server 运行中重建 FTS5 虚拟表，导致跨表写入触发器损坏（UPDATE 触发 FTS 写入报 `database disk image is malformed`，表本身 quick_check 却 OK，热修无效）。最终走「干净导出业务表 → 全新 init_db → 导入 → 重建 FTS」无损恢复。加列（`ALTER TABLE ADD COLUMN`）类迁移可在线做，重建虚拟表/触发器不行。
 7. 旧 JSON→SQLite 迁移已完成，`inkcal migrate`、`db.migrate_from_json` 与 `scripts/migrate_to_sqlite.py` 于 2026-09-30 删除；项目也不再做 skill 适配（`SKILL.md`、`usage.md` 已删），文档入口仅 `AGENTS.md` 与 `README.md`；根目录 `scan.py` 与 4 个打真实 Luna 网关的事故复现脚本（`test_pipeline_reproduce_21` / `test_luna_lunch` / `test_luna_cron_two_photos` / `test_luna_cache`）同日删除，保留的回归以 §2 命令清单为准；`DEVELOPMENT.md` 已于同日删除，仍有效的选型与踩坑并入 §7「选型与设计沿革」。
-8. **SigLIP2 微调路线已放弃**（2026-09-27）：检测器只加载 HuggingFace 基础模型，`data/finetuned-model/` 与 `~/Coding/food-classifier/` 的加载链路已从代码和文档中删除，不要再接回来；漏检靠调 `FOOD_THRESHOLD` 与“选择照片”兜底。
+8. **SigLIP2 微调路线已放弃**（2026-09-27）：检测器只加载 HuggingFace 基础模型，`data/finetuned-model/` 与 `~/Coding/food-classifier/` 的加载链路已从代码和文档中删除，不要再接回来；漏检靠“选择照片”兜底（阈值可调，但见第 4 条的复核结论：调高救不回漏检）。
 9. **Luna 网关静默忽略 `previous_response_id`**（详见 §5）。症状是聊天"失忆"或批处理悄悄降级回 Gemini，**不报错**。换 endpoint 后必须实测：带 `previous_response_id` 问上一轮内容 + 确认图片进缓存，再看 `agent_decisions` 是否有新行。模型 id 也用连字符形式（`gpt-5-6-luna`），点号形式会被上游拒为 `unknown provider for model`。
 10. **cron 的 stdout/stderr 不落盘**（无 `MAILTO`、无 mail spool），run 崩溃或写库失败只会表现为"照片不进来"，没有任何报错。排查入口：`pipeline_events` 里 `run_summary` 是否按 10 分钟断档、`data/inkcal-run.lock` 的 PID 是否已死、`journalctl --user -u inkcal-web.service`。无副作用复现：`inkcal run --date <一个没有照片的日期>`（会真的写 1 条 run_summary 事件与若干 `classified_non_food`）。
 
