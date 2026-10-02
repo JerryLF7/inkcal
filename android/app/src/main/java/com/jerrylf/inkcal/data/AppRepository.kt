@@ -4,6 +4,7 @@ import com.jerrylf.inkcal.domain.ServerUrl
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import retrofit2.HttpException
 import java.util.concurrent.TimeUnit
@@ -138,4 +139,18 @@ class AppRepository(
   /** mode 取 "meal"（整餐级联）或 "photo"（仅一张）。 */
   suspend fun deleteRecord(assetId: String, mode: String): DeleteRecordResponse =
     call { it.deleteRecord(DeleteRecordRequest(assetId = assetId, mode = mode)) }
+
+  // ── 相册选择与本地上传（spec §8.5）─────────────────────────────
+
+  suspend fun albumPhotos(cursor: String, days: Int): AlbumPhotosResponse =
+    call { it.albumPhotos(cursor, days) }
+
+  suspend fun analyzeAlbumPhotos(items: List<AnalyzeItem>): AnalyzeResponse =
+    call { it.analyzeAlbumPhoto(AnalyzeRequest(items)) }
+
+  suspend fun manualUpload(body: MultipartBody.Part): ManualUploadResponse =
+    call { it.manualUpload(body) }
+
+  suspend fun moveRecord(assetId: String, date: String): MoveRecordResponse =
+    call { it.moveRecord(MoveRecordRequest(assetId = assetId, date = date)) }
 }

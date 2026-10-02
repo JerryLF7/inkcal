@@ -5,14 +5,17 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.HTTP
+import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.PUT
+import retrofit2.http.Part
 import retrofit2.http.Query
 
 /**
@@ -45,6 +48,26 @@ interface InkcalApi {
 
   @GET("api/decisions")
   suspend fun decisions(@Query("date") date: String): DecisionsResponse
+
+  /** 未处理的相册照片，按天分页。cursor 缺省今天，days 1–30。 */
+  @GET("api/album-photos")
+  suspend fun albumPhotos(
+    @Query("cursor") cursor: String,
+    @Query("days") days: Int,
+  ): AlbumPhotosResponse
+
+  /** 单张走旧契约、多张走 results/summary，见 [AnalyzeResponse]。 */
+  @POST("api/analyze-album-photo")
+  suspend fun analyzeAlbumPhoto(@Body body: AnalyzeRequest): AnalyzeResponse
+
+  /** 本地上传：multipart，字段名必须是 image。 */
+  @Multipart
+  @POST("api/manual-upload")
+  suspend fun manualUpload(@Part image: MultipartBody.Part): ManualUploadResponse
+
+  /** 无 EXIF 时把已入库的记录挪到用户选的日期。 */
+  @POST("api/move-record")
+  suspend fun moveRecord(@Body body: MoveRecordRequest): MoveRecordResponse
 
   @POST("api/reanalyze")
   suspend fun reanalyze(@Body body: ReanalyzeRequest): ReanalyzeResponse

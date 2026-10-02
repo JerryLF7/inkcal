@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jerrylf.inkcal.domain.Periods
+import com.jerrylf.inkcal.ui.picker.PhotoPickerScreen
 import com.jerrylf.inkcal.domain.TimeFmt
 
 private enum class RecordsMode(val label: String) {
@@ -60,6 +62,7 @@ fun RecordsTab(
   var mode by rememberSaveable { mutableStateOf(RecordsMode.Day) }
   var monday by rememberSaveable { mutableStateOf(Periods.mondayOf(TimeFmt.hktToday())) }
   var monthAnchor by rememberSaveable { mutableStateOf(Periods.monthStart(TimeFmt.hktToday())) }
+  var showPicker by rememberSaveable { mutableStateOf(false) }
 
   val baseUrl by dayViewModel.baseUrl.collectAsStateWithLifecycle()
   val dayState by dayViewModel.state.collectAsStateWithLifecycle()
@@ -95,17 +98,25 @@ fun RecordsTab(
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
-    SingleChoiceSegmentedButtonRow(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      RecordsMode.entries.forEachIndexed { index, item ->
-        SegmentedButton(
-          selected = mode == item,
-          onClick = { mode = item },
-          shape = SegmentedButtonDefaults.itemShape(index = index, count = RecordsMode.entries.size),
-        ) {
-          Text(item.label)
+      SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
+        RecordsMode.entries.forEachIndexed { index, item ->
+          SegmentedButton(
+            selected = mode == item,
+            onClick = { mode = item },
+            shape = SegmentedButtonDefaults.itemShape(index = index, count = RecordsMode.entries.size),
+          ) {
+            Text(item.label)
+          }
         }
+      }
+      // 三个视图都要能进选择照片，所以放在这层而不是各自的标题栏里
+      IconButton(onClick = { showPicker = true }) {
+        Icon(Icons.Filled.Add, contentDescription = "选择照片")
       }
     }
 
@@ -197,6 +208,17 @@ fun RecordsTab(
       onReanalyze = { notes ->
         rangeViewModel.invalidate()
         dayViewModel.reanalyze(detailRecord.assetId, notes)
+      },
+    )
+  }
+
+  if (showPicker) {
+    PhotoPickerScreen(
+      onDismiss = { showPicker = false },
+      // 加完不关窗：可以接着选下一餐；时间轴在后台先刷新
+      onAdded = {
+        rangeViewModel.invalidate()
+        dayViewModel.refresh()
       },
     )
   }

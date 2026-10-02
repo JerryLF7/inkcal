@@ -1,5 +1,6 @@
 package com.jerrylf.inkcal.data
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -179,3 +180,102 @@ data class DeleteRecordResponse(
 /** 服务端出错时统一是 `{"error": "..."}`。 */
 @Serializable
 data class ErrorDto(val error: String = "")
+
+// ── 相册选择（spec §8.5a）─────────────────────────────────────────
+
+@Serializable
+data class AlbumPhotoDto(
+  val assetId: String = "",
+  val thumbnailUrl: String = "",
+  val photoTime: String = "",
+  val source: String = "",
+  /** true 的照片必须置灰不可选：SigLIP2 已判为非食物。 */
+  val classifiedNonFood: Boolean = false,
+)
+
+@Serializable
+data class AlbumDayDto(
+  val date: String = "",
+  val photos: List<AlbumPhotoDto> = emptyList(),
+)
+
+/** GET /api/album-photos —— 只含有照片的日期，没照片的日子整个不出现。 */
+@Serializable
+data class AlbumPhotosResponse(
+  val dates: List<AlbumDayDto> = emptyList(),
+  val nextCursor: String = "",
+)
+
+@Serializable
+data class AnalyzeItem(
+  val assetId: String,
+  val source: String,
+  val date: String = "",
+  val thumbnailUrl: String = "",
+  val photoTime: String = "",
+)
+
+@Serializable
+data class AnalyzeRequest(val items: List<AnalyzeItem>)
+
+@Serializable
+data class AnalyzeResult(
+  val assetId: String = "",
+  /** ok / already_processed / not_food / analysis_failed / error */
+  val status: String = "",
+  val date: String = "",
+  val detail: String? = null,
+  val record: RecordDto? = null,
+)
+
+@Serializable
+data class AnalyzeSummary(
+  val total: Int = 0,
+  val added: Int = 0,
+  val alreadyProcessed: Int = 0,
+  val notFood: Int = 0,
+  val failed: Int = 0,
+)
+
+/**
+ * POST /api/analyze-album-photo 的响应。
+ *
+ * **单张和多张返回的结构不一样**：单张沿用旧契约 `{ok, record, date}`（错误时是 HTTP 4xx），
+ * 多张才返回 `{ok, results, summary}`。所以这里把两套字段都收着，由
+ * [normalizedResults] 抹平。
+ */
+@Serializable
+data class AnalyzeResponse(
+  val ok: Boolean = false,
+  val record: RecordDto? = null,
+  val date: String = "",
+  val results: List<AnalyzeResult> = emptyList(),
+  val summary: AnalyzeSummary? = null,
+) {
+  val normalizedResults: List<AnalyzeResult>
+    get() =
+      if (results.isNotEmpty()) results
+      else if (record != null) listOf(AnalyzeResult(status = "ok", date = date, record = record))
+      else emptyList()
+}
+
+// ── 本地上传（spec §8.5b）────────────────────────────────────────
+
+@Serializable
+data class ManualUploadResponse(
+  val ok: Boolean = false,
+  val record: RecordDto? = null,
+  val matched: Boolean = false,
+  val date: String = "",
+  /** exif / user / fallback：fallback 表示没读到拍摄时间，用了当天兜底，要提示用户改。 */
+  @SerialName("_date_source") val dateSource: String = "",
+)
+
+@Serializable
+data class MoveRecordRequest(val assetId: String, val date: String)
+
+@Serializable
+data class MoveRecordResponse(
+  val ok: Boolean = false,
+  val assetId: String = "",
+)
