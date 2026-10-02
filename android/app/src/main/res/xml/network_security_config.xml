@@ -1,21 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  默认只允许 HTTPS。局域网直连 inkcal 走的是明文 HTTP，所以逐个列出私网地址放行，
-  而不是全局打开 cleartext。
+  服务器地址由用户在 App 里填写，所以这里**不做地址白名单**：白名单要求把真实域名/IP
+  写进仓库和 APK，而 APK 是公开下载的，等于把内网拓扑一起发出去；而且
+  network-security-config 不支持网段，换地址就得改代码重新发版。
 
-  换服务器地址（局域网 IP 变了、或换一台机器）时，要在这里加一行并重新构建——
-  network-security-config 不支持网段（CIDR），只能逐个写。走 HTTPS 的反代域名不用加。
+  cleartextTrafficPermitted 目前是 true，因为自建服务可能只有 HTTP（反代只做转发
+  没上 TLS）。**如果服务器已经上了 HTTPS，把这里改成 false 收紧**——改完要重新构建。
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <!-- NUC 局域网地址 -->
-        <domain includeSubdomains="false">your-server-host</domain>
-        <!-- NUC 的 Tailscale 地址 -->
-        <domain includeSubdomains="false">your-tailscale-host</domain>
-        <!-- 公网入口（裸 TCP 转发到 NUC 的 5800） -->
-        <domain includeSubdomains="false">your-public-host</domain>
-        <domain includeSubdomains="false">localhost</domain>
-        <domain includeSubdomains="false">10.0.2.2</domain>
-    </domain-config>
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

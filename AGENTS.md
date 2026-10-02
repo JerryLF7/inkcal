@@ -139,7 +139,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.5，2026-10-02）：三 Tab 骨架 + 服务器配置向导 + 登录/登出（含**使用中会话失效**自动回登录页）+ **记录页日视图**（时间轴无限下拉、日期吸顶汇总含缺口 chip、餐卡含缩略图/×N/🤖 角标/emoji 占位/P·C·F、下拉刷新、磁盘缓存冷启动秒开）+ **餐卡详情**（全屏画廊含双指缩放与多图翻页、照片明细按形态 A/B 区分显示、🤖 AI 决策折叠块、组级重新分析、整餐删除与单张移除两步确认）+ **设置页**（体征参数与 BMR、Calo 上下文窗口、服务器分组）。`domain/` 纯函数（TimeFmt / Tdee / ImageUrl / MealGrouping / Decisions / BodyMetrics / ServerUrl）与 `RecordsCache` 共 46 个 JVM 单测。**周视图、月视图、选择照片、Calo 页仍未做**，按 `docs/android-app-spec.md` §15 顺序往下做。包名 `com.jerrylf.inkcal`。
+当前状态（0.6，2026-10-02）：三 Tab 骨架 + 服务器配置向导 + 登录/登出（含**使用中会话失效**自动回登录页）+ **记录页日视图**（时间轴无限下拉、日期吸顶汇总含缺口 chip、餐卡含缩略图/×N/🤖 角标/emoji 占位/P·C·F、下拉刷新、磁盘缓存冷启动秒开）+ **餐卡详情**（全屏画廊含双指缩放与多图翻页、照片明细按形态 A/B 区分显示、🤖 AI 决策折叠块、组级重新分析、整餐删除与单张移除两步确认）+ **设置页**（体征参数与 BMR、Calo 上下文窗口、服务器分组）。`domain/` 纯函数（TimeFmt / Tdee / ImageUrl / MealGrouping / Decisions / BodyMetrics / ServerUrl）与 `RecordsCache` 共 46 个 JVM 单测。**周视图、月视图、选择照片、Calo 页仍未做**，按 `docs/android-app-spec.md` §15 顺序往下做。包名 `com.jerrylf.inkcal`。
+
+0.6 是非功能性版本：去掉 `network_security_config` 里的真实地址白名单（见上文），仓库转 public，并清理了源码/文档/APK 里的内网地址。功能与 0.5 相同。
 
 详情页刻意用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本。组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
 
@@ -162,7 +164,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **仓库已转 public（2026-10-02，为了配合 Obtainium 自动更新）**，所以 release 资源匿名可下：`curl -sIL https://github.com/JerryLF7/inkcal/releases/download/<tag>/inkcal-<version>.apk` 应返回 302 → 200。Obtainium 走的是匿名 `api.github.com/repos/JerryLF7/inkcal/releases/latest`，因此 release **必须保持非 prerelease**，否则它拿不到。验证也用 `gh release download <tag> -p inkcal-<version>.apk`。用户自己装 APK 测试，agent 无法点真机。
 - 转 public 的副作用：仓库里的内网地址（`android/app/src/main/res/xml/network_security_config.xml`、`scripts/burn_sources/heytap_ui.py`、`main.py` 与 `.env.example` 的 Immich 默认地址）对外可见。已确认**历史里没有任何真密钥或数据**（`.env`/keystore/`data/` 从未提交，全历史扫 `AIza`/`ghp_`/`PRIVATE KEY` 零命中）。注意把 IP 从仓库删掉并不等于隐藏——它已经编译进 APK，而 APK 现在是匿名可下载的。
 
-局域网明文 HTTP：Android 从 targetSdk 28 起默认禁明文，`android/app/src/main/res/xml/network_security_config.xml` 逐个列出了放行的地址（NUC 局域网 IP `your-server-host`、Tailscale `your-tailscale-host`、公网入口 `your-public-host`、localhost、10.0.2.2），**不全局放开**。换服务器地址而 IP 不在表里时，App 会直接报 `CLEARTEXT communication ... not permitted`，需要改这个文件并重新构建发版（该配置不支持网段）。这是用户已知的、明确接受的代价；若嫌烦，可改成全局放开——本项目 App 只连用户自己填的地址，白名单的实际防护收益有限。
+明文 HTTP：Android 从 targetSdk 28 起默认禁明文。**这里不放地址白名单**——白名单要求把真实域名/IP 写进仓库和 APK，而 APK 是公开下载的，等于把内网拓扑一起发出去；而且 `network-security-config` 不支持网段，每换一次地址都得改代码重新发版（早期版本就是这么做的，用户因此撞过一次 `CLEARTEXT communication ... not permitted`）。当前 `android/app/src/main/res/xml/network_security_config.xml` 是 `cleartextTrafficPermitted="true"`，为的是兼容只有 HTTP 的自建服务；**服务器上了 HTTPS 之后应该把它改成 `false` 收紧**（改完要重新构建发版）。
 
 ---
 
@@ -278,6 +280,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 - **体征参数与 BMR（2026-09-23）**：`app_settings` 存 `user_height`/`user_weight`/`user_birthdate`/`user_gender`；`db.compute_bmr()` 用 Mifflin-St Jeor（男 +5 / 女 −161，年龄按 HKT 当日动态算），`db.get_user_bmr()` 聚合；`PUT /api/settings` 校验范围（身高 50–260、体重 20–300、gender ∈ male/female、日期 `_valid_date`）且**只更新请求中出现的键**（部分更新不得 KeyError），GET 返回体征+`bmr`。
 - **设置 Tab（2026-09-23）**：`web/ui/src/components/SettingsPane.vue`——体征表单 + BMR 实时结果 + 原 Calo 滑动窗口迁移至此；`App.vue` 三 Tab（记录/Calo/设置），滑动手势在设置页禁用，桌面左栏底部固定常驻「⚙️ 设置」入口（主区原位展示设置并限宽居中，右侧 Calo 侧栏完整保留不被挤走）；Calo 齿轮按钮与弹窗已删。
 - **Cron 同步**：`0 8-23 * * *` 抓今天每小时增量更新；`0 1 * * *` 凌晨 1 点执行 `scripts/burn_sources/heytap_ui.py --yesterday` 回溯昨日终值锁定收口；均直写 `inkcal burn`，日志 `~/heytap-pull.log`。保留 `~/heytap-pull.py` 软链接兼容旧调用。
+- **adb 串口不进仓库**：脚本从 `REDROID_SERIAL` 环境变量读（默认 `127.0.0.1:5555`），实际地址写在 crontab 行首的 `REDROID_SERIAL=host:port`。仓库是公开的，写死地址等于公开内网拓扑。注意 redroid 的 5555 只发布在 LAN 地址上（回环连不上），所以必须显式传值，默认值只在 redroid 绑到本机时可用。
 - **redroid 资产归档（2026-09-24）**：全部收敛至 `~/Docker/redroid/`——compose 文件与 `.env`、`data/` 数据卷（登录态/adb_keys，`~/rd` 软链兼容）、`apk/`（官方原件 + 防截屏补丁版）、`apktool-work/` 逆向工作区、`scripts/`（post-start / hide-root / install / heyweb 等全套维护脚本）、`build/` 镜像构建工程。镜像 `redroid:14.0.0_heytap`（su 改名、release-keys、zh-CN 等文件级伪装已 `docker commit` 固化）。日常管理：`~/.local/bin/docker-compose -f ~/Docker/redroid/docker-compose.yml up -d` 之后**必须跑 `scripts/post-start.sh`**（binder 权限 + bind-ro 运行时伪装；compose 无 post-start 钩子，漏跑则欢太健康重新弹 root 框）。详见该目录 `README.md`。
 
 ### Phase 6.5：热量缺口前端展示（已实现，2026-09-24）

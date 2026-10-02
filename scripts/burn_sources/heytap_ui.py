@@ -7,6 +7,7 @@
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -15,7 +16,10 @@ import time
 from datetime import datetime, date, timedelta
 import xml.etree.ElementTree as ET
 
-SERIAL = "your-server-host:5555"
+# redroid 的 adb 串口。**不要把地址写死在这里**——仓库是公开的，写进来等于把内网
+# 拓扑一起发出去。部署方通过环境变量传入（cron 里写 REDROID_SERIAL=host:port），
+# 默认回环，仅当 redroid 把 5555 发布到本机时才可用。
+SERIAL = os.getenv("REDROID_SERIAL", "127.0.0.1:5555")
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 

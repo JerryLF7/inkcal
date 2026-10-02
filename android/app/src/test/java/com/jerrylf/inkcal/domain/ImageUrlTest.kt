@@ -5,32 +5,37 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 图片地址规则（docs/android-app-spec.md §8.4）。上游图片一律经服务端代理。 */
+/**
+ * 图片地址规则（docs/android-app-spec.md §8.4）。上游图片一律经服务端代理。
+ *
+ * 地址示例用 RFC 5737 的 TEST-NET-1（192.0.2.0/24）——它专门保留给文档和测试，
+ * 不会指向任何真实主机，避免把真实内网地址带进公开仓库。
+ */
 class ImageUrlTest {
 
-  private val base = "http://your-server-host:5800/"
+  private val base = "http://192.0.2.10:5800/"
 
   @Test
   fun `缩略图把 original 换成 thumbnail，并去掉 base 的重复斜杠`() {
     val url =
       ImageUrl.thumbnail(
         base,
-        "http://immich.local/api/assets/abc/original",
+        "http://immich.example.com/api/assets/abc/original",
       )
     assertEquals(
-      "http://your-server-host:5800/api/image?url=" +
-        "http%3A%2F%2Fimmich.local%2Fapi%2Fassets%2Fabc%2Fthumbnail%3Fsize%3Dthumbnail",
+      "http://192.0.2.10:5800/api/image?url=" +
+        "http%3A%2F%2Fimmich.example.com%2Fapi%2Fassets%2Fabc%2Fthumbnail%3Fsize%3Dthumbnail",
       url,
     )
   }
 
   @Test
   fun `库里实际存的是 size=preview，也要降到 thumbnail`() {
-    // 真实数据形态：http://your-immich-host:2283/api/assets/{id}/thumbnail?size=preview
+    // 真实数据形态：http://<immich>/api/assets/{id}/thumbnail?size=preview
     val url =
       ImageUrl.thumbnail(
         base,
-        "http://your-immich-host:2283/api/assets/a5dff55e/thumbnail?size=preview",
+        "http://192.0.2.20:2283/api/assets/a5dff55e/thumbnail?size=preview",
       )
     assertTrue("必须降级成 thumbnail", url!!.contains("size%3Dthumbnail"))
     assertTrue("不能留在 preview", !url.contains("preview"))
@@ -39,23 +44,23 @@ class ImageUrlTest {
   @Test
   fun `已经是 thumbnail 的地址不再改动`() {
     assertEquals(
-      "http://immich.local/api/assets/x/thumbnail?size=thumbnail",
-      ImageUrl.smallVariant("http://immich.local/api/assets/x/thumbnail?size=thumbnail"),
+      "http://immich.example.com/api/assets/x/thumbnail?size=thumbnail",
+      ImageUrl.smallVariant("http://immich.example.com/api/assets/x/thumbnail?size=thumbnail"),
     )
   }
 
   @Test
   fun `大图不替换 original`() {
-    val url = ImageUrl.full(base, "http://immich.local/api/assets/abc/original")
+    val url = ImageUrl.full(base, "http://immich.example.com/api/assets/abc/original")
     assertTrue(url!!.contains("abc%2Foriginal"))
     assertTrue(!url.contains("size=thumbnail"))
   }
 
   @Test
   fun `替换图优先走 local-image`() {
-    val url = ImageUrl.thumbnail(base, "http://immich.local/x/original", "/data/uploads/a b.jpg")
+    val url = ImageUrl.thumbnail(base, "http://immich.example.com/x/original", "/data/uploads/a b.jpg")
     assertEquals(
-      "http://your-server-host:5800/api/local-image?path=%2Fdata%2Fuploads%2Fa%20b.jpg",
+      "http://192.0.2.10:5800/api/local-image?path=%2Fdata%2Fuploads%2Fa%20b.jpg",
       url,
     )
   }

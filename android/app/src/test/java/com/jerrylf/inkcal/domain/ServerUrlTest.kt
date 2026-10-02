@@ -12,7 +12,7 @@ class ServerUrlTest {
 
   @Test
   fun `补齐 scheme 与结尾斜杠`() {
-    assertEquals("http://your-server-host:5800/", ServerUrl.normalize("your-server-host:5800"))
+    assertEquals("http://192.0.2.10:5800/", ServerUrl.normalize("192.0.2.10:5800"))
     assertEquals("http://example.com/", ServerUrl.normalize("http://example.com"))
     assertEquals("https://inkcal.example.com/", ServerUrl.normalize("https://inkcal.example.com/"))
   }

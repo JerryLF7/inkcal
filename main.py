@@ -99,7 +99,7 @@ def load_config():
     from dotenv import load_dotenv
     load_dotenv()
     return {
-        "immich_url": os.getenv("IMMICH_URL", "http://your-immich-host:2283"),
+        "immich_url": os.getenv("IMMICH_URL", "http://localhost:2283"),
         "immich_key": os.getenv("IMMICH_API_KEY"),
         "photoprism_url": os.getenv("PHOTOPRISM_URL", ""),
         "photoprism_key": os.getenv("PHOTOPRISM_API_KEY", ""),

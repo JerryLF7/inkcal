@@ -68,7 +68,7 @@ fun SetupScreen(state: ConnState, viewModel: AppViewModel) {
         value = urlInput,
         onValueChange = { urlInput = it },
         label = { Text("服务器地址") },
-        placeholder = { Text("http://your-server-host:5800") },
+        placeholder = { Text("https://inkcal.example.com") },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
         modifier = Modifier.fillMaxWidth(),

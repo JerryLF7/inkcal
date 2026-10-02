@@ -27,7 +27,7 @@ Luna 和 Gemini 各管一段:哪几张照片算一餐由 Luna 判断,热量数�
 需要 Python 3.11 以上,以及一个 Immich 或 PhotoPrism。
 
 ```bash
-git clone git@github.com:JerryLF7/inkcal.git
+git clone https://github.com/JerryLF7/inkcal.git
 cd inkcal
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
