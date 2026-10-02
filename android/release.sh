@@ -11,6 +11,22 @@
 set -e
 cd "$(dirname "$0")"
 
+# 发布前确认「我构建的代码」就是「远端已有的代码」。
+# gh release create 把 tag 建在远程默认分支的 HEAD 上，本地没推送就发版，tag 会指向
+# 上一个提交——release 页面点进去是一份不含本次代码的树。
+# 注意：不能用 `git log @{u}..HEAD`，没有配置上游时它会直接报错、命令替换拿到空串，
+# 于是静默放过（踩过一次）。这里显式对 origin/master，读不到就拒绝。
+git fetch --quiet origin master 2>/dev/null || true
+REMOTE_HEAD=$(git rev-parse --verify -q origin/master || true)
+if [ -z "$REMOTE_HEAD" ]; then
+  echo "错误：读不到 origin/master，先 git fetch 并确认代码已推送，再发 release" >&2
+  exit 1
+fi
+if [ "$(git rev-parse HEAD)" != "$REMOTE_HEAD" ]; then
+  echo "错误：本地 HEAD 与 origin/master 不一致，先 git push 再发 release（否则 tag 指不到本次代码）" >&2
+  exit 1
+fi
+
 APK=app/build/outputs/apk/release/app-release.apk
 
 ./gradlew :app:assembleRelease
