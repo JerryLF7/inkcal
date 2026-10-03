@@ -51,6 +51,7 @@ class RangeViewModel(app: Application) : AndroidViewModel(app) {
     val key = "$start..$end"
     if (loadedKey == key || start == loadingKey) return
     loadingKey = start
+    lastRange = start to end
 
     val mine = ++seq
     viewModelScope.launch {
@@ -76,11 +77,21 @@ class RangeViewModel(app: Application) : AndroidViewModel(app) {
     }
   }
 
-  /** 写操作之后调用：清掉去重标记，下次切到本视图会重新拉。 */
+  /**
+   * 写操作之后调用：清掉去重标记，并**立刻重拉当前区间**（如果加载过）。
+   *
+   * 不能只清标记等视图自己重拉——`load()` 由 `LaunchedEffect(monday/monthAnchor)`
+   * 触发，周/月视图不重组就不会重跑，写完之后卡片会一直显示旧数据（2026-10-03
+   * 修复前：在周视图里删餐，要切走再切回来才消失）。
+   */
   fun invalidate() {
+    val range = lastRange
     loadedKey = null
+    if (range != null) load(range.first, range.second)
   }
 
   private var loadedKey: String? = null
   private var loadingKey: String? = null
+  /** 最近一次请求的区间，invalidate 时用它原地重拉。 */
+  private var lastRange: Pair<String, String>? = null
 }

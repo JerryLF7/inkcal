@@ -468,6 +468,7 @@ android/
 |---|---|---|---|
 | 21 | 下拉刷新 + 冷启动磁盘缓存 | 先画缓存再后台重拉（stale-while-revalidate），重拉已加载的整个范围 | ✅ 0.3 |
 | 22 | 内嵌 TopAppBar inset 清零 | 修复 Scaffold 与 TopAppBar 重复垫状态栏 inset 导致的标题下空白（§8 约定） | ✅ 0.11 |
+| 23 | 聊天乐观消息唯一 id + 周/月写后原地重拉 | 修复两条崩溃/过期：固定乐观 id 导致第二轮对话 LazyColumn 撞 key 崩溃（删除确认卡状态也串）；RangeViewModel.invalidate 只清标记不重拉，写后周/月视图显示旧数据 | ✅（待随下一版发布） |
 
 ## 15. 建议实施顺序
 

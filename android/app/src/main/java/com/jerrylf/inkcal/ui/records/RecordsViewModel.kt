@@ -199,7 +199,7 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
    * 重新分析。成功后**必须重拉分组**：组级联合重估会把形态 B 的从行清零，
    * 只听响应里的 record 会让详情页显示过期数据（spec §8.4）。
    */
-  fun reanalyze(assetId: String, notes: String) {
+  fun reanalyze(assetId: String, notes: String, onSuccess: () -> Unit = {}) {
     if (_busy.value) return
     viewModelScope.launch {
       _busy.value = true
@@ -208,6 +208,7 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
         val kcal = resp.record?.calories?.roundToInt()
         _toast.value = if (kcal != null) "已更新：$kcal kcal" else "已更新"
         reloadAll(manual = false)
+        onSuccess()
       } catch (e: Exception) {
         _toast.value = "重新分析失败: ${message(e)}"
       }
@@ -216,7 +217,7 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   /** photoOnly=true 只移除一张照片，否则删整餐。 */
-  fun delete(assetId: String, photoOnly: Boolean) {
+  fun delete(assetId: String, photoOnly: Boolean, onSuccess: () -> Unit = {}) {
     if (_busy.value) return
     viewModelScope.launch {
       _busy.value = true
@@ -234,6 +235,7 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
           _toast.value = "已删除整餐，照片不会再被同步"
         }
         reloadAll(manual = false)
+        onSuccess()
       } catch (e: Exception) {
         _toast.value = "删除失败: ${message(e)}"
       }

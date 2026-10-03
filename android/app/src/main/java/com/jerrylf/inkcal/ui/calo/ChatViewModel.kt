@@ -23,9 +23,6 @@ import retrofit2.HttpException
 /** 删除确认卡的状态。**只存本地**，历史消息重开时重新显示为待确认（与网页版一致）。 */
 enum class DeleteState { PENDING, CONFIRMED, CANCELLED }
 
-/** 乐观追加的用户消息用负数 id，和服务端的正数 id 不会撞。 */
-private const val OPTIMISTIC_ID = -1
-
 data class ChatUiState(
   val loading: Boolean = true,
   val sending: Boolean = false,
@@ -56,6 +53,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
   private val _state = MutableStateFlow(ChatUiState())
   val state: StateFlow<ChatUiState> = _state.asStateFlow()
+
+  /**
+   * 乐观追加的消息用本地负数 id（服务端 id 是正数，不会撞）。
+   *
+   * **必须每条消息一个新 id**：曾经用固定 -1/-2，发第二条消息时 LazyColumn 的
+   * `key = { it.id }` 撞 key 直接崩；同一轮两张删除确认卡也会共享同一个
+   * `deleteStates` 键，确认一张等于确认全部。
+   */
+  private var nextLocalId = 0
+
+  private fun localId(): Int = --nextLocalId
 
   /** 聊天里的餐卡缩略图仍要经服务端代理取。 */
   val baseUrl: StateFlow<String> =
@@ -142,7 +150,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val message = text.trim()
     if (message.isEmpty() || _state.value.sending) return
 
-    val optimistic = ChatMessageDto(id = OPTIMISTIC_ID, role = "user", content = message)
+    val optimistic = ChatMessageDto(id = localId(), role = "user", content = message)
     _state.update {
       it.copy(sending = true, draft = "", error = null, messages = it.messages + optimistic)
     }
@@ -158,7 +166,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         val assistant =
           ChatMessageDto(
-            id = OPTIMISTIC_ID - 1,
+            id = localId(),
             role = "assistant",
             content = resp.reply,
             toolLog = resp.toolLog,

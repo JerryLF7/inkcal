@@ -210,17 +210,18 @@ fun RecordsTab(
       busy = busy,
       onClose = dayViewModel::closeDetail,
       onDeleteMeal = {
-        // 写操作后当前视图要重拉；区间视图靠 invalidate 让下次进入时重新取
-        rangeViewModel.invalidate()
-        dayViewModel.delete(detailRecord.assetId, photoOnly = false)
+        // 区间视图的重拉必须在写完成之后（onSuccess），否则会抢到旧数据
+        dayViewModel.delete(
+          detailRecord.assetId,
+          photoOnly = false,
+          onSuccess = rangeViewModel::invalidate,
+        )
       },
       onDeletePhoto = { assetId ->
-        rangeViewModel.invalidate()
-        dayViewModel.delete(assetId, photoOnly = true)
+        dayViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
       },
       onReanalyze = { notes ->
-        rangeViewModel.invalidate()
-        dayViewModel.reanalyze(detailRecord.assetId, notes)
+        dayViewModel.reanalyze(detailRecord.assetId, notes, onSuccess = rangeViewModel::invalidate)
       },
     )
   }
