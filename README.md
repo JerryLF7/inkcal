@@ -3,7 +3,7 @@
 拍一张饮食照片,热量自动记好。
 
 > **还在开发中,功能不完整。** 接口、数据格式和界面都可能随时改,不要拿它当成品用。
-> 后端(Python/Flask + Vue 网页)已能日常使用;原生 Android 客户端还很早期,`docs/android-app-spec.md` §14 有逐项进度。已知没做的:周视图、月视图、选择照片、Calo 聊天。
+> 后端(Python/Flask + Vue 网页)已能日常使用;原生 Android 客户端**首期功能已完成**(日/周/月三视图、餐卡详情、设置、选择照片、Calo 聊天),只剩自动刷新没做。逐项进度见 `docs/android-app-spec.md` §14。
 
 手机把照片备份到 Immich 或 PhotoPrism,inkcal 每 10 分钟去拉一次新照片,判断是不是食物,估算热量和蛋白质、碳水、脂肪,写进本地 SQLite。打开网页就能看,估错了可以改。
 
@@ -106,7 +106,9 @@ Calo 是对话助手。你可以问"昨天午餐吃了什么",或者说"记一�
 
 `android/` 是原生客户端(Kotlin + Jetpack Compose),只调 Flask API,不共享 Python 或 Vue 代码。
 
-**还没做完**,目前可用的是记录页日视图和餐卡详情(查看、重新分析、删除);周视图、月视图、选择照片、Calo 聊天都还没实现,设置页只有体征参数和服务器两项。
+**首期功能已完成**(0.10):记录页日/周/月三视图(带下拉刷新与冷启动缓存)、餐卡详情(画廊、重新分析、删除)、设置页(体征与 BMR、Calo 上下文窗口、服务器)、选择照片(相册多选 + 本地上传)、Calo 聊天(步骤折叠、产物卡、删除确认)。
+
+还没做的:后台自动刷新(data-version 轮询,现在靠下拉手动刷新)、分享入口与桌面小组件。逐项状态见 `docs/android-app-spec.md` 的 §14。
 
 安装包从 [Releases](https://github.com/JerryLF7/inkcal/releases/latest) 下载,也可以把本仓库地址加进 [Obtainium](https://github.com/ImranR98/Obtainium) 自动跟进更新。首次启动填服务器地址(局域网 `IP:端口`,或反代域名)再登录。
 

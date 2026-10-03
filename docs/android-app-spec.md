@@ -49,6 +49,8 @@
 ### 3.1 服务器地址
 首次启动让用户输入 Base URL（如 https://inkcal.example.com，内网也可以填 `IP:端口`），存 DataStore，设置页可改。外网走 FRP + 反向代理（建议上 HTTPS）。
 
+**地址规范化（`domain/ServerUrl`，已实现）**：用户只填 `192.168.5.158:5800` 这类裸地址时自动补 `http://`；结尾统一补 `/`（Retrofit 要求 baseUrl 以 `/` 结束）；首尾空白去掉；空串或解析不出的返回 null（UI 提示「请填写服务器地址」）。规范化后的值才落 DataStore，**换服务器时会同时清掉 cookie 与记录缓存**，避免把上一台的会话/数据带过去。
+
 **明文 HTTP 策略（2026-10-02 变更）**：早期做法是在 `network_security_config.xml` 里逐个列出放行的私网地址，但那是把真实内网地址写进仓库和 APK（而 APK 是公开下载的），而且该配置不支持网段、每换地址就得改代码重新发版。现在改成 `cleartextTrafficPermitted="true"`，不再放白名单——App 只连用户自己填的地址，白名单的实际防护收益有限。**服务器上了 HTTPS 后应把它改回 `false` 收紧**。
 
 ### 3.2 登录（Flask session cookie）
@@ -202,6 +204,12 @@ deficit(kcal, ...) = tdee - kcal      // 正=有缺口，负=超标
   - 顶栏标题随滚动变化：取可见的最新日期组，用 LazyListState 的 visibleItemsInfo 推导。
   - 支持 jumpTo(date)：必要时循环加载更早分片直到覆盖该日期（上限 60 片）再 scrollToItem。月视图点日期走它。
 - 重载策略：收到 bump 后重拉已加载的整个范围并整体替换，保留滚动位置；失败保留旧数据不清空。
+
+**Android 侧的缓存与刷新（0.3 起，已实现）**：
+- 冷启动是 **stale-while-revalidate**：先画 `filesDir/records-cache.json` 里的上次结果，再后台重拉覆盖。**不做**「缓存没过期就不请求」——服务端 cron 随时写新记录，缓存永远不算可信。
+- 下拉刷新重拉的是**已加载的整个范围**（上限 365 天），不是只重拉最近 7 天，否则会把用户翻过的历史抖掉。
+- 缓存 payload 带 `baseUrl`，换服务器即失效（`saveBaseUrl` / `logout` 也会主动清）；写入先落临时文件再改名，避免写一半被杀留下坏 JSON；解码失败一律当「没有缓存」，不崩。
+- 三个 loading 状态要分开：`initialLoading`（首次且无缓存，整屏转圈）、`loadingMore`（触底，底部条）、`refreshing`（下拉，顶部指示器）。
 - 请求序号防抖：每次加载带递增 id，只采纳最新响应（对应网页 _loadSeq）。
 
 ### 8.2 周视图
@@ -378,8 +386,10 @@ android/
     MainActivity.kt
     data/      Api.kt  Dto.kt  AppRepository.kt  AppContainer.kt
                SettingsStore.kt  CookieStore.kt  RecordsCache.kt  BmrCache.kt
+               DataChangeSignal.kt
     domain/    TimeFmt.kt  Tdee.kt  ImageUrl.kt  MealGrouping.kt  Decisions.kt
                BodyMetrics.kt  Periods.kt  WeekStats.kt  MonthGrid.kt  ServerUrl.kt
+               ChatTools.kt  MarkdownText.kt
     theme/     Color.kt  Theme.kt  Type.kt
     ui/
       app/     AppRoot.kt  AppViewModel.kt  MainScaffold.kt  ImageLoader.kt
@@ -389,8 +399,8 @@ android/
                WeekView.kt  WeekChart.kt  MonthView.kt
       picker/  PhotoPickerScreen.kt  PickerViewModel.kt
       settings/SettingsScreen.kt  SettingsViewModel.kt
-      calo/    CaloScreen.kt          ← 仍是占位
-  app/src/test/java/com/jerrylf/inkcal/   12 个测试类，69 个用例
+      calo/    CaloScreen.kt  ChatViewModel.kt  ChatArtifacts.kt
+  app/src/test/java/com/jerrylf/inkcal/   14 个测试类，95 个用例
 ```
 
 几点约定：
@@ -401,7 +411,11 @@ android/
 
 ## 12. 测试与验收
 
-**已落地的做法（0.9）**：12 个 JVM 测试类、69 个用例，全部集中在 `domain/` 与 `data/` 的纯逻辑上，`./gradlew :app:testDebugUnitTest` 一条命令跑完。覆盖：三级降级（Tdee）、时间字符串切片（含 `+08:00`/无时区/空串/凌晨 00:30 仍归当天）、DatePicker 的 UTC 毫秒换算、图片地址规则（含「库里存的其实是 `size=preview`」）、形态 A 判据、日内与周的排序、周期算术（周一起点/闰月/跨年/月首空格）、周汇总（只算有记录的天）、月格二值语义、决策匹配（含 `target_asset_id`）、体征校验范围、按接口分超时、缓存往返与损坏兜底、以及单张/多张两种分析响应的归一化。
+**已落地的做法（0.10）**：14 个 JVM 测试类、95 个用例，全部集中在 `domain/` 与 `data/` 的纯逻辑上，`./gradlew :app:testDebugUnitTest` 一条命令跑完。
+
+覆盖：三级降级（Tdee）、时间字符串切片（含 `+08:00`/无时区/空串/凌晨 00:30 仍归当天）、DatePicker 的 UTC 毫秒换算、图片地址规则（含「库里存的其实是 `size=preview`」）、形态 A 判据、日内与周的排序、周期算术（周一起点/闰月/跨年/月首空格）、周汇总（只算有记录的天）、月格二值语义、决策匹配（含 `target_asset_id`）、体征校验范围、按接口分超时、缓存往返与损坏兜底、单张/多张两种分析响应的归一化、聊天工具的步骤标题/徽标/摘要与**产物分流**、以及 Markdown 子集解析。
+
+已证明有效：Markdown 的列表解析就是被测试抓出来的（`Regex.matches` 是全串匹配，导致列表项永远判不出、全被当成段落）。**新逻辑优先写测试**，别指望在 UI 层用眼睛验。
 
 **为什么重点在这**：这台机器上没有模拟器也没有真机自动化，`domain/` 与 `data/` 是唯一能在这里验证的部分；UI 只能靠用户手动过。所以凡是能抽成纯函数的判断（日期归属、缺口公式、分页边界、形态 A/B）都抽出来了，**新逻辑优先补测试**，别指望在 UI 层用眼睛验。
 

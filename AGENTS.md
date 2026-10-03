@@ -20,8 +20,12 @@ Immich / PhotoPrism
   -> Luna（视觉编排：同餐 / 新餐 / 跳过判断，只写照片关系说明）
   -> Gemini（数值专家：热量与 P/C/F，自带全摄入基准任务框架）
   -> data/inkcal.db（SQLite，WAL）
-  -> Flask JSON API + Web UI
+  -> Flask JSON API
+       -> Web UI（web/，Vue）
+       -> 原生 Android 客户端（android/，Kotlin + Compose）
 ```
+
+**本仓库同时维护两个客户端**：Vue 网页版（`web/`）和原生 Android 客户端（`android/`，见 §3 与 `docs/android-app-spec.md`）。Android 侧**只调 Flask API，不共享 Python 或 Vue 代码**；改客户端前先读那份 spec。
 
 核心价值是“零摩擦”：手机自动备份照片；cron 自动写记录；用户打开页面即可浏览和纠错。
 
@@ -164,6 +168,13 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 - 没有 `keystore.properties` 时 release 自动退回 debug 签名，保证 `assembleRelease` 永远出可安装包。
 - 发布用 `android/release.sh`：tag 取 `app/build.gradle.kts` 的 `versionName`（`v0.1`），asset 名带版本号（`inkcal-0.1.apk`），**release 不标 pre-release**——标了 GitHub 就不算 Latest release，仓库首页侧栏会退化成只显示 tag 数量而不是最新版本。固定入口用 GitHub 自带重定向 `https://github.com/JerryLF7/inkcal/releases/latest`。
 - 发布前升版本：`versionName` 与 `versionCode` 一起升（`0.1/1` → `0.2/2`），tag 会自动跟着 `versionName` 走。
+- **发版流程（按顺序，别跳步）**：
+  1. 升 `android/app/build.gradle.kts` 的 `versionName` 与 `versionCode`——**两个一起升**（如 `0.10`→`0.11`、`11`→`12`），tag 由 `versionName` 推出
+  2. 同步文档：`docs/android-app-spec.md` 的头部进度摘要、§14 进度列、§15 勾选，以及本文的「当前状态」
+  3. 按文件名 `git add`（**不要 `git add .`**）并 commit
+  4. **先 `git push`**，再发 release（原因见下条）
+  5. `cd android && ./release.sh`
+  6. 验证：`gh release view v<版本>` 看 asset；再匿名拉一次 `curl -sIL https://github.com/JerryLF7/inkcal/releases/download/v<版本>/inkcal-<版本>.apk`，应为 302 → 200
 - **顺序：先 `git push` 代码，再发 release**。`gh release create` 把 tag 建在**远程**默认分支的 HEAD 上，本地没推送就发版，tag 会指向上一个提交（release 页面点进去是一份不含本次代码的树）。`release.sh` 开头会 fetch 后比对 `origin/master` 与 `HEAD`，不一致直接报错——这条护栏不能用 `@{u}` 写，没配上游时它会静默失效。
 - **仓库已转 public（2026-10-02，为了配合 Obtainium 自动更新）**，所以 release 资源匿名可下：`curl -sIL https://github.com/JerryLF7/inkcal/releases/download/<tag>/inkcal-<version>.apk` 应返回 302 → 200。Obtainium 走的是匿名 `api.github.com/repos/JerryLF7/inkcal/releases/latest`，因此 release **必须保持非 prerelease**，否则它拿不到。验证也用 `gh release download <tag> -p inkcal-<version>.apk`。用户自己装 APK 测试，agent 无法点真机。
 - 转 public 的副作用：仓库里的内网地址（`android/app/src/main/res/xml/network_security_config.xml`、`scripts/burn_sources/heytap_ui.py`、`main.py` 与 `.env.example` 的 Immich 默认地址）对外可见。已确认**历史里没有任何真密钥或数据**（`.env`/keystore/`data/` 从未提交，全历史扫 `AIza`/`ghp_`/`PRIVATE KEY` 零命中）。注意把 IP 从仓库删掉并不等于隐藏——它已经编译进 APK，而 APK 现在是匿名可下载的。
@@ -448,4 +459,4 @@ venv/bin/python -m compileall -q main.py src web/server.py
 - [`docs/prototypes/two-tab-proto.html`](./docs/prototypes/two-tab-proto.html)：已确认 UI 原型。
 - [`docs/references/photoprism-api.md`](./docs/references/photoprism-api.md)：PhotoPrism API 备忘（改 `photoprism_client.py` 时查）。
 - [`docs/references/synology-photos-api.md`](./docs/references/synology-photos-api.md)：Synology Photos API 备忘（尚未接入，仅备查）。
-- [`docs/android-app-spec.md`](./docs/android-app-spec.md)：原生 Android 客户端实现文档（2026-09-30 交付，待实现；实现者从这里开始，API 契约与功能规格全在里面）。
+- [`docs/android-app-spec.md`](./docs/android-app-spec.md)：原生 Android 客户端实现文档（API 契约、页面行为、验收清单）。**首期功能已全部落地（0.10）**，各小节开头有状态标记、§14 有逐项进度、§15 是实施顺序。改客户端前先读它。
