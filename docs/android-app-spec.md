@@ -185,6 +185,7 @@ deficit(kcal, ...) = tdee - kcal      // 正=有缺口，负=超标
 - 默认落在哪页未拍板，先默认「记录」，做成常量。
 - 大屏（600dp 以上）可选 NavigationRail + Calo 常驻侧栏（对应网页 PC 三栏），非首期。
 - 全局提示用 SnackbarHost（2.6 秒，错误用错误色）。
+- **Inset 约定（2026-10-03 修复顶栏空白后拍板）**：MainScaffold 的 Scaffold 已把状态栏 inset 消化进 innerPadding，页面内嵌的 TopAppBar 必须显式 `windowInsets = WindowInsets(0, 0, 0, 0)`，否则状态栏高度被垫两次、标题与列表之间出现大段空白。全屏 Dialog（如选择照片）不经 Scaffold padding，其 TopAppBar 保留默认 inset。
 - 全局刷新信号：一个 SharedFlow 或计数器 bump，任何写操作成功后触发，各页监听后重拉已加载范围；§8.6 的后台轮询也触发它。
 
 ### 8.1 记录页：日视图（默认子视图）

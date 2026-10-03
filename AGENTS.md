@@ -146,6 +146,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 详情页刻意用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本。组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
 
+Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaffold 已把状态栏 inset 消化进 innerPadding，页面内嵌的 TopAppBar 必须显式 `windowInsets = WindowInsets(0, 0, 0, 0)`，否则状态栏高度被垫两次、标题与列表之间出现大段空白。全屏 Dialog（选择照片）不经 Scaffold padding，其 TopAppBar 保留默认 inset。
+
 记录页缓存策略是 **stale-while-revalidate**：冷启动先画 `filesDir/records-cache.json` 里的上次结果，再后台重拉覆盖。不做「缓存没过期就不请求」——服务端 cron 随时写新记录，缓存永远不算可信。缓存 payload 带 `baseUrl`，换服务器即失效（`saveBaseUrl`/`logout` 也会主动清）。下拉刷新重拉的是**已加载的整个范围**（上限 365 天），不是只重拉最近 7 天，否则会把用户翻过的历史抖掉。
 
 依赖版本的硬约束：AGP 9.0.1 的 compileSdk 上限是 36，**任何新增依赖都必须 `minCompileSdk <= 36`**，否则编译直接失败。已因此钉住 `okhttp = 5.4.0`（5.5.0 要 37）、`coil = 3.5.0`（3.6.x 要 37）。升级这类依赖前先确认不再受 compileSdk 限制，或同时升 AGP + compileSdk 到 37。
