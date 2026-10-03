@@ -55,12 +55,12 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-  version: String,
   appViewModel: AppViewModel,
   settingsViewModel: SettingsViewModel = viewModel(),
 ) {
   val settings by settingsViewModel.state.collectAsStateWithLifecycle()
   val baseUrl by appViewModel.baseUrl.collectAsStateWithLifecycle()
+  val dataSummary by appViewModel.dataSummary.collectAsStateWithLifecycle()
   val busy by appViewModel.busy.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
 
@@ -171,12 +171,11 @@ fun SettingsScreen(
       HorizontalDivider()
       Text("服务器", style = MaterialTheme.typography.titleMedium)
       Text(
-        "App 版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Text(
-        "数据版本 $version",
+        text = dataSummary?.let { summary ->
+          "数据概况：${summary.records} 条记录" +
+            // 服务端时间戳是 UTC，DataVersion 已转成 HKT，这里标出来免得再猜
+            (summary.lastWrite?.let { " · 最后写入 $it（HKT）" } ?: " · 暂无写入")
+        } ?: "数据概况：—",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
@@ -202,6 +201,15 @@ fun SettingsScreen(
       ) {
         Text("退出登录")
       }
+
+      // ── 关于 ──────────────────────────────────────────────────
+      HorizontalDivider()
+      Text("关于", style = MaterialTheme.typography.titleMedium)
+      Text(
+        "App 版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
 
       if (busy || settings.loading) {
         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

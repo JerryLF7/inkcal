@@ -37,7 +37,7 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
         CircularProgressIndicator()
       }
 
-    is ConnState.Ready -> MainScaffold(version = current.version, viewModel = viewModel)
+    is ConnState.Ready -> MainScaffold(viewModel = viewModel)
 
     else -> SetupScreen(state = current, viewModel = viewModel)
   }

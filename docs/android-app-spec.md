@@ -312,7 +312,10 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 > **状态：✅ 已实现（0.5）**
 - 表单：身高（cm，50 到 260）、体重（kg，20 到 300）、出生日期（DatePicker）、性别（SingleChoiceSegmentedButtonRow，男/女）、Calo 上下文窗口（Slider 5 到 50，步进 1，默认 20）。
 - 「保存」发 PUT /api/settings（只发已填的键），成功后显示服务端返回的 bmr（kcal/天取整，未填齐显示「—」），刷新全局 BMR 缓存并触发全局刷新，Snackbar「设置已保存」。客户端校验范围与服务端一致。
-- 另设「服务器」分组：Base URL、登出、（可选）清除图片缓存，以及两行只读版本信息——**App 版本**（`BuildConfig.VERSION_NAME`（`VERSION_CODE`），因此 `buildFeatures.buildConfig = true`，取的是 `app/build.gradle.kts` 里发布的那个版本号）与**数据版本**（来自 `/api/data-version`，用于判断服务端有没有新写入）。
+- 另设「服务器」分组：**数据概况**、Base URL、登出、（可选）清除图片缓存。
+  - 数据概况由 `/api/data-version` 的指纹解析而来（`domain/DataVersion`）：`数据概况：1245 条记录 · 最后写入 10-03 12:10（HKT）`。**指纹里的时间戳是 UTC**（SQLite `datetime('now')`），必须转 HKT 再显示。注意**不能按 `:` 切分指纹**——时间戳自带冒号、空字段又会让段数不定，条数取前缀正则、时间戳用正则全量抓取。解析不出来就显示「—」。
+  - 概况的刷新点：连接探测（`probe`/`login`/`logout` 后由 `AppViewModel.applyProbe` 顺手解析）与 §8.6 每 30 秒的轮询，不用额外请求。
+- 末尾「关于」分组只放一行 **App 版本**（`BuildConfig.VERSION_NAME`（`VERSION_CODE`），因此 `buildFeatures.buildConfig = true`，取的是 `app/build.gradle.kts` 里发布的那个版本号）。**别把它和「数据概况」混在一起**——一个是「装的哪个包」，一个是「服务端有多少数据」，此前并列显示过、被用户指出看不懂。
 - Calo 页顶部不放设置入口（已拍板）。
 
 ### 8.8 系统集成（首期后做）
@@ -408,7 +411,7 @@ android/
       picker/  PhotoPickerScreen.kt  PickerViewModel.kt
       settings/SettingsScreen.kt  SettingsViewModel.kt
       calo/    CaloScreen.kt  ChatViewModel.kt  ChatArtifacts.kt
-  app/src/test/java/com/jerrylf/inkcal/   14 个测试类，95 个用例
+  app/src/test/java/com/jerrylf/inkcal/   15 个测试类，100 个用例
 ```
 
 几点约定：
@@ -419,9 +422,9 @@ android/
 
 ## 12. 测试与验收
 
-**已落地的做法（0.10）**：14 个 JVM 测试类、95 个用例，全部集中在 `domain/` 与 `data/` 的纯逻辑上，`./gradlew :app:testDebugUnitTest` 一条命令跑完。
+**已落地的做法（0.10 起，2026-10-03 补到 15 类 100 例）**：15 个 JVM 测试类、100 个用例，全部集中在 `domain/` 与 `data/` 的纯逻辑上，`./gradlew :app:testDebugUnitTest` 一条命令跑完。
 
-覆盖：三级降级（Tdee）、时间字符串切片（含 `+08:00`/无时区/空串/凌晨 00:30 仍归当天）、DatePicker 的 UTC 毫秒换算、图片地址规则（含「库里存的其实是 `size=preview`」）、形态 A 判据、日内与周的排序、周期算术（周一起点/闰月/跨年/月首空格）、周汇总（只算有记录的天）、月格二值语义、决策匹配（含 `target_asset_id`）、体征校验范围、按接口分超时、缓存往返与损坏兜底、单张/多张两种分析响应的归一化、聊天工具的步骤标题/徽标/摘要与**产物分流**、以及 Markdown 子集解析。
+覆盖：data-version 指纹解析（DataVersion）、三级降级（Tdee）、时间字符串切片（含 `+08:00`/无时区/空串/凌晨 00:30 仍归当天）、DatePicker 的 UTC 毫秒换算、图片地址规则（含「库里存的其实是 `size=preview`」）、形态 A 判据、日内与周的排序、周期算术（周一起点/闰月/跨年/月首空格）、周汇总（只算有记录的天）、月格二值语义、决策匹配（含 `target_asset_id`）、体征校验范围、按接口分超时、缓存往返与损坏兜底、单张/多张两种分析响应的归一化、聊天工具的步骤标题/徽标/摘要与**产物分流**、以及 Markdown 子集解析。
 
 已证明有效：Markdown 的列表解析就是被测试抓出来的（`Regex.matches` 是全串匹配，导致列表项永远判不出、全被当成段落）。**新逻辑优先写测试**，别指望在 UI 层用眼睛验。
 
@@ -476,7 +479,7 @@ android/
 | 22 | 内嵌 TopAppBar inset 清零 | 修复 Scaffold 与 TopAppBar 重复垫状态栏 inset 导致的标题下空白（§8 约定） | ✅ 0.11 |
 | 23 | 聊天乐观消息唯一 id + 周/月写后原地重拉 | 修复两条崩溃/过期：固定乐观 id 导致第二轮对话 LazyColumn 撞 key 崩溃（删除确认卡状态也串）；RangeViewModel.invalidate 只清标记不重拉，写后周/月视图显示旧数据 | ✅（待随下一版发布） |
 | 24 | §8.6 轮询配套修正 | 轮询基线存 VM（存协程里会漏掉后台期间的写入）；决策缓存改为「按已加载日期重取」而不是清空；BMR 拉取失败可重试；相册超 10 张给提示、批量结果分类展示（有失败走错误态）；Markdown 链接可点；聊天详情删单张走 promoted 重拉；废弃图标换 AutoMirrored；删未用 DTO | ✅（待随下一版发布） |
-| 25 | 设置页显示 App 版本 | 「服务器」分组加一行 `App 版本 X（code Y）`，取自 BuildConfig（开启 `buildFeatures.buildConfig`）；与原有的「数据版本」（服务端 /api/data-version）区分 | ✅（待随下一版发布） |
+| 25 | 设置页分组：服务器 / 关于 | 「服务器」组显示可读的数据概况（`domain/DataVersion` 解析 `/api/data-version` 指纹：记录条数 + 最后写入，UTC 转 HKT），末尾「关于」组显示 App 版本（BuildConfig）。原先是两行并列的「App 版本 / 数据版本（原始指纹）」，用户反馈看不懂 | ✅（待随下一版发布） |
 
 ## 15. 建议实施顺序
 

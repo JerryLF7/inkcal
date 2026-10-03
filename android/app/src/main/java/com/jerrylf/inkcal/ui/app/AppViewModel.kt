@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jerrylf.inkcal.data.AppContainer
 import com.jerrylf.inkcal.data.ConnState
+import com.jerrylf.inkcal.domain.DataSummary
+import com.jerrylf.inkcal.domain.DataVersion
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,7 +36,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
   init {
     viewModelScope.launch {
       _baseUrl.value = repo.savedBaseUrl()
-      _state.value = repo.probe()
+      _state.value = applyProbe(repo.probe())
     }
     // 用着用着会话过期（cron 跑着、服务端重启换了 INKCAL_SECRET）→ 弹回登录页
     viewModelScope.launch {
@@ -56,7 +58,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
       } else {
         _baseUrl.value = normalized
         _showServerForm.value = false
-        _state.value = repo.probe()
+        _state.value = applyProbe(repo.probe())
       }
       _busy.value = false
     }
@@ -65,7 +67,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
   fun login(user: String, password: String) {
     viewModelScope.launch {
       _busy.value = true
-      _state.value = repo.login(user, password)
+      _state.value = applyProbe(repo.login(user, password))
       _busy.value = false
     }
   }
@@ -73,7 +75,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
   fun logout() {
     viewModelScope.launch {
       _busy.value = true
-      _state.value = repo.logout()
+      _state.value = applyProbe(repo.logout())
       _busy.value = false
     }
   }
@@ -85,7 +87,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
   fun retry() {
     viewModelScope.launch {
       _busy.value = true
-      _state.value = repo.probe()
+      _state.value = applyProbe(repo.probe())
       _busy.value = false
     }
   }
@@ -99,6 +101,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
    */
   suspend fun checkDataVersion() {
     val version = runCatching { repo.dataVersion() }.getOrNull() ?: return
+    _dataSummary.value = DataVersion.summarize(version)
     val previous = lastDataVersion
     lastDataVersion = version
     if (previous != null && previous != version) container.dataSignal.bump()
@@ -106,4 +109,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
   /** 上次见到的数据版本；null 表示还没取到过（首次只记基线，不刷）。 */
   private var lastDataVersion: String? = null
+
+  private val _dataSummary = MutableStateFlow<DataSummary?>(null)
+
+  /** 设置页的「数据概况」；每次轮询与连接探测都会刷新，没取到时为 null。 */
+  val dataSummary: StateFlow<DataSummary?> = _dataSummary.asStateFlow()
+
+  /** 连接探测同时也是一次版本查询，顺手把概况填上（不然要等 30 秒后的第一次轮询）。 */
+  private fun applyProbe(result: ConnState): ConnState {
+    if (result is ConnState.Ready) _dataSummary.value = DataVersion.summarize(result.version)
+    return result
+  }
 }

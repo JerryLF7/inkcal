@@ -43,7 +43,7 @@ private enum class Tab(val route: NavKey, val label: String, val icon: ImageVect
 
 /** 一级导航骨架：底部 Tab + Nav3。设置页不参与左右滑动（滑动还没做）。 */
 @Composable
-fun MainScaffold(version: String, viewModel: AppViewModel) {
+fun MainScaffold(viewModel: AppViewModel) {
   val backStack = rememberNavBackStack(RecordsRoute)
 
   Scaffold(
@@ -75,7 +75,7 @@ fun MainScaffold(version: String, viewModel: AppViewModel) {
         entryProvider {
           entry<RecordsRoute> { RecordsTab() }
           entry<CaloRoute> { CaloScreen() }
-          entry<SettingsRoute> { SettingsScreen(version = version, appViewModel = viewModel) }
+          entry<SettingsRoute> { SettingsScreen(appViewModel = viewModel) }
         },
     )
   }
