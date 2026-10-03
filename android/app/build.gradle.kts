@@ -53,7 +53,8 @@ android {
     buildFeatures {
       compose = true
       aidl = false
-      buildConfig = false
+      // 设置页要显示 App 版本号（BuildConfig.VERSION_NAME / VERSION_CODE）
+      buildConfig = true
       shaders = false
     }
 

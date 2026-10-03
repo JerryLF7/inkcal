@@ -41,6 +41,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jerrylf.inkcal.BuildConfig
 import com.jerrylf.inkcal.domain.TimeFmt
 import com.jerrylf.inkcal.ui.app.AppViewModel
 import kotlin.math.roundToInt
@@ -169,6 +170,11 @@ fun SettingsScreen(
       // ── 服务器 ────────────────────────────────────────────────
       HorizontalDivider()
       Text("服务器", style = MaterialTheme.typography.titleMedium)
+      Text(
+        "App 版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
       Text(
         "数据版本 $version",
         style = MaterialTheme.typography.bodySmall,

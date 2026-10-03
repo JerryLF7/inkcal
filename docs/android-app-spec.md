@@ -312,7 +312,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 > **状态：✅ 已实现（0.5）**
 - 表单：身高（cm，50 到 260）、体重（kg，20 到 300）、出生日期（DatePicker）、性别（SingleChoiceSegmentedButtonRow，男/女）、Calo 上下文窗口（Slider 5 到 50，步进 1，默认 20）。
 - 「保存」发 PUT /api/settings（只发已填的键），成功后显示服务端返回的 bmr（kcal/天取整，未填齐显示「—」），刷新全局 BMR 缓存并触发全局刷新，Snackbar「设置已保存」。客户端校验范围与服务端一致。
-- 另设「服务器」分组：Base URL、登出、（可选）清除图片缓存。
+- 另设「服务器」分组：Base URL、登出、（可选）清除图片缓存，以及两行只读版本信息——**App 版本**（`BuildConfig.VERSION_NAME`（`VERSION_CODE`），因此 `buildFeatures.buildConfig = true`，取的是 `app/build.gradle.kts` 里发布的那个版本号）与**数据版本**（来自 `/api/data-version`，用于判断服务端有没有新写入）。
 - Calo 页顶部不放设置入口（已拍板）。
 
 ### 8.8 系统集成（首期后做）
@@ -476,6 +476,7 @@ android/
 | 22 | 内嵌 TopAppBar inset 清零 | 修复 Scaffold 与 TopAppBar 重复垫状态栏 inset 导致的标题下空白（§8 约定） | ✅ 0.11 |
 | 23 | 聊天乐观消息唯一 id + 周/月写后原地重拉 | 修复两条崩溃/过期：固定乐观 id 导致第二轮对话 LazyColumn 撞 key 崩溃（删除确认卡状态也串）；RangeViewModel.invalidate 只清标记不重拉，写后周/月视图显示旧数据 | ✅（待随下一版发布） |
 | 24 | §8.6 轮询配套修正 | 轮询基线存 VM（存协程里会漏掉后台期间的写入）；决策缓存改为「按已加载日期重取」而不是清空；BMR 拉取失败可重试；相册超 10 张给提示、批量结果分类展示（有失败走错误态）；Markdown 链接可点；聊天详情删单张走 promoted 重拉；废弃图标换 AutoMirrored；删未用 DTO | ✅（待随下一版发布） |
+| 25 | 设置页显示 App 版本 | 「服务器」分组加一行 `App 版本 X（code Y）`，取自 BuildConfig（开启 `buildFeatures.buildConfig`）；与原有的「数据版本」（服务端 /api/data-version）区分 | ✅（待随下一版发布） |
 
 ## 15. 建议实施顺序
 
