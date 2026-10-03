@@ -104,18 +104,17 @@ class PickerViewModel(app: Application) : AndroidViewModel(app) {
     }
   }
 
-  /** 非食物照片不可选；到上限后不再接受新增（取消选中不受限）。 */
+  /** 非食物照片不可选；到上限后不再接受新增（取消选中不受限），并提示一次。 */
   fun toggle(photo: AlbumPhotoDto) {
     if (photo.classifiedNonFood) return
     _state.update { current ->
       val selected = current.selected
-      val next =
-        when {
-          photo.assetId in selected -> selected - photo.assetId
-          selected.size >= MAX_SELECTION -> selected
-          else -> selected + photo.assetId
-        }
-      current.copy(selected = next)
+      when {
+        photo.assetId in selected -> current.copy(selected = selected - photo.assetId)
+        selected.size >= MAX_SELECTION ->
+          current.copy(message = "一次最多选择 $MAX_SELECTION 张")
+        else -> current.copy(selected = selected + photo.assetId)
+      }
     }
   }
 
@@ -146,8 +145,14 @@ class PickerViewModel(app: Application) : AndroidViewModel(app) {
       _state.update { it.copy(submitting = true, error = null) }
       try {
         val resp = repo.analyzeAlbumPhotos(items)
+        val text = summarize(resp)
+        // 有失败项就用错误态提示（spec §8.5a）
         _state.update {
-          it.copy(submitting = false, selected = emptySet(), message = summarize(resp))
+          if ((resp.summary?.failed ?: 0) > 0) {
+            it.copy(submitting = false, selected = emptySet(), error = text)
+          } else {
+            it.copy(submitting = false, selected = emptySet(), message = text)
+          }
         }
         onDone()
       } catch (e: Exception) {
@@ -227,11 +232,19 @@ class PickerViewModel(app: Application) : AndroidViewModel(app) {
 
   // ── 文案 ───────────────────────────────────────────────────────
 
+  /** 逐类拼结果（spec §8.5a 的文案），0 的那些不出现。 */
   private fun summarize(resp: AnalyzeResponse): String {
     val summary = resp.summary
     if (summary != null) {
-      val skipped = summary.alreadyProcessed + summary.notFood + summary.failed
-      return if (skipped == 0) "已加入 ${summary.added} 条记录" else "已加入 ${summary.added} 条，跳过 $skipped 张"
+      val parts =
+        buildList {
+            if (summary.added > 0) add("已添加 ${summary.added} 条记录")
+            if (summary.alreadyProcessed > 0) add("${summary.alreadyProcessed} 张已在记录中")
+            if (summary.notFood > 0) add("${summary.notFood} 张非食物已跳过")
+            if (summary.failed > 0) add("${summary.failed} 张分析失败")
+          }
+          .ifEmpty { listOf("已提交 ${summary.total} 张，没有新增记录") }
+      return parts.joinToString("，")
     }
     val result = resp.normalizedResults.firstOrNull()
     return when (result?.status) {

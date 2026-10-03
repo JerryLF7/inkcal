@@ -21,9 +21,16 @@ class BmrCache(private val repo: AppRepository) {
     refresh()
   }
 
+  /**
+   * 失败时**不置 loaded**：否则冷启动时网络抖一下，BMR 就整场为 null、TDEE 全程
+   * 退到 2500 兜底且不再重试。留在未加载态，下一次 [ensureLoaded] 会再试。
+   */
   suspend fun refresh() {
-    _value.value = runCatching { repo.settings().bmr }.getOrNull()
-    loaded = true
+    runCatching { repo.settings().bmr }
+      .onSuccess {
+        _value.value = it
+        loaded = true
+      }
   }
 
   /** 设置页保存成功后直接写入，省一次往返。 */

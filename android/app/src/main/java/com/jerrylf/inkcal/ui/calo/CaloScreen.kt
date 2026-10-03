@@ -15,8 +15,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -97,7 +97,7 @@ fun CaloScreen(viewModel: ChatViewModel = viewModel()) {
       title = { Text("Calo") },
       actions = {
         IconButton(onClick = viewModel::toggleSessions) {
-          Icon(Icons.Filled.List, contentDescription = "历史会话")
+          Icon(Icons.AutoMirrored.Filled.List, contentDescription = "历史会话")
         }
         IconButton(onClick = viewModel::newSession) {
           Icon(Icons.Filled.Add, contentDescription = "新建会话")
@@ -177,7 +177,7 @@ fun CaloScreen(viewModel: ChatViewModel = viewModel()) {
         },
         enabled = input.isNotBlank() && !state.sending,
       ) {
-        Icon(Icons.Filled.Send, contentDescription = "发送")
+        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
       }
     }
   }

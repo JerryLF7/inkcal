@@ -15,7 +15,8 @@ import kotlinx.coroutines.launch
  */
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
-  private val repo = AppContainer.of(app).repository
+  private val container = AppContainer.of(app)
+  private val repo = container.repository
 
   private val _state = MutableStateFlow<ConnState>(ConnState.Loading)
   val state: StateFlow<ConnState> = _state.asStateFlow()
@@ -88,4 +89,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
       _busy.value = false
     }
   }
+
+  /**
+   * §8.6：取一次数据版本，变了就广播全局刷新。
+   *
+   * 基线存在 ViewModel 里（不是轮询协程里）：协程在进后台时会被取消，
+   * 基线跟着丢的话，回前台第一次轮询只会把「后台期间 cron 写的新版本」记成新基线，
+   * 那些记录就再也触发不了刷新了。
+   */
+  suspend fun checkDataVersion() {
+    val version = runCatching { repo.dataVersion() }.getOrNull() ?: return
+    val previous = lastDataVersion
+    lastDataVersion = version
+    if (previous != null && previous != version) container.dataSignal.bump()
+  }
+
+  /** 上次见到的数据版本；null 表示还没取到过（首次只记基线，不刷）。 */
+  private var lastDataVersion: String? = null
 }

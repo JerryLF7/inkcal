@@ -162,6 +162,9 @@ private object TimeoutInterceptor : Interceptor {
   /** 有记录的日期，新→旧。最后一项即最早日期，用来判断时间轴是否到底。 */
   suspend fun availableDates(): List<String> = call { it.dates() }
 
+  /** §8.6 的前台轮询用它比对版本号；启动探测在 [probe] 里直接调 api()。 */
+  suspend fun dataVersion(): String = call { it.dataVersion().version }
+
   suspend fun settings(): SettingsDto = call { it.settings() }
 
   suspend fun updateSettings(body: SettingsUpdateRequest): SettingsDto =

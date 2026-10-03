@@ -24,10 +24,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.jerrylf.inkcal.data.ChatMessageDto
@@ -40,6 +44,9 @@ import com.jerrylf.inkcal.domain.ToolArtifact
 import com.jerrylf.inkcal.domain.ToolStep
 import com.jerrylf.inkcal.ui.records.MealCard
 import kotlin.math.roundToInt
+
+/** 链接色，与网页版一致。 */
+private val LinkBlue = Color(0xFF5B8DEF)
 
 /**
  * 一条 assistant 消息的渲染，对应 spec §10 的「过程层 + 产物层 + 正文」三段式。
@@ -295,9 +302,7 @@ private fun MarkdownText2(source: String, modifier: Modifier = Modifier) {
         is MdBlock.Heading ->
           Text(
             text = annotated(block.spans),
-            style =
-              if (block.level <= 2) MaterialTheme.typography.titleSmall
-              else MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
           )
         is MdBlock.Code ->
@@ -341,17 +346,25 @@ private fun MarkdownText2(source: String, modifier: Modifier = Modifier) {
 @Composable
 private fun annotated(spans: List<com.jerrylf.inkcal.domain.MdSpan>) = buildAnnotatedString {
   spans.forEach { span ->
+    val link = span.link
+    if (link != null) {
+      // withLink 让基础 Text 自己处理点击（走 LocalUriHandler 打开浏览器），
+      // 只上色不加 link 的话是条点不动的死链。
+      withLink(
+        LinkAnnotation.Url(
+          url = link,
+          styles = TextLinkStyles(style = SpanStyle(color = LinkBlue)),
+        )
+      ) {
+        append(span.text)
+      }
+      return@forEach
+    }
     val style =
       SpanStyle(
         fontWeight = if (span.bold) FontWeight.Bold else null,
         fontStyle = if (span.italic) androidx.compose.ui.text.font.FontStyle.Italic else null,
         fontFamily = if (span.code) FontFamily.Monospace else null,
-        color =
-          if (span.link != null) {
-            androidx.compose.ui.graphics.Color(0xFF5B8DEF)
-          } else {
-            androidx.compose.ui.graphics.Color.Unspecified
-          },
       )
     withStyle(style) { append(span.text) }
   }

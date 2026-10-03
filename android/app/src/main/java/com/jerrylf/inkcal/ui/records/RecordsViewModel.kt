@@ -191,6 +191,21 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
     _detailAnchor.value = null
   }
 
+  /**
+   * 数据版本变了（§8.6 轮询发现服务端有新写入）就重取决策：cron 可能刚写完一条带
+   * Luna 决策的新记录，旧缓存会让 🤖 角标漏掉。
+   *
+   * **不能只清不取**：`ensureDecisions` 的触发点是列表项的 `LaunchedEffect(date)`，
+   * 日期集合没变时不会重跑，清掉之后就再也没人请求了（角标要等滚动才回来）。
+   * 所以这里对**已经加载过的日期**原地重取，请求数等于用户实际翻过的天数。
+   */
+  fun refreshDecisions() {
+    val dates = _decisionsByDate.value.keys.toList()
+    if (dates.isEmpty()) return
+    decisionsRequested.clear()
+    dates.forEach { ensureDecisions(it) }
+  }
+
   fun consumeToast() {
     _toast.value = null
   }
@@ -272,6 +287,8 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
       burns = resp.burns
       earliestLoaded = start
       publishResult()
+      // 顺路重试 BMR：冷启动时它可能因为网络抖动没拿到（见 BmrCache）
+      bmrCache.ensureLoaded()
     } catch (e: Exception) {
       if (mine != seq) return
       _state.update {

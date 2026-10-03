@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -77,12 +77,14 @@ fun RecordsTab(
 
   val snackbarHostState = remember { SnackbarHostState() }
 
-  // Calo 里补记/改/删成功后，这里要重拉
+  // Calo 里补记/改/删成功、或 §8.6 轮询发现服务端有新数据，这里都要重拉
   val context = LocalContext.current
   val dataSignal = remember(context) { AppContainer.of(context).dataSignal }
   val dataTick by dataSignal.tick.collectAsStateWithLifecycle()
   LaunchedEffect(dataTick) {
     if (dataTick > 0) {
+      // 新数据可能带新的 Luna 决策，角标要跟着更新
+      dayViewModel.refreshDecisions()
       rangeViewModel.invalidate()
       dayViewModel.refresh()
     }
@@ -254,7 +256,7 @@ private fun ArrowHeader(
     verticalAlignment = Alignment.CenterVertically,
   ) {
     IconButton(onClick = onPrev) {
-      Icon(Icons.Filled.KeyboardArrowLeft, contentDescription = "上一页")
+      Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "上一页")
     }
     Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
       Text(
@@ -276,7 +278,7 @@ private fun ArrowHeader(
       Box(modifier = Modifier.padding(horizontal = 12.dp))
     }
     IconButton(onClick = onNext, enabled = canGoForward) {
-      Icon(Icons.Filled.KeyboardArrowRight, contentDescription = "下一页")
+      Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "下一页")
     }
   }
 }

@@ -296,9 +296,6 @@ data class ChatSessionDto(
 @Serializable
 data class ChatSessionsResponse(val sessions: List<ChatSessionDto> = emptyList())
 
-@Serializable
-data class ChatNewSessionResponse(val ok: Boolean = false, val sessionId: Int = 0)
-
 /**
  * 一次工具调用。args / result 保持原始 JSON，因为不同工具的字段完全不同，
  * 摊平成强类型反而要为每个工具定义一个类；取值交给 domain/ChatTools。
