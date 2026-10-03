@@ -144,9 +144,11 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.10，2026-10-03）：**首期功能已全部完成**——三 Tab 骨架 + 服务器配置向导 + 登录/登出（含使用中会话失效自动回登录页）+ **记录页三视图**（日：时间轴无限下拉、吸顶汇总含缺口 chip、下拉刷新、磁盘缓存冷启动秒开；周：双层柱状图 + 汇总 + 时间轴；月：圆环日历，点日期跳回日视图）+ **餐卡详情**（全屏画廊含双指缩放与多图翻页、照片明细按形态 A/B 区分、🤖 AI 决策块、组级重分析、整餐删除与单张移除两步确认）+ **设置页**（体征参数与 BMR、Calo 上下文窗口、服务器分组）+ **选择照片**（相册按天分页多选 ≤10、非食物置灰；本地上传走系统照片选择器，无 EXIF 时提示改期）+ **Calo 聊天页**（会话历史与惰性新建、过程层折叠步骤链、产物分流、统计卡、删除确认卡、聊天餐卡可进详情）。`domain/` 纯函数与 `data/` 共 14 个测试类、95 个 JVM 单测。**只剩 data-version 轮询（§8.6）**，`docs/android-app-spec.md` §15 有完整勾选、§8.x 各小节开头有状态。包名 `com.jerrylf.inkcal`。
+当前状态（0.11，2026-10-03）：**首期功能已全部完成**——三 Tab 骨架 + 服务器配置向导 + 登录/登出（含使用中会话失效自动回登录页）+ **记录页三视图**（日：时间轴无限下拉、吸顶汇总含缺口 chip、下拉刷新、磁盘缓存冷启动秒开；周：双层柱状图 + 汇总 + 时间轴；月：圆环日历，点日期跳回日视图）+ **餐卡详情**（全屏画廊含双指缩放与多图翻页、照片明细按形态 A/B 区分、🤖 AI 决策块、组级重分析、整餐删除与单张移除两步确认）+ **设置页**（体征参数与 BMR、Calo 上下文窗口、服务器分组）+ **选择照片**（相册按天分页多选 ≤10、非食物置灰；本地上传走系统照片选择器，无 EXIF 时提示改期）+ **Calo 聊天页**（会话历史与惰性新建、过程层折叠步骤链、产物分流、统计卡、删除确认卡、聊天餐卡可进详情）。`domain/` 纯函数与 `data/` 共 14 个测试类、95 个 JVM 单测。**只剩 data-version 轮询（§8.6）**，`docs/android-app-spec.md` §15 有完整勾选、§8.x 各小节开头有状态。包名 `com.jerrylf.inkcal`。
 
 0.6 是非功能性版本：去掉 `network_security_config` 里的真实地址白名单（见上文），仓库转 public，并清理了源码/文档/APK 里的内网地址。功能与 0.5 相同。
+
+0.11 也是纯修复版本：记录页与 Calo 页内嵌 `TopAppBar` 的 `windowInsets` 与 Scaffold 重复垫了状态栏 inset，标题与列表之间出现一段空白；现显式清零（约定见下）。功能与 0.10 相同。
 
 详情页刻意用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本。组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
 
@@ -459,4 +461,4 @@ venv/bin/python -m compileall -q main.py src web/server.py
 - [`docs/prototypes/two-tab-proto.html`](./docs/prototypes/two-tab-proto.html)：已确认 UI 原型。
 - [`docs/references/photoprism-api.md`](./docs/references/photoprism-api.md)：PhotoPrism API 备忘（改 `photoprism_client.py` 时查）。
 - [`docs/references/synology-photos-api.md`](./docs/references/synology-photos-api.md)：Synology Photos API 备忘（尚未接入，仅备查）。
-- [`docs/android-app-spec.md`](./docs/android-app-spec.md)：原生 Android 客户端实现文档（API 契约、页面行为、验收清单）。**首期功能已全部落地（0.10）**，各小节开头有状态标记、§14 有逐项进度、§15 是实施顺序。改客户端前先读它。
+- [`docs/android-app-spec.md`](./docs/android-app-spec.md)：原生 Android 客户端实现文档（API 契约、页面行为、验收清单）。**首期功能已全部落地（0.11）**，各小节开头有状态标记、§14 有逐项进度、§15 是实施顺序。改客户端前先读它。
