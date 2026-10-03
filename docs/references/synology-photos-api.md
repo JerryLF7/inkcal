@@ -3,6 +3,10 @@
 > 本文档面向 inkcal 项目，描述如何通过 Synology DSM Web API 读取 Synology Photos 中的照片元数据并下载原始文件/缩略图。
 >
 > 目标 DSM 版本：7.x（兼容 6.x 核心机制）
+>
+> **状态：尚未接入，仅备查**。`SOURCE` 目前只支持 `immich` 与 `photoprism`，没有 Synology 客户端实现。
+> 要接入的话，按 `src/photoprism_client.py` 的形状写一个同签名的 client（`get_date_assets` /
+> `download_thumbnail` / `download_original` / `close`），再挂进 `_resolve_sources()`。
 
 ---
 

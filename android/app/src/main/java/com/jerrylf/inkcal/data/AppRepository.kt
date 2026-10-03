@@ -4,8 +4,10 @@ import com.jerrylf.inkcal.domain.ServerUrl
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.Interceptor
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
+import okhttp3.Response
 import retrofit2.HttpException
 import java.util.concurrent.TimeUnit
 
@@ -24,12 +26,45 @@ sealed interface ConnState {
   data class Failed(val message: String) : ConnState
 }
 
+/** 普通请求的读超时。 */
+private const val DEFAULT_READ_TIMEOUT_S = 20L
+
+/**
+ * 按接口分超时（docs/android-app-spec.md §3.3）。
+ *
+ * 用 `endsWith` 而不是相等：Base URL 可能带子路径（反代挂在 `/inkcal/` 下）。
+ *
+ * 单独抽成函数是为了能被测试钉住——映射写错会静默退回 20 秒，而症状是
+ * 「服务端已经写完记录、客户端却报失败」这种很难归因的假故障。
+ */
+internal fun readTimeoutSecondsFor(path: String): Long =
+  when {
+    path.endsWith("/api/reanalyze") -> 120L
+    path.endsWith("/api/chat/send") -> 300L
+    // 一次最多带 10 张、整批过一次 Luna harness，给足余量
+    path.endsWith("/api/analyze-album-photo") -> 600L
+    path.endsWith("/api/manual-upload") -> 300L
+    else -> DEFAULT_READ_TIMEOUT_S
+  }
+
+/**
+ * 慢操作很多：重新分析要跑一轮 Gemini，相册批量分析整批过一次 Luna harness
+ * （AGENTS.md 记录过一轮可跑 ~11 分钟）。如果全用一个 20 秒读超时，会出现
+ * **服务端已经写完记录、客户端却先报失败**——用户看到"失败"，回去刷新发现记录在。
+ */
+private object TimeoutInterceptor : Interceptor {
+  override fun intercept(chain: Interceptor.Chain): Response {
+    val seconds = readTimeoutSecondsFor(chain.request().url.encodedPath)
+    // OkHttp 的 withReadTimeout 收 Int、Builder.readTimeout 收 Long，这里统一按秒存 Long
+    return chain.withReadTimeout(seconds.toInt(), TimeUnit.SECONDS).proceed(chain.request())
+  }
+}
+
 /**
  * 连接、认证与业务数据访问。
  *
  * 启动时不做探测，直接请求 /api/data-version：200 就是免登录或已登录，401 才要登录页。
- */
-class AppRepository(
+ */class AppRepository(
   private val store: SettingsStore,
   private val cookieStore: CookieStore,
   private val recordsCache: RecordsCache,
@@ -39,8 +74,9 @@ class AppRepository(
   val httpClient: OkHttpClient =
     OkHttpClient.Builder()
       .cookieJar(cookieStore)
+      .addInterceptor(TimeoutInterceptor)
       .connectTimeout(15, TimeUnit.SECONDS)
-      .readTimeout(20, TimeUnit.SECONDS)
+      .readTimeout(DEFAULT_READ_TIMEOUT_S, TimeUnit.SECONDS)
       .build()
 
   @Volatile private var cachedApi: Pair<String, InkcalApi>? = null

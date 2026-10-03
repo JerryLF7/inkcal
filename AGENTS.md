@@ -140,7 +140,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.8，2026-10-02）：三 Tab 骨架 + 服务器配置向导 + 登录/登出（含使用中会话失效自动回登录页）+ **记录页三视图**（日：时间轴无限下拉、吸顶汇总含缺口 chip、下拉刷新、磁盘缓存冷启动秒开；周：双层柱状图 + 汇总 + 时间轴；月：圆环日历，点日期跳回日视图）+ **餐卡详情**（全屏画廊含双指缩放与多图翻页、照片明细按形态 A/B 区分、🤖 AI 决策块、组级重分析、整餐删除与单张移除两步确认）+ **设置页**（体征参数与 BMR、Calo 上下文窗口、服务器分组）+ **选择照片**（相册按天分页多选 ≤10、非食物置灰；本地上传走系统照片选择器，无 EXIF 时提示改期）。`domain/` 纯函数（TimeFmt / Tdee / ImageUrl / MealGrouping / Decisions / BodyMetrics / Periods / WeekStats / MonthGrid / ServerUrl）与 `RecordsCache` 共 65 个 JVM 单测。**data-version 轮询、Calo 页仍未做**，按 `docs/android-app-spec.md` §15 顺序往下做。包名 `com.jerrylf.inkcal`。
+当前状态（0.9，2026-10-02）：三 Tab 骨架 + 服务器配置向导 + 登录/登出（含使用中会话失效自动回登录页）+ **记录页三视图**（日：时间轴无限下拉、吸顶汇总含缺口 chip、下拉刷新、磁盘缓存冷启动秒开；周：双层柱状图 + 汇总 + 时间轴；月：圆环日历，点日期跳回日视图）+ **餐卡详情**（全屏画廊含双指缩放与多图翻页、照片明细按形态 A/B 区分、🤖 AI 决策块、组级重分析、整餐删除与单张移除两步确认）+ **设置页**（体征参数与 BMR、Calo 上下文窗口、服务器分组）+ **选择照片**（相册按天分页多选 ≤10、非食物置灰；本地上传走系统照片选择器，无 EXIF 时提示改期）。`domain/` 纯函数与 `data/` 共 12 个测试类、69 个 JVM 单测。**data-version 轮询（§8.6）、Calo 聊天页（§10）仍未做**，按 `docs/android-app-spec.md` §15 顺序往下做（§8.1–§8.7、§10 各小节开头都标了实现状态）。包名 `com.jerrylf.inkcal`。
 
 0.6 是非功能性版本：去掉 `network_security_config` 里的真实地址白名单（见上文），仓库转 public，并清理了源码/文档/APK 里的内网地址。功能与 0.5 相同。
 

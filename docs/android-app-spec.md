@@ -4,7 +4,7 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
-> **实现进度（0.8，2026-10-02）**：里程碑 A–E 已完成——日/周/月三视图、餐卡详情（删除/重分析/决策）、设置页、选择照片（相册多选 + 本地上传）都可用了。**未做**：data-version 轮询、Calo。逐项状态见 §14 的「进度」列，实施顺序的完成情况见 §15。
+> **实现进度（0.9，2026-10-02）**：里程碑 A–E 已完成——日/周/月三视图、餐卡详情（删除/重分析/决策）、设置页、选择照片（相册多选 + 本地上传）都可用了。**未做**：data-version 轮询（§8.6）、Calo 聊天页（§10）。逐项状态见 §14 的「进度」列，实施顺序的完成情况见 §15；每个行为小节开头也标了状态。
 >
 > **0.6 只有非功能性改动**：`network_security_config` 去掉真实地址白名单（见 §3.1），仓库转为 public 并清理了内网地址痕迹。功能与 0.5 相同。
 >
@@ -70,6 +70,10 @@
 | POST /api/analyze-album-photo、POST /api/manual-upload | 300 s |
 
 这些请求期间 UI 显示进度并禁用重复提交。用户离开页面时不要取消请求（服务端已在执行，取消只会丢结果），用 application 级 scope 发起。
+
+**实现注记（0.9）**：按接口分超时由 `AppRepository.kt` 里的 `TimeoutInterceptor` 做，映射函数是 `readTimeoutSecondsFor(path)`（按后缀匹配，所以 Base URL 带子路径也认）。两点值得记：
+- 单张 `manual-upload` 用 300 s，但 `analyze-album-photo` 用 **600 s**——一次最多带 10 张、整批过一次 Luna harness，AGENTS.md 记录过一轮可跑 ~11 分钟，300 s 不够。
+- 之前这里漏做了分超时（全用 20 s），症状是**服务端已经写完记录、客户端先报失败**：用户看到"重新分析失败"，回去一刷新记录其实是新的。`TimeoutTest` 现在钉住了这张表。
 
 ## 4. 时间与日期（必须照做，AGENTS §1 铁律）
 
@@ -160,6 +164,8 @@ id、session_date、action（add/update/skip）、relation（new_meal/same_meal/
 
 `/api/upload-image`（替换某条记录的图片）前端没有任何调用，App 不做。
 
+**App 当前未使用**（实现状态，不是遗漏）：`GET /api/today`（用 `/api/records?date=` 代替）、`GET /api/week`（周视图改用区间接口，见 §8.2 注记）、`GET /api/burn` 与 `PUT/POST /api/burn`（消耗只读展示，没有录入 UI）、`/api/chat/*` 全部（Calo 未做）、`/api/skipped`。
+
 ## 7. 热量缺口与 BMR（客户端唯一要算的业务公式）
 
 ```
@@ -182,6 +188,8 @@ deficit(kcal, ...) = tdee - kcal      // 正=有缺口，负=超标
 - 全局刷新信号：一个 SharedFlow 或计数器 bump，任何写操作成功后触发，各页监听后重拉已加载范围；§8.6 的后台轮询也触发它。
 
 ### 8.1 记录页：日视图（默认子视图）
+
+> **状态：✅ 已实现**（0.2 日视图与餐卡；0.3 补下拉刷新 + 冷启动磁盘缓存；0.7 补日/周/月切换与月视图跳转）
 - TopAppBar 标题 = 当前可见日期（今天显示「今天 · 9月30日」，副标题「周三」）；动作：视图切换、「选择照片」入口（可用 ExtendedFloatingActionButton）。
 - 视图切换用 SingleChoiceSegmentedButtonRow：日 / 周 / 月。
 - 日视图是无限向下滚动的时间轴，LazyColumn，最新日期在顶。
@@ -196,6 +204,8 @@ deficit(kcal, ...) = tdee - kcal      // 正=有缺口，负=超标
 - 请求序号防抖：每次加载带递增 id，只采纳最新响应（对应网页 _loadSeq）。
 
 ### 8.2 周视图
+
+> **状态：✅ 已实现（0.7）**
 - 顶栏「本周」或「MM.DD – MM.DD」，左右箭头切周，不能进入未来周，提供「回到本周」。
 - **实现注记（2026-10-02）**：原本写的是 `GET /api/week?start=周一`，实际改用 `GET /api/records?start&end`——周接口的 `by_day`/`summary` 都能由区间数据在客户端算出来，而月视图又必须走任意区间，两条路合成一条少一半代码。没有用到的 `/api/week` 也不要再接回来。
 - 上半部分 7 根柱的双层柱状图（唯一需要自绘，Canvas 约 100 行）：底层灰柱高度=当日 TDEE，上层较窄柱（约 55% 宽）=当日摄入，摄入大于 TDEE 时上层变红；无摄入不画上层。归一化：max = max(各日 kcal 与 tdee 的最大值, 1)；摄入柱高度 max(kcal/max*100, 2)%（有摄入时），TDEE 柱同理。柱下标签 一到日，点击弹出「摄入 X / 消耗 Y」。
@@ -203,6 +213,8 @@ deficit(kcal, ...) = tdee - kcal      // 正=有缺口，负=超标
 - 下半部分按日分组的餐卡时间轴（新日期在前，日内倒序，规则同 §8.1）。点卡片进详情。
 
 ### 8.3 月视图
+
+> **状态：✅ 已实现（0.7）**
 - GET /api/records?start=月初&end=月末；按日累加 records 的 calories 得每日 kcal，burns 字典给 TDEE。
 - 顶栏「2026年9月」，左右切月，不看未来月。
 - 周一起始的 7 列网格（格子 aspectRatio 1）。**实现注记**：用普通 Column/Row 铺 42 个格子而不是 LazyVerticalGrid——外面已经有一层滚动，套 Lazy 反而会嵌套冲突。每格：日期数字 + 环形进度。直接用 Material 的 CircularProgressIndicator，progress = min(kcal/tdee, 1)，不要自绘圆环。
@@ -210,6 +222,8 @@ deficit(kcal, ...) = tdee - kcal      // 正=有缺口，负=超标
 - 点某天 → 切到日视图并 jumpTo(date)。
 
 ### 8.4 餐卡与详情
+
+> **状态：✅ 已实现**（0.2 餐卡；0.4 详情页；0.5 补卡片 🤖 角标）
 
 卡片（Material Card）：
 - 左侧 96dp 方形缩略图；右侧：meal（粗体，允许折行，不截断）、meal_detail（小号灰字，最多 2 行省略，空则不渲染）、HH:mm、来源标签（手动/Immich/PhotoPrism）、置信度（高/中/低，低置信度要有可见提示）、宏量 P / C / F（用字母，三者全 0 则隐藏）、kcal。
@@ -247,6 +261,8 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 - 系统返回键关闭详情。
 
 ### 8.5 选择照片（补漏入口）
+
+> **状态：✅ 已实现（0.8）**——相册多选与本地上传两条路径都在。
 两条来源都必须保留。
 
 (a) 相册未处理照片（GET /api/album-photos）：
@@ -270,15 +286,21 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 - 上传进行中禁止重复选择文件。
 
 ### 8.6 后台数据同步（data-version 轮询）
+
+> **状态：❌ 未实现**——记录页目前靠下拉刷新手动重载，没有自动同步。
 cron 会在后台写记录。前台可见时每 30 秒 GET /api/data-version：首次只记录基线，version 变化时清空决策缓存并触发全局刷新。进入后台停止，回到前台立即轮询一次。用 repeatOnLifecycle(STARTED) 实现，不用前台服务或 WorkManager。网络失败静默。
 
 ### 8.7 设置页
+
+> **状态：✅ 已实现（0.5）**
 - 表单：身高（cm，50 到 260）、体重（kg，20 到 300）、出生日期（DatePicker）、性别（SingleChoiceSegmentedButtonRow，男/女）、Calo 上下文窗口（Slider 5 到 50，步进 1，默认 20）。
 - 「保存」发 PUT /api/settings（只发已填的键），成功后显示服务端返回的 bmr（kcal/天取整，未填齐显示「—」），刷新全局 BMR 缓存并触发全局刷新，Snackbar「设置已保存」。客户端校验范围与服务端一致。
 - 另设「服务器」分组：Base URL、登出、（可选）清除图片缓存。
 - Calo 页顶部不放设置入口（已拍板）。
 
 ### 8.8 系统集成（首期后做）
+
+> **状态：未做**（首期范围外）
 - 分享入口：ACTION_SEND 的 image/* Intent Filter，把照片送进 §8.5(b) 的上传流程。
 - 桌面小组件（Glance）：今日摄入 / TDEE / 缺口，数据来自 GET /api/today 与 GET /api/settings。
 - 不做：推送通知、后台同步热量消耗、Health Connect（需要另行设计，burn 目前由 NUC 上 cron 写入）。
@@ -288,6 +310,8 @@ cron 会在后台写记录。前台可见时每 30 秒 GET /api/data-version：�
 asset_id 是幂等键。重复提交会得到 409，客户端把 409 当作「已在记录中」而不是错误。提交进行中禁用按钮。
 
 ## 10. Calo 聊天页
+
+> **状态：❌ 未实现**——`ui/calo/CaloScreen.kt` 目前还是占位页，整个聊天后端（`/api/chat/*`）一行都没接。
 
 - 消息流用 LazyColumn，新消息追加后滚到底。输入区：OutlinedTextField + 发送 IconButton；发送中禁用并显示「Calo 正在思考…」占位气泡。
 - 空会话引导：标题「我是 Calo」、简介、4 个快捷提示 SuggestionChip：「今天摄入了多少热量？」「记一下昨天下午吃了包薯片」「帮我查查昨天的午餐」「最近吃过什么高蛋白食物？」，点击即发送。
@@ -338,29 +362,48 @@ asset_id 是幂等键。重复提交会得到 409，客户端把 409 当作「�
   - 绝不能让模型结果（tool_log）直接触发删除。
 - 不做：聊天传图、流式输出、工具调用中途进度（后端非流式，tool_log 只在结束时一次性返回）。
 
-## 11. 工程结构建议
+## 11. 工程结构（实际）
+
+下面是**已经落地的**结构，不是建议稿——接手时按这个改，别再另起一套。
 
 ```
 android/
-  app/src/main/java/.../
-    data/      Api.kt  Dto.kt  Repository.kt  CookieStore.kt  SettingsStore.kt
-    domain/    Tdee.kt  TimeFmt.kt  ImageUrl.kt  MealGrouping.kt  ToolSteps.kt
+  app/src/main/java/com/jerrylf/inkcal/
+    MainActivity.kt
+    data/      Api.kt  Dto.kt  AppRepository.kt  AppContainer.kt
+               SettingsStore.kt  CookieStore.kt  RecordsCache.kt  BmrCache.kt
+    domain/    TimeFmt.kt  Tdee.kt  ImageUrl.kt  MealGrouping.kt  Decisions.kt
+               BodyMetrics.kt  Periods.kt  WeekStats.kt  MonthGrid.kt  ServerUrl.kt
+    theme/     Color.kt  Theme.kt  Type.kt
     ui/
-      app/     AppScaffold.kt  Navigation.kt  Theme.kt
-      records/ DayScreen.kt  WeekScreen.kt  MonthScreen.kt  WeekChart.kt  MealCard.kt  MealDetail.kt
-      picker/  PhotoPickerScreen.kt  UploadFlow.kt
-      calo/    CaloScreen.kt  ToolStepsBar.kt  ArtifactCards.kt  DeleteConfirmCard.kt  SessionSheet.kt
-      settings/SettingsScreen.kt  LoginScreen.kt
+      app/     AppRoot.kt  AppViewModel.kt  MainScaffold.kt  ImageLoader.kt
+      setup/   SetupScreen.kt
+      records/ RecordsTab.kt  RecordsScreen.kt  RecordsViewModel.kt  RangeViewModel.kt
+               MealCard.kt  MealDetailDialog.kt  DateSeparator.kt  Labels.kt
+               WeekView.kt  WeekChart.kt  MonthView.kt
+      picker/  PhotoPickerScreen.kt  PickerViewModel.kt
+      settings/SettingsScreen.kt  SettingsViewModel.kt
+      calo/    CaloScreen.kt          ← 仍是占位
+  app/src/test/java/com/jerrylf/inkcal/   12 个测试类，69 个用例
 ```
-domain/ 下全是纯 Kotlin 函数（无 Android 依赖），这是测试重点。
+
+几点约定：
+- `domain/` 全是纯 Kotlin（无 Android 依赖），是单测重点，也是唯一能在这台机器上验证的部分。
+- **详情弹窗、Snackbar、写操作都在 `RecordsTab` 那一层**，不在各子视图里——三个视图的卡片都要能进详情，写完还要让当前视图重拉。子视图只负责渲染。
+- `RangeViewModel` 是周/月共用的区间数据源；`RecordsViewModel` 管日视图 + 详情锚点 + 写操作。
+- 单例（store / cookie / repository / 两个 cache）走 `AppContainer`，别在各 ViewModel 里各建一份——CookieStore 有内存缓存，两份会互相看不见对方的 cookie。
 
 ## 12. 测试与验收
 
-1. JVM 单元测试必须覆盖：tdee/deficit 三级降级；时间字符串切片（含 +08:00、无时区、空串，以及「凌晨 00:30+08:00 仍归当天」）；图片地址规则；形态 A 判据；日内排序；周统计（仅有记录的天参与累计缺口、日均）；步骤标题/徽标/摘要与产物分流（含「有写操作时查询结果不展示」）；DTO 解析。
-2. DTO fixtures：从真实 API 响应样本脱敏后放入 android/app/src/test/resources/。不要提交账号、密钥、照片 URL 中的密钥。
-3. 集成验证：可配置 Base URL 的 debug 构建，对着 NUC 真实服务，或用 INKCAL_DB 指向隔离库起本地 Flask（写法见 scripts/test_lightbox_smoke.py 开头，注意它预置 INKCAL_USER 为空以防 .env 注入鉴权）。
-4. 每个里程碑交付可安装的 debug APK，附「请用户手动验证」清单；不要声称验证了自己无法验证的交互。
-5. 提交前 `git diff --check`；不要 `git add .`；不要提交 local.properties、keystore、.env。
+**已落地的做法（0.9）**：12 个 JVM 测试类、69 个用例，全部集中在 `domain/` 与 `data/` 的纯逻辑上，`./gradlew :app:testDebugUnitTest` 一条命令跑完。覆盖：三级降级（Tdee）、时间字符串切片（含 `+08:00`/无时区/空串/凌晨 00:30 仍归当天）、DatePicker 的 UTC 毫秒换算、图片地址规则（含「库里存的其实是 `size=preview`」）、形态 A 判据、日内与周的排序、周期算术（周一起点/闰月/跨年/月首空格）、周汇总（只算有记录的天）、月格二值语义、决策匹配（含 `target_asset_id`）、体征校验范围、按接口分超时、缓存往返与损坏兜底、以及单张/多张两种分析响应的归一化。
+
+**为什么重点在这**：这台机器上没有模拟器也没有真机自动化，`domain/` 与 `data/` 是唯一能在这里验证的部分；UI 只能靠用户手动过。所以凡是能抽成纯函数的判断（日期归属、缺口公式、分页边界、形态 A/B）都抽出来了，**新逻辑优先补测试**，别指望在 UI 层用眼睛验。
+
+其余要求仍然有效：
+1. DTO fixtures 放在 `android/app/src/test/resources/`——**目前没有用**（真实响应是直接用 curl 对着 NUC 核对字段的，见 AGENTS.md）。不要提交账号、密钥、照片 URL 中的密钥。
+2. 集成验证：可配置 Base URL，对着 NUC 真实服务；或用 `INKCAL_DB` 指向隔离库起本地 Flask（写法见 `scripts/test_lightbox_smoke.py` 开头，注意它预置 `INKCAL_USER` 为空以防 `.env` 注入鉴权）。
+3. 每个里程碑交付可安装 APK，附「请用户手动验证」清单；**不要声称验证了自己无法验证的交互**——真机上的手势、系统照片选择器、返回键都只能由用户确认。
+4. 提交前 `git diff --check`；不要 `git add .`；不要提交 `local.properties`、keystore、`.env`。
 
 ## 13. 已知后端注意事项
 
@@ -416,4 +459,7 @@ domain/ 下全是纯 Kotlin 函数（无 Android 依赖），这是测试重点�
 9. 未做：轮询刷新、收尾。（§8.8 的分享入口与小组件不在首期，别在这里排进去）
 
 > 实际执行顺序与上面略有出入：0.3 先补了「下拉刷新 + 磁盘缓存」（用户反馈冷启动每次都重新加载才加的），排在第 3 步之后、第 4 步之前；
-> 0.5 又回头补了 0.4 遗留的三处半成品（卡片 🤖 角标、设置页体征、使用中 401 回登录页）。
+> 0.5 又回头补了 0.4 遗留的三处半成品（卡片 🤖 角标、设置页体征、使用中 401 回登录页）；
+> 0.9 是补漏：§3.3 的**按接口分超时**之前一直没做（全用 20 s），重分析和批量加照片会在客户端超时、而服务端其实已经成功。
+>
+> **剩下的两步（8 轮询、9 收尾）可以在 Calo 之后再回头做**，它们是增强不是阻塞。

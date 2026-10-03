@@ -3,6 +3,10 @@
 > 本文档面向 inkcal 项目，描述如何通过 PhotoPrism REST API 读取照片元数据并下载缩略图/原始文件。
 >
 > 目标 PhotoPrism 版本：最新稳定版（基于 develop 分支 swagger.json）
+>
+> **状态：已接入**。`src/photoprism_client.py` 在用，签名与 `ImmichClient` 对齐、可互换；
+> 与 Immich 的差异（`Authorization: Bearer` vs `x-api-key`、缩略图用文件 SHA1、时区取 `TimeZone` 字段）
+> 在 AGENTS.md §7「多源相册」有摘要。**Android 客户端不直连它**，只经服务端代理。
 
 ---
 
