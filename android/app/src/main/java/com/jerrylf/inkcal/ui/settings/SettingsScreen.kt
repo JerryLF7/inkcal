@@ -206,7 +206,7 @@ fun SettingsScreen(
       HorizontalDivider()
       Text("关于", style = MaterialTheme.typography.titleMedium)
       Text(
-        "App 版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）",
+        "App 版本 ${BuildConfig.VERSION_NAME}",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )

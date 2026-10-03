@@ -4,7 +4,9 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
-> **实现进度（0.11，2026-10-03）**：**首期功能全部完成**——三 Tab、日/周/月三视图、餐卡详情、设置页、选择照片、Calo 聊天都可用。§8.6 轮询也已补上（**待随下一版发布**），首期清单里只剩首期外的 §8.8。逐项状态见 §14 的「进度」列，实施顺序的完成情况见 §15；每个行为小节开头也标了状态。
+> **实现进度（0.12，2026-10-03）**：**首期功能全部完成**——三 Tab、日/周/月三视图、餐卡详情、设置页（体征/Calo 窗口/服务器/关于）、选择照片、Calo 聊天，含 §8.6 的 data-version 轮询；首期清单里只剩首期外的 §8.8。逐项状态见 §14 的「进度」列，实施顺序的完成情况见 §15；每个行为小节开头也标了状态。
+>
+> **0.12 是首期收尾版**：补上 §8.6 轮询，修掉两处自查发现的 bug（聊天乐观消息 id 撞 key 崩溃、周/月视图写后不刷新），并做了一批小修（设置页拆「服务器/关于」分组、BMR 失败可重试、相册上限提示与结果分类、Markdown 链接可点、图标去废弃告警）。明细见 §14 的第 23–25 行。
 >
 > **0.11 只有修复**：记录页与 Calo 页内嵌 TopAppBar 的 `windowInsets` 与 Scaffold 重复垫了状态栏，标题与列表之间出现一段空白；现显式清零（约定见 §8，本版本无功能变化）。
 >
@@ -298,7 +300,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 
 ### 8.6 后台数据同步（data-version 轮询）
 
-> **状态：✅ 已实现（2026-10-03，待随下一版发布）**——`AppRoot` 里的 `DataVersionWatcher` 在连上服务器后按 `LifecycleStartEffect`（= `repeatOnLifecycle(STARTED)`）每 30 秒轮询。
+> **状态：✅ 已实现（0.12）**——`AppRoot` 里的 `DataVersionWatcher` 在连上服务器后按 `LifecycleStartEffect`（= `repeatOnLifecycle(STARTED)`）每 30 秒轮询。
 >
 > 实现注记：
 > - 基线（上次见到的版本号）存在 `AppViewModel` 里，**不是**存在轮询协程里。协程进后台会被取消，基线跟着丢的话，回前台第一次轮询只会把「后台期间 cron 写的新版本」记成新基线，那些记录就再也触发不了刷新——正是这个功能要解决的问题。
@@ -315,7 +317,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 - 另设「服务器」分组：**数据概况**、Base URL、登出、（可选）清除图片缓存。
   - 数据概况由 `/api/data-version` 的指纹解析而来（`domain/DataVersion`）：`数据概况：1245 条记录 · 最后写入 10-03 12:10（HKT）`。**指纹里的时间戳是 UTC**（SQLite `datetime('now')`），必须转 HKT 再显示。注意**不能按 `:` 切分指纹**——时间戳自带冒号、空字段又会让段数不定，条数取前缀正则、时间戳用正则全量抓取。解析不出来就显示「—」。
   - 概况的刷新点：连接探测（`probe`/`login`/`logout` 后由 `AppViewModel.applyProbe` 顺手解析）与 §8.6 每 30 秒的轮询，不用额外请求。
-- 末尾「关于」分组只放一行 **App 版本**（`BuildConfig.VERSION_NAME`（`VERSION_CODE`），因此 `buildFeatures.buildConfig = true`，取的是 `app/build.gradle.kts` 里发布的那个版本号）。**别把它和「数据概况」混在一起**——一个是「装的哪个包」，一个是「服务端有多少数据」，此前并列显示过、被用户指出看不懂。
+- 末尾「关于」分组只放一行 **App 版本**（只显示 `BuildConfig.VERSION_NAME`，不带版本代码——已拍板，版本代码是给 Android 比大小的，给人看没有意义）。为此 `buildFeatures.buildConfig = true`，取的就是 `app/build.gradle.kts` 里发布的那个版本号。**别把它和「数据概况」混在一起**——一个是「装的哪个包」，一个是「服务端有多少数据」，此前并列显示过、被用户指出看不懂。
 - Calo 页顶部不放设置入口（已拍板）。
 
 ### 8.8 系统集成（首期后做）
@@ -400,7 +402,7 @@ android/
                DataChangeSignal.kt
     domain/    TimeFmt.kt  Tdee.kt  ImageUrl.kt  MealGrouping.kt  Decisions.kt
                BodyMetrics.kt  Periods.kt  WeekStats.kt  MonthGrid.kt  ServerUrl.kt
-               ChatTools.kt  MarkdownText.kt
+               ChatTools.kt  MarkdownText.kt  DataVersion.kt
     theme/     Color.kt  Theme.kt  Type.kt
     ui/
       app/     AppRoot.kt  AppViewModel.kt  MainScaffold.kt  ImageLoader.kt
@@ -460,7 +462,7 @@ android/
 | 8 | 删除整餐 / 单张移除（两步确认、晋升处理） | §8.4 | 是 | ✅ 0.4 |
 | 9 | 选择照片：相册多选不超过 10 张、分页 | §8.5(a) | 是 | ✅ 0.8 |
 | 10 | 本地上传、无 EXIF 日期修正（_date_source=fallback 流程） | §8.5(b) | 是 | ✅ 0.8 |
-| 11 | data-version 轮询刷新 | §8.6 | 是 | ✅（待随下一版发布） |
+| 11 | data-version 轮询刷新 | §8.6 | 是 | ✅ 0.12 |
 | 12 | 设置：体征、BMR、Calo 窗口 | §8.7 | 是 | ✅ 0.5 |
 | 13 | 热量缺口（三级降级） | §7 | 是 | ✅ 0.2 |
 | 14 | Calo：会话恢复、历史、惰性新建 | §10 | 是 | ✅ 0.10 |
@@ -477,9 +479,9 @@ android/
 |---|---|---|---|
 | 21 | 下拉刷新 + 冷启动磁盘缓存 | 先画缓存再后台重拉（stale-while-revalidate），重拉已加载的整个范围 | ✅ 0.3 |
 | 22 | 内嵌 TopAppBar inset 清零 | 修复 Scaffold 与 TopAppBar 重复垫状态栏 inset 导致的标题下空白（§8 约定） | ✅ 0.11 |
-| 23 | 聊天乐观消息唯一 id + 周/月写后原地重拉 | 修复两条崩溃/过期：固定乐观 id 导致第二轮对话 LazyColumn 撞 key 崩溃（删除确认卡状态也串）；RangeViewModel.invalidate 只清标记不重拉，写后周/月视图显示旧数据 | ✅（待随下一版发布） |
-| 24 | §8.6 轮询配套修正 | 轮询基线存 VM（存协程里会漏掉后台期间的写入）；决策缓存改为「按已加载日期重取」而不是清空；BMR 拉取失败可重试；相册超 10 张给提示、批量结果分类展示（有失败走错误态）；Markdown 链接可点；聊天详情删单张走 promoted 重拉；废弃图标换 AutoMirrored；删未用 DTO | ✅（待随下一版发布） |
-| 25 | 设置页分组：服务器 / 关于 | 「服务器」组显示可读的数据概况（`domain/DataVersion` 解析 `/api/data-version` 指纹：记录条数 + 最后写入，UTC 转 HKT），末尾「关于」组显示 App 版本（BuildConfig）。原先是两行并列的「App 版本 / 数据版本（原始指纹）」，用户反馈看不懂 | ✅（待随下一版发布） |
+| 23 | 聊天乐观消息唯一 id + 周/月写后原地重拉 | 修复两条崩溃/过期：固定乐观 id 导致第二轮对话 LazyColumn 撞 key 崩溃（删除确认卡状态也串）；RangeViewModel.invalidate 只清标记不重拉，写后周/月视图显示旧数据 | ✅ 0.12 |
+| 24 | §8.6 轮询配套修正 | 轮询基线存 VM（存协程里会漏掉后台期间的写入）；决策缓存改为「按已加载日期重取」而不是清空；BMR 拉取失败可重试；相册超 10 张给提示、批量结果分类展示（有失败走错误态）；Markdown 链接可点；聊天详情删单张走 promoted 重拉；废弃图标换 AutoMirrored；删未用 DTO | ✅ 0.12 |
+| 25 | 设置页分组：服务器 / 关于 | 「服务器」组显示可读的数据概况（`domain/DataVersion` 解析 `/api/data-version` 指纹：记录条数 + 最后写入，UTC 转 HKT），末尾「关于」组显示 App 版本（BuildConfig）。原先是两行并列的「App 版本 / 数据版本（原始指纹）」，用户反馈看不懂 | ✅ 0.12 |
 
 ## 15. 建议实施顺序
 
@@ -491,7 +493,7 @@ android/
 6. ✅ 0.7 周、月视图（含日/周/月切换与月视图点日期跳转）。
 7. ✅ 0.8 选择照片（相册多选 ≤10、按天分页、非食物置灰）+ 本地上传（系统照片选择器，无 EXIF 时提示改期）。
 8. ✅ 0.10 Calo（会话管理、步骤折叠、产物分流、统计卡、删除确认卡、聊天里的餐卡可进详情）。
-9. ✅ 轮询刷新（§8.6，待随下一版发布）；剩收尾。（§8.8 的分享入口与小组件不在首期，别在这里排进去）
+9. ✅ 0.12 轮询刷新（§8.6）；剩收尾。（§8.8 的分享入口与小组件不在首期，别在这里排进去）
 
 > 实际执行顺序与上面略有出入：0.3 先补了「下拉刷新 + 磁盘缓存」（用户反馈冷启动每次都重新加载才加的），排在第 3 步之后、第 4 步之前；
 > 0.5 又回头补了 0.4 遗留的三处半成品（卡片 🤖 角标、设置页体征、使用中 401 回登录页）；
