@@ -189,4 +189,15 @@ private object TimeoutInterceptor : Interceptor {
 
   suspend fun moveRecord(assetId: String, date: String): MoveRecordResponse =
     call { it.moveRecord(MoveRecordRequest(assetId = assetId, date = date)) }
+
+  // ── Calo 聊天（spec §10）───────────────────────────────────────
+
+  suspend fun chatSessions(): List<ChatSessionDto> = call { it.chatSessions().sessions }
+
+  suspend fun chatMessages(sessionId: Int?): ChatMessagesResponse =
+    call { it.chatMessages(sessionId) }
+
+  /** sessionId 为 null 时服务端会新建会话（惰性新建）。 */
+  suspend fun chatSend(sessionId: Int?, message: String): ChatSendResponse =
+    call { it.chatSend(ChatSendRequest(sessionId = sessionId, message = message)) }
 }

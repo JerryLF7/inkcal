@@ -31,10 +31,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jerrylf.inkcal.data.AppContainer
 import com.jerrylf.inkcal.domain.Periods
 import com.jerrylf.inkcal.ui.picker.PhotoPickerScreen
 import com.jerrylf.inkcal.domain.TimeFmt
@@ -74,6 +76,17 @@ fun RecordsTab(
   val scrollTarget by dayViewModel.scrollTarget.collectAsStateWithLifecycle()
 
   val snackbarHostState = remember { SnackbarHostState() }
+
+  // Calo 里补记/改/删成功后，这里要重拉
+  val context = LocalContext.current
+  val dataSignal = remember(context) { AppContainer.of(context).dataSignal }
+  val dataTick by dataSignal.tick.collectAsStateWithLifecycle()
+  LaunchedEffect(dataTick) {
+    if (dataTick > 0) {
+      rangeViewModel.invalidate()
+      dayViewModel.refresh()
+    }
+  }
 
   // 详情从「当前视图」的记录里查，所以周/月视图里点开的卡片一样能正确渲染
   val activeRecords = remember(mode, dayState.groups, rangeState.groups) {

@@ -20,6 +20,7 @@ class SettingsStore(private val context: Context) {
 
   private val baseUrlKey = stringPreferencesKey("base_url")
   private val cookiesKey = stringPreferencesKey("cookies")
+  private val chatSessionKey = stringPreferencesKey("chat_session_id")
 
   val baseUrl: Flow<String> = context.dataStore.data.map { it[baseUrlKey] ?: "" }
 
@@ -33,5 +34,15 @@ class SettingsStore(private val context: Context) {
 
   suspend fun writeCookies(raw: String) {
     context.dataStore.edit { it[cookiesKey] = raw }
+  }
+
+  /** Calo 停留的会话；空串表示「新会话」（惰性新建，首条消息才落库）。 */
+  suspend fun currentChatSessionId(): Int? =
+    context.dataStore.data.map { it[chatSessionKey] ?: "" }.first().toIntOrNull()
+
+  suspend fun setChatSessionId(id: Int?) {
+    context.dataStore.edit { prefs ->
+      if (id == null) prefs.remove(chatSessionKey) else prefs[chatSessionKey] = id.toString()
+    }
   }
 }

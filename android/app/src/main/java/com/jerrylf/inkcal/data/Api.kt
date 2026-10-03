@@ -69,6 +69,19 @@ interface InkcalApi {
   @POST("api/move-record")
   suspend fun moveRecord(@Body body: MoveRecordRequest): MoveRecordResponse
 
+  // ── Calo 聊天 ──────────────────────────────────────────────────
+
+  @GET("api/chat/sessions")
+  suspend fun chatSessions(): ChatSessionsResponse
+
+  /** session_id 缺省或无效 = 最新会话；一条会话都没有时 session_id 为 null。 */
+  @GET("api/chat/messages")
+  suspend fun chatMessages(@Query("session_id") sessionId: Int? = null): ChatMessagesResponse
+
+  /** 同步跑一轮 agent loop，非流式；超时给到 300 s。 */
+  @POST("api/chat/send")
+  suspend fun chatSend(@Body body: ChatSendRequest): ChatSendResponse
+
   @POST("api/reanalyze")
   suspend fun reanalyze(@Body body: ReanalyzeRequest): ReanalyzeResponse
 

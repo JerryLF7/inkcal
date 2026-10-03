@@ -2,6 +2,7 @@ package com.jerrylf.inkcal.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /**
  * API 契约。字段名靠 ApiFactory.json 的 SnakeCase 命名策略做映射，
@@ -278,4 +279,66 @@ data class MoveRecordRequest(val assetId: String, val date: String)
 data class MoveRecordResponse(
   val ok: Boolean = false,
   val assetId: String = "",
+)
+
+// ── Calo 聊天（spec §10）─────────────────────────────────────────
+
+@Serializable
+data class ChatSessionDto(
+  val id: Int = 0,
+  val title: String = "",
+  val createdAt: String = "",
+  /** 一条消息都没有时为 null。 */
+  val lastActive: String? = null,
+  val messageCount: Int = 0,
+)
+
+@Serializable
+data class ChatSessionsResponse(val sessions: List<ChatSessionDto> = emptyList())
+
+@Serializable
+data class ChatNewSessionResponse(val ok: Boolean = false, val sessionId: Int = 0)
+
+/**
+ * 一次工具调用。args / result 保持原始 JSON，因为不同工具的字段完全不同，
+ * 摊平成强类型反而要为每个工具定义一个类；取值交给 domain/ChatTools。
+ */
+@Serializable
+data class ToolCallDto(
+  val name: String = "",
+  val args: JsonObject = JsonObject(emptyMap()),
+  /** 失败时可能为 null。 */
+  val result: JsonObject? = null,
+)
+
+@Serializable
+data class ChatMessageDto(
+  val id: Int = 0,
+  val sessionId: Int = 0,
+  /** user / assistant */
+  val role: String = "",
+  val content: String = "",
+  val toolLog: List<ToolCallDto> = emptyList(),
+  val createdAt: String = "",
+)
+
+@Serializable
+data class ChatMessagesResponse(
+  /** 一条会话都没有时为 null。 */
+  val sessionId: Int? = null,
+  val messages: List<ChatMessageDto> = emptyList(),
+)
+
+/** sessionId 为 null 时不发这个键，由服务端新建会话（惰性新建）。 */
+@Serializable
+data class ChatSendRequest(val sessionId: Int? = null, val message: String)
+
+@Serializable
+data class ChatSendResponse(
+  val ok: Boolean = false,
+  val sessionId: Int? = null,
+  val reply: String = "",
+  val toolLog: List<ToolCallDto> = emptyList(),
+  /** 502 时带 error，但 tool_log 仍然可能有内容（用于展示失败的步骤）。 */
+  val error: String? = null,
 )

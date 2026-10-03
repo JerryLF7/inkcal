@@ -16,6 +16,9 @@ class AppContainer private constructor(context: Context) {
   val repository: AppRepository = AppRepository(settingsStore, cookieStore, recordsCache)
   val bmrCache: BmrCache = BmrCache(repository)
 
+  /** Calo 写成功后广播，记录页据此重拉。 */
+  val dataSignal: DataChangeSignal = DataChangeSignal()
+
   companion object {
     @Volatile private var instance: AppContainer? = null
 
