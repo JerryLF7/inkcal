@@ -1,5 +1,9 @@
 package com.jerrylf.inkcal.ui.app
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
@@ -13,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.IntOffset
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -40,6 +45,9 @@ private enum class Tab(val route: NavKey, val label: String, val icon: ImageVect
   Calo(CaloRoute, "Calo", Icons.Filled.Face),
   Settings(SettingsRoute, "设置", Icons.Filled.Settings),
 }
+
+/** Tab 在顺序里的下标，决定滑动方向；不是一级路由时返回 -1（不会比出方向）。 */
+private fun tabIndexOf(key: Any?): Int = Tab.entries.indexOfFirst { it.route == key }
 
 /** 一级导航骨架：底部 Tab + Nav3。设置页不参与左右滑动（滑动还没做）。 */
 @Composable
@@ -71,6 +79,17 @@ fun MainScaffold(viewModel: AppViewModel) {
       backStack = backStack,
       onBack = { backStack.removeLastOrNull() },
       modifier = Modifier.padding(inner),
+      // 一级 Tab 按顺序左右滑动（默认是渐入渐出）：往右的 Tab 从右侧滑入，反之从左侧
+      transitionSpec = {
+        val from = tabIndexOf(initialState.entries.lastOrNull()?.contentKey)
+        val to = tabIndexOf(targetState.entries.lastOrNull()?.contentKey)
+        val spec = tween<IntOffset>(280)
+        if (to > from) {
+          slideInHorizontally(spec) { it } togetherWith slideOutHorizontally(spec) { -it }
+        } else {
+          slideInHorizontally(spec) { -it } togetherWith slideOutHorizontally(spec) { it }
+        }
+      },
       entryProvider =
         entryProvider {
           entry<RecordsRoute> { RecordsTab() }

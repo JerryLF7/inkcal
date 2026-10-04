@@ -47,6 +47,8 @@ fun WeekView(
   decisionsByDate: Map<String, List<DecisionDto>>,
   onEnsureDecisions: (String) -> Unit,
   onOpenDetail: (RecordDto) -> Unit,
+  onReanalyze: (RecordDto) -> Unit,
+  onDeleteMeal: (RecordDto) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
@@ -55,21 +57,24 @@ fun WeekView(
 
   LaunchedEffect(monday) { viewModel.load(monday, Periods.weekEnd(monday)) }
 
-  val byDate = remember(state.groups) { state.groups.associateBy { it.date } }
+  // 只读自己这一周的槽位：pager 里相邻两周同时在屏，不能共享一份状态
+  val chunk = state.chunk(monday, Periods.weekEnd(monday))
+
+  val byDate = remember(chunk.groups) { chunk.groups.associateBy { it.date } }
   val bars =
-    remember(monday, state.groups, state.burns, bmr) {
+    remember(monday, chunk.groups, chunk.burns, bmr) {
       (0..6).map { offset ->
         val date = TimeFmt.plusDays(monday, offset.toLong())
         WeekBar(
           date = date,
           label = WEEKDAY_LABELS[offset],
           kcal = byDate[date]?.kcal ?: 0.0,
-          tdee = Tdee.tdee(bmr, state.burns[date]?.activeKcal),
+          tdee = Tdee.tdee(bmr, chunk.burns[date]?.activeKcal),
         )
       }
     }
-  val stats = remember(state.groups, state.burns, bmr) {
-    WeekStats.of(state.groups, state.burns, bmr)
+  val stats = remember(chunk.groups, chunk.burns, bmr) {
+    WeekStats.of(chunk.groups, chunk.burns, bmr)
   }
 
   Column(
@@ -103,16 +108,16 @@ fun WeekView(
       style = MaterialTheme.typography.bodyMedium,
     )
 
-    if (state.loading) {
+    if (chunk.loading) {
       Text("加载中…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    state.error?.let {
+    chunk.error?.let {
       Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
     }
 
     HorizontalDivider()
 
-    if (state.groups.isEmpty() && !state.loading) {
+    if (chunk.groups.isEmpty() && !chunk.loading) {
       Text(
         text = "本周没有记录",
         style = MaterialTheme.typography.bodyMedium,
@@ -123,17 +128,19 @@ fun WeekView(
     }
 
     // 与日视图同规则：日期倒序、日内倒序
-    state.groups.forEach { group ->
+    chunk.groups.forEach { group ->
       val dayDecisions = decisionsByDate[group.date].orEmpty()
       LaunchedEffect(group.date) { onEnsureDecisions(group.date) }
       DaySection(
         group = group,
         bmr = bmr,
-        activeKcal = state.burns[group.date]?.activeKcal,
+        activeKcal = chunk.burns[group.date]?.activeKcal,
         isToday = group.date == today,
         baseUrl = baseUrl,
         decisions = dayDecisions,
         onOpenDetail = onOpenDetail,
+        onReanalyze = onReanalyze,
+        onDeleteMeal = onDeleteMeal,
       )
     }
   }
@@ -149,6 +156,8 @@ internal fun DaySection(
   baseUrl: String,
   decisions: List<DecisionDto>,
   onOpenDetail: (RecordDto) -> Unit,
+  onReanalyze: (RecordDto) -> Unit,
+  onDeleteMeal: (RecordDto) -> Unit,
 ) {
   DateSeparator(
     date = group.date,
@@ -161,11 +170,13 @@ internal fun DaySection(
     isToday = isToday,
   )
   group.records.forEach { record ->
-    MealCard(
+    MealCardWithMenu(
       record = record,
       baseUrl = baseUrl,
       hasDecision = Decisions.forRecord(record, decisions).isNotEmpty(),
-      onClick = { onOpenDetail(record) },
+      onOpenDetail = { onOpenDetail(record) },
+      onReanalyze = { onReanalyze(record) },
+      onDeleteMeal = { onDeleteMeal(record) },
       modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
     )
   }

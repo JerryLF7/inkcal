@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,7 +17,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,7 +25,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,6 +46,8 @@ fun RecordsScreen(
   scrollTarget: String?,
   onScrollHandled: () -> Unit,
   onOpenDetail: (RecordDto) -> Unit,
+  onReanalyze: (RecordDto) -> Unit,
+  onDeleteMeal: (RecordDto) -> Unit,
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   val bmr by viewModel.bmr.collectAsStateWithLifecycle()
@@ -58,7 +57,7 @@ fun RecordsScreen(
   val listState = rememberLazyListState()
   val today = remember { TimeFmt.hktToday() }
 
-  // 每个日期头在扁平列表里的下标，用来把「第一个可见项」映射回日期
+  // 每个日期头在扁平列表里的下标，月视图跳转时按它定位
   val headerDates: List<Pair<Int, String>> =
     remember(state.groups) {
       var index = 0
@@ -68,8 +67,6 @@ fun RecordsScreen(
         at to group.date
       }
     }
-  val topDate = headerDates.lastOrNull { it.first <= listState.firstVisibleItemIndex }?.second
-
   // 触底前 2 项就开始拉更早的分片
   val nearEnd by remember {
     derivedStateOf {
@@ -92,32 +89,10 @@ fun RecordsScreen(
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
-    // 外层 MainScaffold 已消化状态栏 inset，这里必须清零，否则 TopAppBar 会再垫一次
-    TopAppBar(
-      windowInsets = WindowInsets(0, 0, 0, 0),
-      title = {
-        Column {
-          Text(
-            text =
-              when {
-                topDate == null -> "记录"
-                topDate == today -> "今天 · ${TimeFmt.shortDate(today)}"
-                else -> TimeFmt.shortDate(topDate)
-              },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-          )
-          if (topDate != null) {
-            Text(
-              text = TimeFmt.weekday(topDate),
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        }
-      },
-    )
-
+    // 没有标题栏（2026-10-04 拍板）：原先顶栏显示的日期与吸顶 DateSeparator 恒等——
+    // 两者都取"首个可见项所属的日期组"，而 stickyHeader 保证只要该组还有卡片可见、
+    // 那行日期就钉在顶部。分隔线还多带 kcal / PCF / 缺口 chip，所以顶栏纯冗余，
+    // 删掉后列表直接顶到状态栏下方，也多出一段竖向空间。
     Box(modifier = Modifier.weight(1f)) {
       PullToRefreshBox(
         isRefreshing = state.refreshing,
@@ -168,11 +143,13 @@ fun RecordsScreen(
                   )
                 }
                 items(group.records, key = { it.assetId }) { record ->
-                  MealCard(
+                  MealCardWithMenu(
                     record = record,
                     baseUrl = baseUrl,
                     hasDecision = Decisions.forRecord(record, dayDecisions).isNotEmpty(),
-                    onClick = { onOpenDetail(record) },
+                    onOpenDetail = { onOpenDetail(record) },
+                    onReanalyze = { onReanalyze(record) },
+                    onDeleteMeal = { onDeleteMeal(record) },
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                   )
                 }

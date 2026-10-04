@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
@@ -50,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +66,9 @@ import com.jerrylf.inkcal.domain.Decisions
 import com.jerrylf.inkcal.domain.ImageUrl
 import com.jerrylf.inkcal.domain.MealGrouping
 import com.jerrylf.inkcal.domain.TimeFmt
+import com.jerrylf.inkcal.theme.MacroCarbs
+import com.jerrylf.inkcal.theme.MacroFat
+import com.jerrylf.inkcal.theme.MacroProtein
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -70,7 +76,18 @@ import kotlin.math.roundToInt
 /** 两步确认的自动还原时间。 */
 private const val ARM_TIMEOUT_MS = 3_000L
 
-private const val REANALYZE_PLACEHOLDER = "修正说明，例：米饭只吃了一半 / 其实是玉米猪肉馅"
+/** 重新分析的修正说明占位文案，详情页与长按菜单的表单共用。 */
+internal const val REANALYZE_PLACEHOLDER = "修正说明，例：米饭只吃了一半 / 其实是玉米猪肉馅"
+
+/** P/C/F 行，配色与网页端一致。详情页主行与照片分行共用。 */
+@Composable
+private fun MacroText(p: Double, c: Double, f: Double, style: TextStyle) {
+  Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+    Text(text = "P${p.roundToInt()}", style = style, color = MacroProtein)
+    Text(text = "C${c.roundToInt()}", style = style, color = MacroCarbs)
+    Text(text = "F${f.roundToInt()}", style = style, color = MacroFat)
+  }
+}
 
 /**
  * 餐卡详情，对应 docs/android-app-spec.md §8.4。
@@ -250,11 +267,12 @@ fun MealDetailDialog(
               fontWeight = FontWeight.SemiBold,
             )
             if (record.proteinG > 0 || record.carbsG > 0 || record.fatG > 0) {
-              Text(
-                text =
-                  "   P${record.proteinG.roundToInt()} C${record.carbsG.roundToInt()} F${record.fatG.roundToInt()}",
+              Spacer(modifier = Modifier.width(12.dp))
+              MacroText(
+                p = record.proteinG,
+                c = record.carbsG,
+                f = record.fatG,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
           }
@@ -434,11 +452,19 @@ private fun PhotoRow(
             overflow = TextOverflow.Ellipsis,
           )
         }
-        Text(
-          text =
-            "${photo.calories.roundToInt()} kcal   P${photo.proteinG.roundToInt()} C${photo.carbsG.roundToInt()} F${photo.fatG.roundToInt()}",
-          style = MaterialTheme.typography.labelSmall,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Text(
+            text = "${photo.calories.roundToInt()} kcal",
+            style = MaterialTheme.typography.labelSmall,
+          )
+          Spacer(modifier = Modifier.width(12.dp))
+          MacroText(
+            p = photo.proteinG,
+            c = photo.carbsG,
+            f = photo.fatG,
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
       }
     }
 

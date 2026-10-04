@@ -7,14 +7,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -25,10 +29,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,9 +44,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jerrylf.inkcal.data.AppContainer
+import com.jerrylf.inkcal.data.RecordDto
 import com.jerrylf.inkcal.domain.Periods
 import com.jerrylf.inkcal.ui.picker.PhotoPickerScreen
 import com.jerrylf.inkcal.domain.TimeFmt
+import kotlinx.coroutines.launch
 
 private enum class RecordsMode(val label: String) {
   Day("日"),
@@ -48,10 +57,21 @@ private enum class RecordsMode(val label: String) {
 }
 
 /**
+ * 周/月 pager 的中点页码。page = CENTER 就是本周/本月，pageCount 只到 CENTER+1，
+ * 所以不能滑进未来；CENTER 往前的页数足够覆盖任何实际使用（1000 周 ≈ 19 年）。
+ */
+private const val WEEK_CENTER = 1000
+private const val MONTH_CENTER = 1200
+
+/**
  * 记录页外壳：日 / 周 / 月切换，对应 docs/android-app-spec.md §8.1–§8.3。
  *
  * 详情弹窗、Snackbar、删除与重分析都放在这一层，而不是各自塞进子视图——三个视图的
  * 卡片都要能进详情，写操作之后也要让当前视图重拉。
+ *
+ * 周/月视图是 HorizontalPager：左右滑动切周/月（2026-10-04 起），标题栏的箭头
+ * 和「今天」只是 pager 的遥控器。RangeViewModel 按区间缓存，相邻两页同屏时
+ * 各显示各的数据。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,11 +80,32 @@ fun RecordsTab(
   rangeViewModel: RangeViewModel = viewModel(),
 ) {
   val today = remember { TimeFmt.hktToday() }
+  val todayMonday = remember { Periods.mondayOf(today) }
+  val todayMonth = remember { Periods.monthStart(today) }
+  val scope = rememberCoroutineScope()
 
   var mode by rememberSaveable { mutableStateOf(RecordsMode.Day) }
-  var monday by rememberSaveable { mutableStateOf(Periods.mondayOf(TimeFmt.hktToday())) }
-  var monthAnchor by rememberSaveable { mutableStateOf(Periods.monthStart(TimeFmt.hktToday())) }
   var showPicker by rememberSaveable { mutableStateOf(false) }
+
+  // 旋转/进程重建后回到滑到的那一周/月
+  var weekPage by rememberSaveable { mutableIntStateOf(WEEK_CENTER) }
+  var monthPage by rememberSaveable { mutableIntStateOf(MONTH_CENTER) }
+  val weekPager = rememberPagerState(initialPage = weekPage, pageCount = { WEEK_CENTER + 1 })
+  val monthPager = rememberPagerState(initialPage = monthPage, pageCount = { MONTH_CENTER + 1 })
+  LaunchedEffect(weekPager) {
+    snapshotFlow { weekPager.settledPage }.collect { weekPage = it }
+  }
+  LaunchedEffect(monthPager) {
+    snapshotFlow { monthPager.settledPage }.collect { monthPage = it }
+  }
+
+  val monday = Periods.addWeeks(todayMonday, (weekPager.currentPage - WEEK_CENTER).toLong())
+  val monthAnchor = Periods.addMonths(todayMonth, (monthPager.currentPage - MONTH_CENTER).toLong())
+
+  // 长按菜单的两个确认弹窗
+  var reanalyzeTarget by remember { mutableStateOf<RecordDto?>(null) }
+  var deleteTarget by remember { mutableStateOf<RecordDto?>(null) }
+  var menuNotes by remember { mutableStateOf("") }
 
   val baseUrl by dayViewModel.baseUrl.collectAsStateWithLifecycle()
   val dayState by dayViewModel.state.collectAsStateWithLifecycle()
@@ -90,10 +131,12 @@ fun RecordsTab(
     }
   }
 
-  // 详情从「当前视图」的记录里查，所以周/月视图里点开的卡片一样能正确渲染
-  val activeRecords = remember(mode, dayState.groups, rangeState.groups) {
-    val groups = if (mode == RecordsMode.Day) dayState.groups else rangeState.groups
-    groups.flatMap { it.records }
+  // 详情从「当前视图」的记录里查；区间数据按周/月分槽缓存，全部拼起来查最稳：
+  // 在某一页点开详情后再滑走，原来的槽位还在，详情不会被误关。
+  val activeRecords = remember(dayState.groups, rangeState.chunks) {
+    (dayState.groups + rangeState.chunks.values.flatMap { it.groups })
+      .flatMap { it.records }
+      .distinctBy { it.assetId }
   }
   val detailRecord = detailAnchor?.let { anchor -> activeRecords.firstOrNull { it.assetId == anchor } }
 
@@ -141,22 +184,24 @@ fun RecordsTab(
         ArrowHeader(
           title = if (Periods.isCurrentWeek(monday, today)) "本周" else Periods.weekLabel(monday),
           subtitle = Periods.weekLabel(monday),
-          canGoForward = !Periods.isFuture(Periods.addWeeks(monday, 1), today),
-          onPrev = { monday = Periods.addWeeks(monday, -1) },
-          onNext = { monday = Periods.addWeeks(monday, 1) },
-          onToday = if (Periods.isCurrentWeek(monday, today)) null else ({ monday = Periods.mondayOf(today) }),
+          canGoForward = weekPager.currentPage < WEEK_CENTER,
+          onPrev = { scope.launch { weekPager.animateScrollToPage(weekPager.currentPage - 1) } },
+          onNext = { scope.launch { weekPager.animateScrollToPage(weekPager.currentPage + 1) } },
+          onToday =
+            if (Periods.isCurrentWeek(monday, today)) null
+            else ({ scope.launch { weekPager.scrollToPage(WEEK_CENTER) } }),
         )
       }
       RecordsMode.Month -> {
         ArrowHeader(
           title = Periods.monthLabel(monthAnchor),
           subtitle = null,
-          canGoForward = !Periods.isFuture(Periods.addMonths(monthAnchor, 1), today),
-          onPrev = { monthAnchor = Periods.addMonths(monthAnchor, -1) },
-          onNext = { monthAnchor = Periods.addMonths(monthAnchor, 1) },
-          onToday = if (Periods.isCurrentMonth(monthAnchor, today)) null else ({
-            monthAnchor = Periods.monthStart(today)
-          }),
+          canGoForward = monthPager.currentPage < MONTH_CENTER,
+          onPrev = { scope.launch { monthPager.animateScrollToPage(monthPager.currentPage - 1) } },
+          onNext = { scope.launch { monthPager.animateScrollToPage(monthPager.currentPage + 1) } },
+          onToday =
+            if (Periods.isCurrentMonth(monthAnchor, today)) null
+            else ({ scope.launch { monthPager.scrollToPage(MONTH_CENTER) } }),
         )
       }
     }
@@ -169,24 +214,30 @@ fun RecordsTab(
             scrollTarget = scrollTarget,
             onScrollHandled = dayViewModel::consumeScrollTarget,
             onOpenDetail = dayViewModel::openDetail,
+            onReanalyze = { reanalyzeTarget = it },
+            onDeleteMeal = { deleteTarget = it },
           )
 
         RecordsMode.Week ->
-          WeekView(
-            viewModel = rangeViewModel,
-            monday = monday,
-            today = today,
-            baseUrl = baseUrl,
-            decisionsByDate = decisionsByDate,
-            onEnsureDecisions = dayViewModel::ensureDecisions,
-            onOpenDetail = dayViewModel::openDetail,
-          )
+          HorizontalPager(state = weekPager, modifier = Modifier.fillMaxSize()) { page ->
+            WeekView(
+              viewModel = rangeViewModel,
+              monday = Periods.addWeeks(todayMonday, (page - WEEK_CENTER).toLong()),
+              today = today,
+              baseUrl = baseUrl,
+              decisionsByDate = decisionsByDate,
+              onEnsureDecisions = dayViewModel::ensureDecisions,
+              onOpenDetail = dayViewModel::openDetail,
+              onReanalyze = { reanalyzeTarget = it },
+              onDeleteMeal = { deleteTarget = it },
+            )
+          }
 
         RecordsMode.Month ->
-          Box(modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+          HorizontalPager(state = monthPager, modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp)) { page ->
             MonthView(
               viewModel = rangeViewModel,
-              monthAnchor = monthAnchor,
+              monthAnchor = Periods.addMonths(todayMonth, (page - MONTH_CENTER).toLong()),
               today = today,
               // 点某天：切回日视图并滚到那天
               onPickDate = { date ->
@@ -199,12 +250,12 @@ fun RecordsTab(
 
       SnackbarHost(
         hostState = snackbarHostState,
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+        modifier = Modifier.align(Alignment.BottomCenter),
       )
     }
   }
 
-  if (detailRecord != null) {
+  detailRecord?.let { detailRecord ->
     MealDetailDialog(
       record = detailRecord,
       baseUrl = baseUrl,
@@ -212,7 +263,6 @@ fun RecordsTab(
       busy = busy,
       onClose = dayViewModel::closeDetail,
       onDeleteMeal = {
-        // 区间视图的重拉必须在写完成之后（onSuccess），否则会抢到旧数据
         dayViewModel.delete(
           detailRecord.assetId,
           photoOnly = false,
@@ -224,6 +274,78 @@ fun RecordsTab(
       },
       onReanalyze = { notes ->
         dayViewModel.reanalyze(detailRecord.assetId, notes, onSuccess = rangeViewModel::invalidate)
+      },
+    )
+  }
+
+  // ── 长按菜单的确认弹窗 ────────────────────────────────────────
+
+  reanalyzeTarget?.let { target ->
+    AlertDialog(
+      onDismissRequest = {
+        if (!busy) {
+          reanalyzeTarget = null
+          menuNotes = ""
+        }
+      },
+      title = { Text("重新分析") },
+      text = {
+        OutlinedTextField(
+          value = menuNotes,
+          onValueChange = { menuNotes = it },
+          placeholder = { Text(REANALYZE_PLACEHOLDER) },
+          minLines = 2,
+          enabled = !busy,
+        )
+      },
+      confirmButton = {
+        TextButton(
+          enabled = menuNotes.isNotBlank() && !busy,
+          onClick = {
+            dayViewModel.reanalyze(target.assetId, menuNotes, onSuccess = rangeViewModel::invalidate)
+            reanalyzeTarget = null
+            menuNotes = ""
+          },
+        ) {
+          Text("确定")
+        }
+      },
+      dismissButton = {
+        TextButton(
+          enabled = !busy,
+          onClick = {
+            reanalyzeTarget = null
+            menuNotes = ""
+          },
+        ) {
+          Text("取消")
+        }
+      },
+    )
+  }
+
+  deleteTarget?.let { target ->
+    AlertDialog(
+      onDismissRequest = { if (!busy) deleteTarget = null },
+      title = { Text("删除整餐？") },
+      text = {
+        Text(
+          "「${target.meal.ifBlank { "未命名" }}」和它的照片都会被删除，照片之后不会再被同步。"
+        )
+      },
+      confirmButton = {
+        TextButton(
+          enabled = !busy,
+          onClick = {
+            dayViewModel.delete(target.assetId, photoOnly = false, onSuccess = rangeViewModel::invalidate)
+            deleteTarget = null
+          },
+        ) {
+          Text("删除", color = MaterialTheme.colorScheme.error)
+        }
+      },
+      dismissButton = {
+        TextButton(enabled = !busy, onClick = { deleteTarget = null }) { Text("取消") }
       },
     )
   }

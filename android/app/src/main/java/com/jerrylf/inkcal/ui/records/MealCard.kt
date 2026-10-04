@@ -1,6 +1,8 @@
 package com.jerrylf.inkcal.ui.records
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,12 +15,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -31,9 +40,71 @@ import coil3.compose.AsyncImage
 import com.jerrylf.inkcal.data.RecordDto
 import com.jerrylf.inkcal.domain.ImageUrl
 import com.jerrylf.inkcal.domain.TimeFmt
+import com.jerrylf.inkcal.theme.MacroCarbs
+import com.jerrylf.inkcal.theme.MacroFat
+import com.jerrylf.inkcal.theme.MacroProtein
 import kotlin.math.roundToInt
 
-/** 餐卡，对应 docs/android-app-spec.md §8.4。整卡可点，点击进详情。 */
+/**
+ * 带长按菜单的餐卡。长按弹出：查看详情 / 重新分析… / 删除整餐…。
+ *
+ * 重新分析与删除都只是「转达」给外层，确认表单和两步确认由 RecordsTab 统一持有，
+ * 日/周两个视图不用各写一份。
+ */
+@Composable
+fun MealCardWithMenu(
+  record: RecordDto,
+  baseUrl: String,
+  hasDecision: Boolean,
+  onOpenDetail: () -> Unit,
+  onReanalyze: () -> Unit,
+  onDeleteMeal: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var expanded by remember { mutableStateOf(false) }
+  // 纯文本补录没有图，后端恒 502，与详情页同一规则：不给入口
+  val canReanalyze =
+    record.photos.any { it.thumbnailUrl.isNotBlank() } || record.replacementImage.isNotBlank()
+
+  Box {
+    MealCard(
+      record = record,
+      baseUrl = baseUrl,
+      hasDecision = hasDecision,
+      onClick = onOpenDetail,
+      onLongClick = { expanded = true },
+      modifier = modifier,
+    )
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+      DropdownMenuItem(
+        text = { Text("查看详情") },
+        onClick = {
+          expanded = false
+          onOpenDetail()
+        },
+      )
+      if (canReanalyze) {
+        DropdownMenuItem(
+          text = { Text("重新分析…") },
+          onClick = {
+            expanded = false
+            onReanalyze()
+          },
+        )
+      }
+      DropdownMenuItem(
+        text = { Text("删除整餐…", color = MaterialTheme.colorScheme.error) },
+        onClick = {
+          expanded = false
+          onDeleteMeal()
+        },
+      )
+    }
+  }
+}
+
+/** 餐卡，对应 docs/android-app-spec.md §8.4。整卡可点，点击进详情；[onLongClick] 非空时长按可用。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MealCard(
   record: RecordDto,
@@ -41,8 +112,12 @@ fun MealCard(
   hasDecision: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  onLongClick: (() -> Unit)? = null,
 ) {
-  Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
+  Card(
+    modifier =
+      modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
+  ) {
     Row(
       modifier = Modifier.padding(12.dp),
       horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -135,30 +210,30 @@ private fun MealThumb(record: RecordDto, baseUrl: String) {
   }
 }
 
-/** P / C / F 用字母，三者全 0 就不显示这一行。 */
+/** P / C / F 用字母，配色与网页端一致；三者全 0 就不显示这一行。 */
 @Composable
 private fun MacroRow(record: RecordDto) {
   if (record.proteinG == 0.0 && record.carbsG == 0.0 && record.fatG == 0.0) return
   Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-    Macro("P", record.proteinG)
-    Macro("C", record.carbsG)
-    Macro("F", record.fatG)
+    Macro("P", record.proteinG, MacroProtein)
+    Macro("C", record.carbsG, MacroCarbs)
+    Macro("F", record.fatG, MacroFat)
   }
 }
 
 @Composable
-private fun Macro(letter: String, grams: Double) {
+private fun Macro(letter: String, grams: Double, color: Color) {
   Row {
     Text(
       text = letter,
       style = MaterialTheme.typography.labelSmall,
       fontWeight = FontWeight.Bold,
-      color = MaterialTheme.colorScheme.primary,
+      color = color,
     )
     Text(
       text = " ${grams.roundToInt()}",
       style = MaterialTheme.typography.labelSmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      color = color,
     )
   }
 }

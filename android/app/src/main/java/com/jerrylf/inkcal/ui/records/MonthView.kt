@@ -61,8 +61,11 @@ fun MonthView(
     viewModel.load(Periods.monthStart(monthAnchor), Periods.monthEnd(monthAnchor))
   }
 
-  val cells = remember(monthAnchor, state.groups, state.burns, bmr) {
-    MonthGrid.build(monthAnchor, state.groups, state.burns, bmr)
+  // 只读自己这一月的槽位：pager 里相邻两月同时在屏，不能共享一份状态
+  val chunk = state.chunk(Periods.monthStart(monthAnchor), Periods.monthEnd(monthAnchor))
+
+  val cells = remember(monthAnchor, chunk.groups, chunk.burns, bmr) {
+    MonthGrid.build(monthAnchor, chunk.groups, chunk.burns, bmr)
   }
   val blanks = remember(monthAnchor) { Periods.leadingBlanks(monthAnchor) }
   val slots: List<MonthCell?> = remember(cells, blanks) { List(blanks) { null } + cells }
@@ -106,7 +109,7 @@ fun MonthView(
       LegendItem(RingOver, "超消耗")
     }
 
-    state.error?.let {
+    chunk.error?.let {
       Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
     }
   }

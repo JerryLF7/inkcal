@@ -16,9 +16,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.jerrylf.inkcal.domain.Tdee
 import com.jerrylf.inkcal.domain.TimeFmt
+import com.jerrylf.inkcal.theme.MacroCarbs
+import com.jerrylf.inkcal.theme.MacroFat
+import com.jerrylf.inkcal.theme.MacroProtein
 import kotlin.math.roundToInt
 
 private val DeficitGreen = Color(0xFF4CAF50)
+
+@Composable
+private fun SepMacro(text: String, color: Color, alpha: Float) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.labelSmall,
+    color = color.copy(alpha = alpha),
+  )
+}
 
 /**
  * 吸顶日期分隔线：左日期/星期，右当天汇总。
@@ -65,12 +77,12 @@ fun DateSeparator(
           color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = dim),
         )
         if (protein > 0 || carbs > 0 || fat > 0) {
-          Text(
-            text =
-              "P${protein.roundToInt()} C${carbs.roundToInt()} F${fat.roundToInt()}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = dim),
-          )
+          // P/C/F 配色与网页端 .sep-macros 一致
+          Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            SepMacro("P${protein.roundToInt()}", MacroProtein, dim)
+            SepMacro("C${carbs.roundToInt()}", MacroCarbs, dim)
+            SepMacro("F${fat.roundToInt()}", MacroFat, dim)
+          }
         }
       }
 
