@@ -197,7 +197,10 @@ fun CaloScreen(viewModel: ChatViewModel = viewModel()) {
       onClose = viewModel::closeDetail,
       onDeleteMeal = { viewModel.deleteFromDetail(record.assetId, photoOnly = false) },
       onDeletePhoto = { assetId -> viewModel.deleteFromDetail(assetId, photoOnly = true) },
-      onReanalyze = { notes -> viewModel.reanalyzeFromDetail(record.assetId, notes) },
+      onReanalyze = { notes, done ->
+        // 成功后整条详情会关闭（见 reanalyzeFromDetail），done 只是让表单同步复位
+        viewModel.reanalyzeFromDetail(record.assetId, notes, onSuccess = done)
+      },
     )
   }
 }

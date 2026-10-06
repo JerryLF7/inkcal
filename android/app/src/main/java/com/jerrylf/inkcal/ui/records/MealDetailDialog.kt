@@ -106,7 +106,8 @@ fun MealDetailDialog(
   onClose: () -> Unit,
   onDeleteMeal: () -> Unit,
   onDeletePhoto: (String) -> Unit,
-  onReanalyze: (String) -> Unit,
+  /** 第二个参数是成功回调：外层在真正更新完成后才调，用于关表单；失败时不调，notes 留着好改。 */
+  onReanalyze: (String, () -> Unit) -> Unit,
 ) {
   val photos = remember(record) { MealGrouping.sortedPhotos(record) }
   val pagerState = rememberPagerState(pageCount = { photos.size })
@@ -336,7 +337,13 @@ fun MealDetailDialog(
               )
               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                  onClick = { onReanalyze(notes) },
+                  onClick = {
+                    onReanalyze(notes) {
+                      // 成功后关表单并清空（失败时外层不调，notes 原样保留）
+                      showForm = false
+                      notes = ""
+                    }
+                  },
                   enabled = !busy && notes.isNotBlank(),
                 ) {
                   Text(if (busy) "分析中…（约半分钟）" else "提交")

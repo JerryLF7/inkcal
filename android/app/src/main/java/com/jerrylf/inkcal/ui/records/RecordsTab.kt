@@ -142,7 +142,14 @@ fun RecordsTab(
 
   LaunchedEffect(toast) {
     toast?.let {
-      snackbarHostState.showSnackbar(it)
+      // 详情是全屏 Dialog，SnackbarHost 会被它挡在后面看不见（2026-10-04 踩坑：
+      // 在详情里重分析/删照片，列表确实更新了但用户什么提示都看不到）。
+      // 详情打开期间改用系统 Toast——它是独立窗口层，压在 Dialog 上面。
+      if (detailAnchor != null) {
+        android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
+      } else {
+        snackbarHostState.showSnackbar(it)
+      }
       dayViewModel.consumeToast()
     }
   }
@@ -272,8 +279,16 @@ fun RecordsTab(
       onDeletePhoto = { assetId ->
         dayViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
       },
-      onReanalyze = { notes ->
-        dayViewModel.reanalyze(detailRecord.assetId, notes, onSuccess = rangeViewModel::invalidate)
+      onReanalyze = { notes, done ->
+        dayViewModel.reanalyze(
+          detailRecord.assetId,
+          notes,
+          onSuccess = {
+            rangeViewModel.invalidate()
+            // 真正更新完才让详情关表单，失败时 notes 原样留在框里
+            done()
+          },
+        )
       },
     )
   }

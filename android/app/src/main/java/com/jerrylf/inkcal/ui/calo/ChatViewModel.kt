@@ -297,7 +297,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
   }
 
-  fun reanalyzeFromDetail(assetId: String, notes: String) {
+  fun reanalyzeFromDetail(assetId: String, notes: String, onSuccess: () -> Unit = {}) {
     if (_busy.value) return
     viewModelScope.launch {
       _busy.value = true
@@ -306,6 +306,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _detailRecord.value = null
         container.dataSignal.bump()
         _state.update { it.copy(error = "已重新分析") }
+        onSuccess()
       } catch (e: Exception) {
         _state.update { it.copy(error = "重新分析失败：${messageFor(e)}") }
       }

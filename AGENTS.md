@@ -144,7 +144,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.14，2026-10-04）：**首期功能已全部完成**。本版只修一个 bug——**Tab 切换滑动的方向**：0.13 想从 Nav3 的 `Scene.entries.contentKey` 反推方向，但 entry 已被默认装饰器链重建、`contentKey` 不是我们的路由对象，比较恒为 -1/-1，结果「怎么切都朝同一边滑」；现在方向在 Tab 的 `onClick` 里比较下标得出（`forward = index > currentIndex`），点右边的 Tab 时新页从右侧滑入、旧页向左退出。**不要再回到用 `contentKey` 推方向**。其余与 0.13 相同。
+当前状态（0.15，2026-10-04）：**首期功能已全部完成**。本版只修一个 bug——**详情页重分析的操作反馈**：0.14 之前提交成功后不关表单、不清空 notes，而且 SnackbarHost 在页面层、被全屏 Dialog 挡住，用户在详情里重分析/删照片时什么提示都看不见；现在①表单的 `onReanalyze` 回调带 `onSuccess`，真正更新完成才关表单（失败时 notes 原样保留），②详情打开期间 `RecordsTab` 把 VM 的 toast 路由给系统 `Toast`（独立窗口层，压在 Dialog 上），详情关闭时仍走 Snackbar。其余与 0.14 相同。
+
+0.14 修一个 bug——**Tab 切换滑动的方向**：0.13 想从 Nav3 的 `Scene.entries.contentKey` 反推方向，但 entry 已被默认装饰器链重建、`contentKey` 不是我们的路由对象，比较恒为 -1/-1，结果「怎么切都朝同一边滑」；现在方向在 Tab 的 `onClick` 里比较下标得出（`forward = index > currentIndex`），点右边的 Tab 时新页从右侧滑入、旧页向左退出。**不要再回到用 `contentKey` 推方向**。其余与 0.13 相同。
 
 0.13 是一批交互体验优化——**Tab 切换转场由渐入渐出改为方向性滑动**（覆盖 NavDisplay 默认转场；Tab 间还不能手指滑动，只改了转场）；**周/月视图改为 `HorizontalPager` 左右滑动切周/月**（箭头与「今天」变成遥控器，`pageCount` 右端封在本周/本月、滑不进未来，页下标存 `rememberSaveable`）；**餐卡长按菜单**（查看详情 / 重新分析… / 删除整餐…，后两者在 `RecordsTab` 统一弹确认，纯文本补录没有重分析入口）；**P/C/F 按网页端配色**（P `#51CF66`、C `#FFD43B`、F `#FF922B`，落在 `theme/Color.kt`，餐卡 / 吸顶分隔线 / 详情页三处字母数字同色）；**日视图删掉 TopAppBar**（它与吸顶 `DateSeparator` 的内容恒等——都取首个可见日期组，而 stickyHeader 保证该组可见时日期就钉在顶部，分隔线还多带 kcal/PCF/缺口 chip，所以顶栏纯冗余；日期只由吸顶分隔线承担，不要再加回来）。配套改动：`RangeViewModel` 从单一区间状态改为**按区间分槽缓存**（`chunks: Map<"start..end", RangeChunk>`）——pager 相邻两页会同时上屏，单一状态会让两页显示同一份数据；`invalidate()` 重拉所有已加载区间。
 
