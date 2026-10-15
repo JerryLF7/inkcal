@@ -138,6 +138,7 @@ npm --prefix web/ui run build       # 产物写到 web/static/,需要一并提�
 回归测试(都用隔离的临时数据库,不碰真实数据):
 
 ```bash
+PYTHONPATH=. venv/bin/python scripts/test_reasoning_effort.py
 PYTHONPATH=. venv/bin/python scripts/test_food_threshold.py
 PYTHONPATH=. venv/bin/python scripts/test_contract_parse.py
 PYTHONPATH=. venv/bin/python scripts/test_merge_groups.py

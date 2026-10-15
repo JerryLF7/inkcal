@@ -6,7 +6,8 @@ Runs on CPU, no data leaves this machine. Base model only, offline-cached.
 import io
 import logging
 import os
-from pathlib import Path
+
+from src.env_file import raw_env
 
 # The base model is fully cached in ~/.cache/huggingface — never phone home.
 # On this network huggingface.co is unreachable, and transformers' update
@@ -36,31 +37,6 @@ MODEL_NAME = "prithivMLmods/Food-or-Not-SigLIP2"
 DEFAULT_FOOD_THRESHOLD = 0.35
 GREY_ZONE_WIDTH = 0.10
 _ENV_KEY = "FOOD_THRESHOLD"
-_DOTENV_PATH = Path(__file__).resolve().parent.parent / ".env"
-
-
-def _dotenv_raw(key: str) -> str | None:
-    """直接从 .env 文件读某个键。
-
-    为什么不能只读 os.environ：长驻进程（Flask）启动时 load_dotenv() 只快照一次，
-    之后改 .env 不会反映到 os.environ。要做到「改完即生效、不用重启」，只能回到
-    文件本身读。
-
-    **刻意不做 mtime 缓存**：一次 1KB 的文件读相比 0.3 秒的模型推理可以忽略，
-    而按 mtime 缓存会在「同一秒内改两次」这种边界上留下「改了没生效」的坑。
-    """
-    try:
-        text = _DOTENV_PATH.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, _, value = line.partition("=")
-        if name.strip() == key:
-            return value.strip().strip('"').strip("'")
-    return None
 
 
 def food_threshold() -> float:
@@ -72,7 +48,7 @@ def food_threshold() -> float:
     取值必须是 0~1 的小数。非法值（比如把百分比写成 `35`）一律回退默认值并告警：
     静默按非法值跑会把全部照片判成食物或全判成非食物，而后者是无声的灾难。
     """
-    raw = _dotenv_raw(_ENV_KEY)
+    raw = raw_env(_ENV_KEY)
     origin = ".env"
     if raw is None:
         raw = os.getenv(_ENV_KEY)

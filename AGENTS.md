@@ -67,6 +67,7 @@ cd android && ./gradlew :app:assembleRelease   # 产物 app/build/outputs/apk/re
 cd android && ./gradlew :app:testDebugUnitTest
 
 # 现有回归与语法检查
+PYTHONPATH=. venv/bin/python scripts/test_reasoning_effort.py
 PYTHONPATH=. venv/bin/python scripts/test_food_threshold.py
 PYTHONPATH=. venv/bin/python scripts/test_contract_parse.py
 PYTHONPATH=. venv/bin/python scripts/test_merge_groups.py
@@ -97,7 +98,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `src/db.py` | SQLite schema 与全部数据访问；WAL、FTS、records、审计、chat 表 |
 | `src/immich_client.py` / `src/photoprism_client.py` | 照片源客户端与时间解析 |
 | `src/food_detector.py` | SigLIP2 本地过滤（仅基础模型）；判定线由 `food_threshold()` / `grey_zone()` **每次调用现取**（读 `.env` 的 `FOOD_THRESHOLD`，默认 0.35），不是模块常量——改配置不用重启 |
-| `src/calorie_analyzer.py` | Gemini/OpenAI-compatible 视觉估算 |
+| `src/env_file.py` | 仓库根 `.env` 的直读解析（`raw_env`）。长驻进程靠它做到「改配置不重启」（`load_dotenv()` 只在启动时快照一次）；`food_detector.food_threshold()` 与 `calorie_analyzer.get_reasoning_effort()` 共用，测试用 `DOTENV_PATH` 隔离生产 `.env` |
+| `src/calorie_analyzer.py` | Gemini/OpenAI-compatible 视觉估算；推理强度由 `get_reasoning_effort()` 每次调用现取（读 `.env` 的 `GEMINI_REASONING_EFFORT`，默认 high），见 §7 |
 | `src/prompts/` | 提示词模板 `analyze.md` / `reanalyze.md` / `analyze_text.md`，`loader.py` 只做 `read_text`（2026-09-30 起无用户覆盖层、无内联兜底，文件缺失直接报错；改提示词就改仓库里的 `.md`） |
 | `src/pipeline_ops.py` | CLI 和 Web 共用的强制分析/重新分析业务路径；`analyze_asset` 也是 cron 降级路径（`main._legacy_analyze_single`）的唯一实现，记录行组装统一走 `_build_record`（`main.append_log` 亦委托它），`analyzer=` 参数可复用 cron 的共享 Gemini 客户端 |
 | `src/resolver.py` | CLI 记录指代解析：`--ref` / `--id` / `--last` / `--meal + --date` |
@@ -359,7 +361,9 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
   PhotoPrism 与 Immich 差异：认证 `Authorization: Bearer` vs `x-api-key`；缩略图 key 为文件 SHA1 `hash`（token 取自搜索响应 `X-Preview-Token`）vs `asset_id`；`TakenAtLocal` 尾部 `Z` 只是格式占位，真实时区取 `TimeZone` 字段（IANA 名）。
 - **选择照片弹窗的取舍**：用户主动选图 = 已确认是食物，故跳过 SigLIP2；`POST /api/analyze-album-photo` 在调 Gemini **之前**再查一次 `get_record_by_asset_id`，已存在返回 409（弹窗打开期间 cron 可能已处理同一张）。分页用 `cursor=YYYY-MM-DD&days=7`，每天对每个源单独查询，局域网延迟可接受。
 - **Gemini 调用韧性**：`CalorieAnalyzer` `MAX_RETRIES=5`、`RETRY_BACKOFF=2`（2/4/8/16/32s 指数退避），`response_format=json_object` 强制结构化输出，解析失败返回零值而不阻塞管线（零值会被契约层映射为 skip）。
-- **Gemini 推理强度（2026-10-15 实测并钉住）**：网关只认 OpenAI 的 `reasoning_effort`，已在 `src/calorie_analyzer.py::REASONING_EFFORT = "high"` 固定，5 条 Gemini 调用路径（`analyze` / `reanalyze` / `analyze_text` / `agent_tools::_gemini_multi_image` 单图与多图）全部显式传入。**探测结论（避免重复试验）**：`extra_body` 里的 `reasoning.effort`、`reasoning.max_tokens`、`thinking_level`、`thinking_config.thinking_level`、`thinking_budget`、`thinking.budget_tokens`、`thinkingConfig.thinkingBudget`、`generationConfig.thinkingConfig` **一律被静默丢弃**；网关对未知字段（甚至乱填的字段名）也返回 200 不报错，且 `reasoning_effort` 传非法值同样不 400（回落到 high 档），所以**只能靠 `usage.completion_tokens_details.reasoning_tokens` 行为判别**。档位实测：`low`/`none`/`minimal` → 思考归零，`medium` ≈ 不传参数的网关默认，`high` → 约 2.2 倍。真实餐照（四菜一饭盒饭，记录值 1040 kcal）：默认 17–28s / reasoning 780–810，`high` 30–36s / reasoning 1470–2240；三图同餐组 `high` 32s / reasoning 2781；纯文本 14.5s。**代价≈每次调用 +10s，收益是估算稳定性（默认档同一张图给出 960–1050 kcal 且 confidence 常为 medium，high 档 confidence 出现 high）**。`high` 是硬编码常量而非环境变量：要改档位改这一行即可，无需重启 Web（cron 每次 run 都是新进程）。
+- **Gemini 推理强度（2026-10-15 实测；可用 `GEMINI_REASONING_EFFORT` 调档）**：由 `src/calorie_analyzer.py::get_reasoning_effort()` **每次调用现取**（与 `FOOD_THRESHOLD` 同一套机制：`.env` 文件 > 环境变量 > 默认值，改完不用重启；cron 每次 run 都是新进程），并由 5 条 Gemini 路径显式传入（`analyze` / `reanalyze` / `analyze_text` / `agent_tools::_gemini_multi_image` 的单图与多图）。可选档位 `none` / `minimal` / `low` / `medium` / `high`（大小写不敏感），默认 `high`，非法值回退 `high` 并告警。回归：`scripts/test_reasoning_effort.py`（24 checks，含「每条调用路径都必须传参」的源码级检查）。
+  **探测结论（不要重复试验）**：网关只认 OpenAI 的 `reasoning_effort`；`extra_body` 里的 `reasoning.effort`、`reasoning.max_tokens`、`thinking_level`、`thinking_config.thinking_level`、`thinking_budget`、`thinking.budget_tokens`、`thinkingConfig.thinkingBudget`、`generationConfig.thinkingConfig` **全部被静默丢弃**。网关对未知字段（连乱填的 key）返回 200 不报错，`reasoning_effort` 传非法值也不 400（静默按高档跑），所以**只能靠 `usage.completion_tokens_details.reasoning_tokens` 做行为判别**——写错档位的代价是白烧一倍以上思考量且毫无报错，这正是代码要做白名单校验的原因。
+  **档位实测**：`none`/`minimal`/`low` → 思考归零；`medium` ≈ 不传参数的网关默认；`high` ≈ 2.2 倍。真实餐照（四菜一饭盒饭，入库 1040 kcal）：默认档 17–28s / reasoning 780–810（confidence 多为 medium），`high` 30–36s / reasoning 1470–2240（出现过 confidence high）；三图同餐组 `high` 32s / reasoning 2781；纯文本 `high` 14.5s。**代价≈每次调用 +10s**，换的是入库数值的估算稳定性。
 - **Flask session 丢失（已踩过）**：`app.secret_key` 若每次重启随机生成，旧 cookie 全部失效、反复要求重新登录。必须固定 `INKCAL_SECRET`。
 - **FRP / 慢网**：卡片缩略图用 Immich `size=thumbnail`（~7KB）而非 `preview`（~157KB），灯箱才用 preview；Vue 端保留请求序号防旧响应覆盖、图片失败重试一次的防御。
 - **设计原则**：隐私优先（分类器本地、非食物照片不出内网）；幂等（`asset_id`）；渐进增强（CLI 为底、Web 为锦上添花）；存储走标准库 `sqlite3`、零额外依赖。

@@ -6,11 +6,13 @@ Only called for photos already identified as food by local detector.
 import base64
 import json
 import logging
+import os
 import time
 from typing import Any
 
 from openai import OpenAI
 
+from src.env_file import raw_env
 from src.prompts.loader import get_analyze_prompt, get_reanalyze_prompt, get_analyze_text_prompt
 
 logger = logging.getLogger(__name__)
@@ -18,22 +20,56 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 5
 RETRY_BACKOFF = 2  # seconds, doubles each retry
 
-# ── thinking budget ──────────────────────────────────────────────────
-# Gateway probe (2026-10-15, gemini-3.1-pro-preview): the endpoint honours
-# OpenAI's `reasoning_effort` and NOTHING else. Shapes commonly used by
-# Gemini/OpenRouter proxies — reasoning.effort, reasoning.max_tokens,
-# thinking_level, thinking_config, thinking_budget, thinking.budget_tokens,
-# thinkingConfig.thinkingBudget, generationConfig.thinkingConfig — all left
-# reasoning_tokens in the normal band, i.e. were silently dropped; unknown
-# FIELD names are dropped without an error too, so only behaviour tells them
-# apart (an invalid value for `reasoning_effort` does not 400 either, it
-# just falls back to a high-ish default).
-# Measured on a real meal photo: default/medium ≈ 780-810 reasoning tokens
-# and ~17-28s per call; "high" ≈ 1470-2240 tokens and ~30-36s. "low"/"none"
-# collapse thinking to 0. high costs ~2x latency per call, worth it because
-# the estimate itself is the product (one 1040 kcal record was re-estimated
-# as 910-1050 across runs vs 960 on default).
-REASONING_EFFORT = "high"
+# ── 推理强度（thinking budget）────────────────────────────────────────
+# 网关只认 OpenAI 的 `reasoning_effort`，其他形状——reasoning.effort、
+# reasoning.max_tokens、thinking_level、thinking_config、thinking_budget、
+# thinking.budget_tokens、thinkingConfig.thinkingBudget、
+# generationConfig.thinkingConfig——**全部被静默丢弃**，而且未知字段名
+# （甚至乱填的 key）都返回 200 不报错，`reasoning_effort` 传非法值同样不 400，
+# 所以只能靠 usage.completion_tokens_details.reasoning_tokens 做行为判别。
+# 探测日期 2026-10-15，模型 gemini-3.1-pro-preview。
+#
+# 可选档位（写在 .env 的 GEMINI_REASONING_EFFORT）：
+#   none / minimal / low   思考归零。最快，但估算最不稳，不推荐用于入库。
+#   medium                 等于网关不传参数时的默认档。
+#   high                   默认值。比默认档多约 2.2 倍思考量。
+#
+# 真实餐照实测（四菜一饭盒饭，入库值 1040 kcal）：
+#   默认/medium  17–28s，reasoning 780–810，confidence 多为 medium
+#   high         30–36s，reasoning 1470–2240，confidence 出现过 high
+# 三图同餐组 high 32s / reasoning 2781；纯文本补录 high 14.5s。
+# 代价约每次调用 +10s，换的是估算稳定性——这是入库数值，值得。
+DEFAULT_REASONING_EFFORT = "high"
+VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+_ENV_KEY = "GEMINI_REASONING_EFFORT"
+
+
+def get_reasoning_effort() -> str:
+    """当前推理强度。**每次调用都重新解析**，所以改完 .env 下一次分析就生效，不用重启。
+
+    优先级：`.env` 文件 > 进程环境变量 > 默认值 `high`。文件优先是刻意的——用户改的是
+    `.env`，而长驻进程（Flask）的 os.environ 是启动时的快照。
+
+    档位名大小写不敏感。非法值一律回退默认值并告警：网关对无法识别的档位不报错、
+    而是静默按高档跑，所以写错的代价是每次调用都白烧一倍以上的思考量，且没有任何
+    报错——必须自己拦住。
+    """
+    raw = raw_env(_ENV_KEY)
+    origin = ".env"
+    if raw is None:
+        raw = os.getenv(_ENV_KEY)
+        origin = "环境变量"
+    if raw is None or raw == "":
+        return DEFAULT_REASONING_EFFORT
+
+    value = raw.strip().lower()
+    if value not in VALID_REASONING_EFFORTS:
+        logger.warning(
+            "GEMINI_REASONING_EFFORT=%r（来自 %s）不是合法档位，回退默认值 %s。可选：%s",
+            raw, origin, DEFAULT_REASONING_EFFORT, " / ".join(VALID_REASONING_EFFORTS),
+        )
+        return DEFAULT_REASONING_EFFORT
+    return value
 
 # Prompts live in src/prompts/*.md — see src/prompts/loader.py.
 
@@ -66,7 +102,7 @@ class CalorieAnalyzer:
                     ],
                     temperature=0.2,
                     response_format={"type": "json_object"},
-                    reasoning_effort=REASONING_EFFORT,
+                    reasoning_effort=get_reasoning_effort(),
                 )
                 return self._parse_response(r)
 
@@ -183,7 +219,7 @@ class CalorieAnalyzer:
                     ],
                     temperature=0.2,
                     response_format={"type": "json_object"},
-                    reasoning_effort=REASONING_EFFORT,
+                    reasoning_effort=get_reasoning_effort(),
                 )
                 return self._parse_response(r)
 
@@ -212,7 +248,7 @@ class CalorieAnalyzer:
                     ],
                     temperature=0.2,
                     response_format={"type": "json_object"},
-                    reasoning_effort=REASONING_EFFORT,
+                    reasoning_effort=get_reasoning_effort(),
                 )
                 res = self._parse_response(r)
                 if user_calories is not None and user_calories > 0:
