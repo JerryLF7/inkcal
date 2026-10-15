@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -137,7 +138,20 @@ fun PhotoPickerScreen(
         )
 
         Box(modifier = Modifier.weight(1f)) {
-          LazyColumn(modifier = Modifier.fillMaxSize()) {
+          val listState = rememberLazyListState()
+
+          // 首屏数据是「插到页脚前面」的：加载中列表里只有页脚这一个 item，
+          // 等 7 天的照片插进来时 LazyColumn 会按 key 把页脚钉在视口顶部，
+          // 于是打开选择照片直接停在列表最底部（症状：最新拍的照片不在最上面，
+          // 得把列表往下拖才看得到）。空 → 有内容时把视口钉回顶部。
+          // 与记录页同一个根因，那边见 RecordsScreen 的注释。
+          var hadContent by remember { mutableStateOf(false) }
+          LaunchedEffect(state.days.isNotEmpty()) {
+            if (state.days.isNotEmpty() && !hadContent) listState.scrollToItem(0)
+            hadContent = state.days.isNotEmpty()
+          }
+
+          LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             state.days.forEach { day ->
               item(key = "day-${day.date}") {
                 DayHeader(day)

@@ -146,6 +146,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
+当前状态（0.16，2026-10-15）：**首期功能已全部完成**。本版只修一个 bug——**自动刷新后新卡片不在列表顶部**（记录页与选择照片页是同一个根因）：Compose 的 `LazyColumn` 在 item 集合变化时会按 key 把「原来第一个可见项」钉在视口顶部，插到它前面的新内容就被顶到视口**上方**，用户得把列表往下拖才看得到。两页的锚点不同——记录页是旧的日期头（冷启动先画缓存、网络数据整体替换时新记录插到了前面），选择页是页脚（首屏加载时列表里只有页脚，7 天的照片全插在它前面，于是打开就直接停在列表最底部）。修法：记录页在**用户仍贴着顶部**时把视口钉回顶部、已翻到别处则一律不动（「用户有没有滚离」只认 `isScrollInProgress` 期间的位移，直接读 `firstVisibleItemIndex` 会把 LazyColumn 那次重排误判成用户翻页，于是永远不修）；选择页在首屏数据到达时钉回顶部。详见 `docs/android-app-spec.md` §8.1 / §8.5 / §14 第 29 行。其余与 0.15 相同。
+
 当前状态（0.15，2026-10-04）：**首期功能已全部完成**。本版只修一个 bug——**详情页重分析的操作反馈**：0.14 之前提交成功后不关表单、不清空 notes，而且 SnackbarHost 在页面层、被全屏 Dialog 挡住，用户在详情里重分析/删照片时什么提示都看不见；现在①表单的 `onReanalyze` 回调带 `onSuccess`，真正更新完成才关表单（失败时 notes 原样保留），②详情打开期间 `RecordsTab` 把 VM 的 toast 路由给系统 `Toast`（独立窗口层，压在 Dialog 上），详情关闭时仍走 Snackbar。其余与 0.14 相同。
 
 0.14 修一个 bug——**Tab 切换滑动的方向**：0.13 想从 Nav3 的 `Scene.entries.contentKey` 反推方向，但 entry 已被默认装饰器链重建、`contentKey` 不是我们的路由对象，比较恒为 -1/-1，结果「怎么切都朝同一边滑」；现在方向在 Tab 的 `onClick` 里比较下标得出（`forward = index > currentIndex`），点右边的 Tab 时新页从右侧滑入、旧页向左退出。**不要再回到用 `contentKey` 推方向**。其余与 0.13 相同。

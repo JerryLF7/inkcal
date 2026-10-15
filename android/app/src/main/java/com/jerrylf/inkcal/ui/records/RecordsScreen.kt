@@ -22,7 +22,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -56,6 +59,29 @@ fun RecordsScreen(
 
   val listState = rememberLazyListState()
   val today = remember { TimeFmt.hktToday() }
+
+  // ── 刷新后把视口留在顶部（2026-10-15 bug 修复）────────────────────
+  // 冷启动先画缓存、随后被网络数据整体替换，新记录被插到列表最前面。LazyColumn
+  // 在 item 集合变化时会**按 key 把「原来第一个可见项」钉在视口顶部**，于是新卡片
+  // 被顶到视口**上方**：打开 app 看到的是昨天那条，得把列表往下拖才看得到今天新入库的。
+  // 用户本来就贴着顶部时，替他钉回顶部；已经翻到别处则一律不动他的位置。
+  val topKey = state.groups.firstOrNull()?.let { "header-${it.date}" }
+  var lastTopKey by remember { mutableStateOf<String?>(null) }
+
+  // 「用户自己滚离了顶部」。必须只认用户滚的：上面那次重排是 LazyColumn 干的，
+  // 也会把 firstVisibleItemIndex 变掉，直接读它会把「用户翻到了别处」误判出来。
+  var userLeftTop by remember { mutableStateOf(false) }
+  LaunchedEffect(listState) {
+    snapshotFlow { listState.isScrollInProgress to listState.firstVisibleItemIndex }
+      .collect { (scrolling, index) -> if (scrolling) userLeftTop = index > 0 }
+  }
+
+  LaunchedEffect(topKey) {
+    if (topKey != null && lastTopKey != null && topKey != lastTopKey && !userLeftTop) {
+      listState.scrollToItem(0)
+    }
+    lastTopKey = topKey
+  }
 
   // 每个日期头在扁平列表里的下标，月视图跳转时按它定位
   val headerDates: List<Pair<Int, String>> =
