@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.calorie_analyzer import REASONING_EFFORT
+
 logger = logging.getLogger("inkcal.agent_tools")
 
 
@@ -272,6 +274,7 @@ def _gemini_multi_image(analyzer, images: list[bytes], prompt: str) -> dict:
         messages=[{"role": "user", "content": content}],
         temperature=0.2,
         response_format={"type": "json_object"},
+        reasoning_effort=REASONING_EFFORT,
     )
     return analyzer._parse_response(r)
 

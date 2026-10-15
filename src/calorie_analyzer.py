@@ -18,6 +18,23 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 5
 RETRY_BACKOFF = 2  # seconds, doubles each retry
 
+# ── thinking budget ──────────────────────────────────────────────────
+# Gateway probe (2026-10-15, gemini-3.1-pro-preview): the endpoint honours
+# OpenAI's `reasoning_effort` and NOTHING else. Shapes commonly used by
+# Gemini/OpenRouter proxies — reasoning.effort, reasoning.max_tokens,
+# thinking_level, thinking_config, thinking_budget, thinking.budget_tokens,
+# thinkingConfig.thinkingBudget, generationConfig.thinkingConfig — all left
+# reasoning_tokens in the normal band, i.e. were silently dropped; unknown
+# FIELD names are dropped without an error too, so only behaviour tells them
+# apart (an invalid value for `reasoning_effort` does not 400 either, it
+# just falls back to a high-ish default).
+# Measured on a real meal photo: default/medium ≈ 780-810 reasoning tokens
+# and ~17-28s per call; "high" ≈ 1470-2240 tokens and ~30-36s. "low"/"none"
+# collapse thinking to 0. high costs ~2x latency per call, worth it because
+# the estimate itself is the product (one 1040 kcal record was re-estimated
+# as 910-1050 across runs vs 960 on default).
+REASONING_EFFORT = "high"
+
 # Prompts live in src/prompts/*.md — see src/prompts/loader.py.
 
 
@@ -49,6 +66,7 @@ class CalorieAnalyzer:
                     ],
                     temperature=0.2,
                     response_format={"type": "json_object"},
+                    reasoning_effort=REASONING_EFFORT,
                 )
                 return self._parse_response(r)
 
@@ -165,6 +183,7 @@ class CalorieAnalyzer:
                     ],
                     temperature=0.2,
                     response_format={"type": "json_object"},
+                    reasoning_effort=REASONING_EFFORT,
                 )
                 return self._parse_response(r)
 
@@ -193,6 +212,7 @@ class CalorieAnalyzer:
                     ],
                     temperature=0.2,
                     response_format={"type": "json_object"},
+                    reasoning_effort=REASONING_EFFORT,
                 )
                 res = self._parse_response(r)
                 if user_calories is not None and user_calories > 0:
