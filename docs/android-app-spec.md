@@ -4,6 +4,8 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
+> **实现进度（0.17，2026-10-16）**：**M3 规范对齐工程开工**（审计结论、阶段划分与待办见 §16）。本批落地两项图标修正：详情页「单张移除」的第一步由文字 `✕` 改为图标按钮（内容描述「删除这张照片」——文字符号没有无障碍语义，字重与基线也跟图标不是一套），设置页出生日期的 `trailingIcon` 由文字按钮「选择」改为日历图标按钮（M3 规定该槽位放图标）。**一级 Tab 切换的转场同时由横向滑动改为 M3 规定的 Top level 过渡（fade through）**——横向平移是 Lateral 的语汇，点底部导航项必须用 Top level（§16.1 第 1 项）。同时**撤回两项审计初期提出的建议**并把结论写进对应小节：设置页是表单不是列表，不改 `ListItem`（§8.7）；选择照片页「返回键先退出选择态」不采用（该页点击即选中、没有独立浏览态，M3 的选择模式规则不适用，§8.5）。无障碍语义与选中态双通道表达记为待办，留最后统一做（§16）。其余与 0.16 相同。
+>
 > **实现进度（0.16，2026-10-15）**：修「自动刷新后新卡片不在列表顶部」。记录页与选择照片页是**同一个根因**：LazyColumn 在 item 集合变化时会按 key 把「原来第一个可见项」钉在视口顶部，于是插到它前面的新内容被顶到视口**上方**——记录页那个锚点是旧的日期头（冷启动先画缓存、网络数据整体替换时新记录插到了前面），选择页那个锚点是页脚（首屏加载时列表里只有页脚，7 天的照片全插在它前面，打开就直接停在列表最底部）。修法：记录页在用户仍贴着顶部时把视口钉回顶部、已翻到别处则一律不动；选择页在首屏数据到达时钉回顶部。见 §8.1 / §8.5 / §14 第 29 行。其余与 0.15 相同。
 >
 > **实现进度（0.15，2026-10-04）**：修详情页重分析的反馈缺失——提交成功后不关表单、不清空 notes，且 Snackbar 被全屏 Dialog 挡住看不见（现改为详情打开期间用系统 Toast）。其余与 0.14 相同。
@@ -289,7 +291,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 打开表单时解除删除的武装态。
 - 删除有两个互不干扰的入口，都是两步确认：
   - 删除整餐：第一次点击变为「确认删除整餐？」（3 秒后自动还原），再点才发 DELETE /api/record（主行 asset_id，mode=meal）。成功：关闭详情、触发全局刷新、Snackbar「已删除整餐，照片不会再被同步」。
-  - 单张移除（仅多照片组，行内 ✕）：独立武装态，第一次点变「确认?」（3 秒还原），再点发 mode=photo。响应的 promoted 非空表示删的是主行、最早的从行晋升为新主行，客户端以 promoted 为锚点重拉当天分组并更新详情；重拉后若按锚点找不到就按已知 asset_id 集合有交集再找，仍找不到则关闭详情并提示「已移除，该餐没有剩余照片」。形态 A 删主行后晋升行是 0 值，提示「已移除主照片，这餐数值需要重新估算（可点下方「重新分析」）」；否则提示「已移除照片，记录已更新」。
+  - 单张移除（仅多照片组，行内的删除图标按钮）：独立武装态，第一次点变「确认?」（3 秒还原），再点发 mode=photo。**0.17 起按钮是 `IconButton` + `Icons.Filled.Close`（内容描述「删除这张照片」），不再用文字 `✕`**——文字符号没有无障碍语义，字重与基线也跟图标不是一套（Web 端 lightbox 踩过同一个坑，见 AGENTS §4）。响应的 promoted 非空表示删的是主行、最早的从行晋升为新主行，客户端以 promoted 为锚点重拉当天分组并更新详情；重拉后若按锚点找不到就按已知 asset_id 集合有交集再找，仍找不到则关闭详情并提示「已移除，该餐没有剩余照片」。形态 A 删主行后晋升行是 0 值，提示「已移除主照片，这餐数值需要重新估算（可点下方「重新分析」）」；否则提示「已移除照片，记录已更新」。
   - 原生实现可用 AlertDialog 做确认，但必须保留两步，且整餐与单张不能共用同一个确认状态。
   - 删除后服务端会把资产写入忽略列表，客户端无需处理。
 - 原地刷新 refreshGroup：请求 GET /api/records?date={该记录日期}，按 promoted 或当前主行 asset_id 找，找不到按已知 asset_id 交集找，都找不到视为组已消失。刷新失败不要关闭详情，提示「操作已完成，但刷新失败——关闭后页面会自动更新」。
@@ -310,6 +312,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 - 错误：too many items (max 10) → 「一次最多选择 10 张」；其他 → 「批量分析失败: {error}」。整批先校验，任一项缺 asset_id、source 或合法 date，整批 400。500 表示服务端缺 GEMINI_API_KEY。
 - 缩略图 thumbnail_url 是上游 URL，同样经 /api/image 代理显示。
 - 单项 shape（不带 items）仍被后端支持，App 只用批量 shape。
+- **选择态语义与返回键（0.17 复核结论，别再改回去）**：本页**点击缩略图就是选中**、没有独立的浏览态，所以 M3「选择模式」那套规则（长按进入、返回键先退出选择态、顶栏标题变成计数）**不适用**——返回键直接关闭页面是合理的，不要给返回键再加「先清空选择」这一层。真正缺的是两件事（已列入 §16 的无障碍待办）：① `PhotoCell` 只用 `Modifier.clickable`，TalkBack 会读成「按钮」而不是「可选项 + 是否选中」；② 选中态只有一圈 3dp 主色边框，属于单通道表达（M3 Selection 允许「对勾、复选框、surface 变色或组合」）。
 - 分析进行中禁止关闭页面（网页版 close 有 analyzing 保护）。
 
 (b) 本地上传（对应网页的拖拽/粘贴/选文件）：
@@ -343,6 +346,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 概况的刷新点：连接探测（`probe`/`login`/`logout` 后由 `AppViewModel.applyProbe` 顺手解析）与 §8.6 每 30 秒的轮询，不用额外请求。
 - 末尾「关于」分组只放一行 **App 版本**（只显示 `BuildConfig.VERSION_NAME`，不带版本代码——已拍板，版本代码是给 Android 比大小的，给人看没有意义）。为此 `buildFeatures.buildConfig = true`，取的就是 `app/build.gradle.kts` 里发布的那个版本号。**别把它和「数据概况」混在一起**——一个是「装的哪个包」，一个是「服务端有多少数据」，此前并列显示过、被用户指出看不懂。
 - Calo 页顶部不放设置入口（已拍板）。
+- **出生日期行的样式（0.17 起）**：这一页是**表单**，用 `OutlinedTextField` 是对的——`ListItem` 是给「一行一个值 + 尾部控件」的**列表**用的，不要照搬到这里（审计初期提过、已复核撤回）。本批只把尾部控件从文字按钮「选择」换成 `IconButton` + `Icons.Filled.DateRange`（内容描述「选择出生日期」），因为 M3 的 `trailingIcon` 槽位规定放图标。
 
 ### 8.8 系统集成（首期后做）
 
@@ -510,6 +514,8 @@ android/
 | 27 | 删掉日视图顶栏 | 日视图 TopAppBar 的日期与吸顶 `DateSeparator` 内容恒等（都取自首个可见日期组），用户反馈「有点多余」→ 已删除，日期只由吸顶分隔线承担（§8.1） | ✅ 0.13 |
 | 28 | 详情重分析的反馈修复 | ① 提交成功后关闭表单并清空 notes（`onReanalyze` 回调带 `onSuccess`，失败时表单原样保留）；② 详情打开期间操作提示改走系统 Toast——SnackbarHost 在页面层，被全屏 Dialog 挡住看不见 | ✅ 0.15 |
 | 29 | 刷新后视口不在顶部（记录页 + 选择照片页） | 两页同一根因：LazyColumn 按 key 把「原来第一个可见项」钉在视口顶部，插到它前面的新内容被顶到视口上方。记录页锚点是旧日期头（冷启动缓存 → 网络数据整体替换时新记录插到了前面），选择页锚点是页脚（首屏加载时列表里只有页脚）。修法见 §8.1 / §8.5 | ✅ 0.16 |
+| 30 | M3 规范对齐（进行中）第一批：图标修正 | §8.4 / §8.7 / §16 | 否（后续） | ✅ 0.17（详情页单张移除、设置页日期行改图标按钮；另撤回两项不适用建议，见 §8.5 / §8.7） |
+| 31 | M3 对齐：一级 Tab 切换转场 | §16.1 第 1 项 | 否（后续） | ✅ 0.17（横向滑动 → Top level fade through） |
 ## 15. 建议实施顺序
 
 1. ✅ 0.1 搭环境与空壳（三 Tab、主题、Base URL、登录、OkHttp + cookie）。里程碑 A：能登录并拉到 /api/data-version。
@@ -528,3 +534,57 @@ android/
 > 0.9 是补漏：§3.3 的**按接口分超时**之前一直没做（全用 20 s），重分析和批量加照片会在客户端超时、而服务端其实已经成功。
 >
 > **剩下的两步（8 轮询、9 收尾）可以在 Calo 之后再回头做**，它们是增强不是阻塞。
+>
+> **2026-10-16 起另开一项 M3 规范对齐工程**（不是重写）：审计结论、阶段划分、待办与已撤回的建议见 §16。
+
+## 16. M3 规范对齐（进行中）
+
+> 目标：按 Material Design 3 规范对齐客户端的**交互与动效**。**不是重写**——组件层本来就是 material3 组件（`NavigationBar` / `TopAppBar` / `Card` / `AlertDialog` / `ModalBottomSheet` / `SegmentedButton` / `PullToRefreshBox` / `DatePickerDialog`），动态取色已开，字体基本走 `Typography` 令牌（全项目只有 1 处硬编码字号）。差距集中在动效、导航层级语义、反馈层、令牌化与少数交互细节。
+
+### 16.1 审计结论（按严重度）
+
+| # | 面 | M3 要求 | 现状 | 位置 |
+|---|---|---|---|---|
+| 1 | 一级 Tab 切换转场 | 点底部导航项必须用 Top level（fade through） | ✅ **0.17 已修**：原先横向滑动（Lateral 的语汇），现为 fade through（旧页 90ms 淡出 → 新页延后 90ms 再 210ms 淡入）；`tabSlide` 与那个方向布尔已删除，别再往回改 | `MainScaffold.kt` 的 `topLevelFadeThrough()` |
+| 2 | 导航栏图标 | 选中 filled、未选中 outlined，对比度 ≥3:1 | 两态同一个 filled 图标 | `MainScaffold.kt` 的 `Tab` 枚举 |
+| 3 | 重复点当前 Tab | 应回到页面顶部 | `if (current != tab.route)` 直接忽略 | 同上 |
+| 4 | 详情页层级 | 卡片→详情属 Container transform / Forward-and-backward | 全屏 Dialog（另一窗口）：无导航层级、无预测性返回、无共享元素 | `MealDetailDialog.kt` / `RecordsTab.kt` / `CaloScreen.kt` |
+| 5 | 反馈层 | 瞬时反馈用 Snackbar | 详情打开期间改用 `android.widget.Toast` | `RecordsTab.kt` |
+| 6 | 语义色 | 颜色来自 color scheme / 令牌 | 20 处硬编码（盈亏绿红、周图柱色、P/C/F、链接蓝） | `theme/Color.kt` 等 5 个文件 |
+| 7 | 形状 | 圆角走 shape scale（4/8/12/16/28） | 14 处硬编码 `RoundedCornerShape(4/6/8/12)` | 6 个文件 |
+| 8 | 动效 | 用官方动效令牌 | 只有一处手写 `tween(280)` | `MainScaffold.kt` |
+| 9 | 自适应 | expanded 断点用 NavigationRail，底部导航栏只用于 compact/medium | 任何窗口尺寸都是底部导航栏 | 同上 |
+
+**已拍板前提**：**只做深色界面，不做浅色**。因此语义色的对比度只需在深色底上达标，`InkcalTheme` 的 `isSystemInDarkTheme()` 分支按此收敛。
+
+### 16.2 阶段（每阶段独立验收）
+
+每阶段完成后必须跑 `cd android && ./gradlew :app:testDebugUnitTest :app:assembleRelease`，真机由用户安装验证（agent 无法点真机），并同步本文 §14 / §15 与头部进度摘要。
+
+1. 基建：锁定深色主题 + 接入 `MaterialTheme.motionScheme` 官方动效令牌 + 圆角收敛到 shapes 令牌 + 语义色令牌化
+2. 导航层级与转场：详情页升级为真实导航层级（共享元素 / container transform）+ 一级 Tab 切换改为 Top level 过渡
+3. 导航栏细节：选中/未选中图标变体、重复点当前项回到顶部、明确并记录「切走是否保留各页状态」
+4. 反馈层：`Toast` → Snackbar 载体；核对各处关闭/确认动作是否符合 M3
+5. 组件结构：设置页组织方式、选择照片页语义
+6. 触控与可用性：48dp 最小触控目标、`contentDescription` 覆盖
+7. 自适应：窗口尺寸分级（compact / medium / expanded）+ NavigationRail
+8. 收尾：文档 + 全量验收清单
+
+### 16.3 待办：无障碍（留最后统一做）
+
+- `PhotoCell` 等可选中元素改用 `selectable` / `toggleable` + `role`，让 TalkBack 读出「可选项 + 是否选中」。
+- 选中态改**双通道**表达（颜色 + 图标/对勾）：M3 Selection 原文允许「对勾、复选框、surface 变色或组合」，我们现在只有一圈主色边框。
+- 逐个核对交互元素的 48dp 最小触控目标。**0.17 已核**：详情页那个 40dp 是照片缩略图、不是按钮，它所在的行高 52dp、达标；其余待逐项核。
+
+### 16.4 已复核并撤回的建议（别再提）
+
+- **设置页改 `ListItem`**：该页是表单，`OutlinedTextField` 才是对的（理由见 §8.7）。
+- **选择照片页「返回键先退出选择态」**：该页点击即选中、没有独立浏览态，M3 选择模式规则不适用（理由见 §8.5）。
+- **加 `android:enableOnBackInvokedCallback="true"`**：**targetSdk ≥ 35 不需要**这个 flag（我们是 36），加了也没用。
+
+### 16.5 平台事实（免得再查一遍）
+
+- **预测性返回**：target 36 在 Android 16+ 默认开启，系统不再调用 `onBackPressed`、也不再派发 `KEYCODE_BACK`；项目里没有任何遗留返回 API。`NavDisplay` 原生支持——公开 API `defaultPredictivePopTransitionSpec()` 收手势进度，内部走 `androidx.navigationevent`。
+- **共享元素**：`SharedTransitionLayout` 包住 `NavDisplay`，屏幕里用 `LocalNavAnimatedContentScope` 取 `AnimatedVisibilityScope`；Nav3 各版本都支持预测性返回（官方文档：Navigation with shared elements）。
+- **过渡分槽**：`transitionSpec`（推进）、`popTransitionSpec`（后退）、`predictivePopTransitionSpec`（手势进度）。判据**不要**去认路由对象（0.13 的 `contentKey` 坑），用「栈深有没有变」区分 Tab 切换与推进层级。
+- **动效令牌**：`material3 1.4.0` 的 `MaterialTheme(colorScheme, motionScheme, …)` 提供六种 spec——空间类 `defaultSpatialSpec` / `fastSpatialSpec` / `slowSpatialSpec`（Expressive 档是弹簧），效果类 `defaultEffectsSpec` / `fastEffectsSpec` / `slowEffectsSpec`；需要 opt-in。

@@ -2,9 +2,8 @@ package com.jerrylf.inkcal.ui.app
 
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
@@ -16,13 +15,8 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.unit.IntOffset
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -51,45 +45,44 @@ private enum class Tab(val route: NavKey, val label: String, val icon: ImageVect
   Settings(SettingsRoute, "设置", Icons.Filled.Settings),
 }
 
-/**
- * Tab 间的滑动转场：forward = 点到了序号更大的 Tab，新页从右侧滑入、旧页向左退出；
- * 反之从左侧滑入、向右退出。就是"三页排成一行"的方向感。
- */
-private fun tabSlide(forward: Boolean): ContentTransform {
-  val spec = tween<IntOffset>(280)
-  return if (forward) {
-    slideInHorizontally(spec) { it } togetherWith slideOutHorizontally(spec) { -it }
-  } else {
-    slideInHorizontally(spec) { -it } togetherWith slideOutHorizontally(spec) { it }
-  }
-}
+/** fade through 的时序：旧页 90ms 快速淡出，新页延后 90ms 再花 210ms 淡入（合计 300ms）。 */
+private const val FadeOutMillis = 90
+private const val FadeInMillis = 210
 
 /**
- * 一级导航骨架：底部 Tab + Nav3。设置页不参与左右滑动（手指滑动还没做）。
+ * 一级 Tab 之间的转场：M3 的 **Top level** 过渡（fade through）——
+ * "The exiting screen quickly fades out and then the entering screen fades in."
  *
- * **方向要在点击处定，不能从 Nav3 的 `contentKey` 推**（2026-10-04 踩坑）：
- * `Scene.entries` 里的 entry 是被装饰器链重建过的，`contentKey` 不是我们的路由对象，
- * 拿它去比 Tab 下标恒得 -1/-1，方向就退化成永远同一个（真机表现：怎么切都朝一边滑）。
- * 所以这里只在 onClick 里记一个布尔，转场读它。
+ * **不要换回方向性滑动**：横向平移是 **Lateral** 的语汇，属于同级可横滑的内容；
+ * 点底部导航栏切换目的地必须用 Top level 过渡（M3 Navigation bar 规范原文）。
+ */
+private fun topLevelFadeThrough(): ContentTransform =
+  ContentTransform(
+    targetContentEnter = fadeIn(tween(durationMillis = FadeInMillis, delayMillis = FadeOutMillis)),
+    initialContentExit = fadeOut(tween(durationMillis = FadeOutMillis)),
+  )
+
+/**
+ * 一级导航骨架：底部 Tab + Nav3。
+ *
+ * **以后往这个栈里推进层级时**（例如详情页变成真正的路由），转场判据**不要**去认「这是哪一页」：
+ * `Scene.entries` 里的 entry 被装饰器链重建过，`contentKey` 不是我们的路由对象
+ * （2026-10-04 踩坑：Tab 方向因此退化成永远同一个）。用**栈深**区分就够了——
+ * 1→1 是 Tab 切换（Top level 过渡），+1 是推进一层，−1 是后退。
  */
 @Composable
 fun MainScaffold(viewModel: AppViewModel) {
   val backStack = rememberNavBackStack(RecordsRoute)
 
-  // true = 往右切（序号变大）。初值只影响首帧，没有转场发生时不会被读到。
-  var forward by remember { mutableStateOf(true) }
-
   Scaffold(
     bottomBar = {
       NavigationBar {
         val current = backStack.lastOrNull()
-        val currentIndex = Tab.entries.indexOfFirst { it.route == current }
-        Tab.entries.forEachIndexed { index, tab ->
+        Tab.entries.forEach { tab ->
           NavigationBarItem(
             selected = current == tab.route,
             onClick = {
               if (current != tab.route) {
-                forward = index > currentIndex
                 // 一级 Tab 之间不叠栈：切走就清空，返回键不会在 Tab 间来回跳
                 backStack.clear()
                 backStack.add(tab.route)
@@ -106,8 +99,8 @@ fun MainScaffold(viewModel: AppViewModel) {
       backStack = backStack,
       onBack = { backStack.removeLastOrNull() },
       modifier = Modifier.padding(inner),
-      // NavDisplay 默认是渐入渐出，这里换成方向性滑动
-      transitionSpec = { tabSlide(forward) },
+      // 一级 Tab 切换走 M3 的 Top level 过渡（fade through）
+      transitionSpec = { topLevelFadeThrough() },
       entryProvider =
         entryProvider {
           entry<RecordsRoute> { RecordsTab() }

@@ -480,7 +480,11 @@ private fun PhotoRow(
         Text("确认?", color = MaterialTheme.colorScheme.error)
       }
     } else {
-      TextButton(onClick = onArm, enabled = enabled) { Text("✕") }
+      // 图标按钮而非文字 "✕"：文字符号没有无障碍语义（TalkBack 读不出"删除"），
+      // 字重与基线也跟图标不是一套（Web 端 lightbox 踩过同一个坑，见 AGENTS.md §4）
+      IconButton(onClick = onArm, enabled = enabled) {
+        Icon(Icons.Filled.Close, contentDescription = "删除这张照片")
+      }
     }
   }
 }

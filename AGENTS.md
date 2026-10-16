@@ -149,9 +149,9 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.16，2026-10-15）：**首期功能已全部完成**。本版只修一个 bug——**自动刷新后新卡片不在列表顶部**（记录页与选择照片页是同一个根因）：Compose 的 `LazyColumn` 在 item 集合变化时会按 key 把「原来第一个可见项」钉在视口顶部，插到它前面的新内容就被顶到视口**上方**，用户得把列表往下拖才看得到。两页的锚点不同——记录页是旧的日期头（冷启动先画缓存、网络数据整体替换时新记录插到了前面），选择页是页脚（首屏加载时列表里只有页脚，7 天的照片全插在它前面，于是打开就直接停在列表最底部）。修法：记录页在**用户仍贴着顶部**时把视口钉回顶部、已翻到别处则一律不动（「用户有没有滚离」只认 `isScrollInProgress` 期间的位移，直接读 `firstVisibleItemIndex` 会把 LazyColumn 那次重排误判成用户翻页，于是永远不修）；选择页在首屏数据到达时钉回顶部。详见 `docs/android-app-spec.md` §8.1 / §8.5 / §14 第 29 行。
+当前状态（0.17，2026-10-16）：**首期功能已全部完成**，当前在做 **M3 规范对齐工程**——**不是重写**：组件层本来就是 material3 组件（`NavigationBar` / `TopAppBar` / `Card` / `AlertDialog` / `ModalBottomSheet` / `SegmentedButton` / `PullToRefreshBox` / `DatePickerDialog`），动态取色已开，字体基本走 `Typography` 令牌；差距集中在**动效、导航层级语义、反馈层、令牌化与少数交互细节**。审计结论、8 个阶段、无障碍待办、**已复核撤回的建议**（别再提：设置页改 `ListItem`、选择照片页「返回键先退选择态」、加 `enableOnBackInvokedCallback`）以及平台事实（预测性返回 / 共享元素 / 动效令牌）都在 `docs/android-app-spec.md` §16——**改客户端前先读那一节**。已拍板前提：**只做深色界面，不做浅色**。
 
-更早的版本历史（0.6–0.15）与缓存/刷新、轮询等页面行为见 `docs/android-app-spec.md`（头部进度摘要、§8.1、§14 的逐项「进度」列）——那是客户端的权威记录，本文不再重复。包名 `com.jerrylf.inkcal`；`domain/` 与 `data/` 共 15 个测试类、100 个 JVM 单测，`cd android && ./gradlew :app:testDebugUnitTest`。首期之外只剩 §8.8（分享入口、桌面小组件）。
+包名 `com.jerrylf.inkcal`；`domain/` 与 `data/` 共 16 个测试类、100 个 JVM 单测，`cd android && ./gradlew :app:testDebugUnitTest`。首期之外只剩 §8.8（分享入口、桌面小组件）。页面行为与逐版历史见 `docs/android-app-spec.md`（头部进度摘要、§8.x、§14 的逐项「进度」列）——客户端的权威记录在那边，本文不重复。有一条容易被「优化」掉的判据留在 §8.1：判断记录页「用户有没有滚离顶部」只能看 `isScrollInProgress` 期间的位移，直接读 `firstVisibleItemIndex` 会把 LazyColumn 的重排误判成用户翻页，于是永远不修。
 
 详情页刻意用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本。组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
 

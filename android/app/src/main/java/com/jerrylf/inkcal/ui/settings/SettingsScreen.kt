@@ -10,11 +10,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -117,7 +121,10 @@ fun SettingsScreen(
         singleLine = true,
         readOnly = true,
         trailingIcon = {
-          TextButton(onClick = { showDatePicker = true }) { Text("选择") }
+          // M3 的 trailingIcon 槽位要放图标，不是文字按钮
+          IconButton(onClick = { showDatePicker = true }) {
+            Icon(Icons.Filled.DateRange, contentDescription = "选择出生日期")
+          }
         },
         modifier = Modifier.fillMaxWidth(),
       )
