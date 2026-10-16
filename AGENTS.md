@@ -54,10 +54,11 @@ Immich / PhotoPrism
 ```bash
 # 所有 Python 运行都用 venv，系统 Python 缺 pillow-heif/imagehash 等依赖
 venv/bin/python main.py --help
-venv/bin/python web/server.py
 
-# 推荐 Web 启动方式（从项目根目录）
-INKCAL_PORT=5800 venv/bin/python web/server.py
+# Web 服务**只**由用户级 systemd 单元管理 —— 不要手动 `python web/server.py`
+# （理由与排查见 §8「运行时已知坑」第 2 条）
+systemctl --user restart inkcal-web.service
+systemctl --user status  inkcal-web.service
 
 # 构建 Vue 前端；产物会写入 web/static/
 npm --prefix web/ui run build
@@ -114,7 +115,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 批处理 `session` 的意思只是**一次 `harness.run()` 的短命工作上下文**，不是用户聊天会话。它通过 `agent_decisions` 留审计，并在失败时降级旧的单图 Gemini 路径。
 
-### 聊天后端（已写好）
+### 聊天后端
 
 | 路径 / API | 状态与用途 |
 |---|---|
@@ -146,27 +147,13 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.16，2026-10-15）：**首期功能已全部完成**。本版只修一个 bug——**自动刷新后新卡片不在列表顶部**（记录页与选择照片页是同一个根因）：Compose 的 `LazyColumn` 在 item 集合变化时会按 key 把「原来第一个可见项」钉在视口顶部，插到它前面的新内容就被顶到视口**上方**，用户得把列表往下拖才看得到。两页的锚点不同——记录页是旧的日期头（冷启动先画缓存、网络数据整体替换时新记录插到了前面），选择页是页脚（首屏加载时列表里只有页脚，7 天的照片全插在它前面，于是打开就直接停在列表最底部）。修法：记录页在**用户仍贴着顶部**时把视口钉回顶部、已翻到别处则一律不动（「用户有没有滚离」只认 `isScrollInProgress` 期间的位移，直接读 `firstVisibleItemIndex` 会把 LazyColumn 那次重排误判成用户翻页，于是永远不修）；选择页在首屏数据到达时钉回顶部。详见 `docs/android-app-spec.md` §8.1 / §8.5 / §14 第 29 行。其余与 0.15 相同。
+当前状态（0.16，2026-10-15）：**首期功能已全部完成**。本版只修一个 bug——**自动刷新后新卡片不在列表顶部**（记录页与选择照片页是同一个根因）：Compose 的 `LazyColumn` 在 item 集合变化时会按 key 把「原来第一个可见项」钉在视口顶部，插到它前面的新内容就被顶到视口**上方**，用户得把列表往下拖才看得到。两页的锚点不同——记录页是旧的日期头（冷启动先画缓存、网络数据整体替换时新记录插到了前面），选择页是页脚（首屏加载时列表里只有页脚，7 天的照片全插在它前面，于是打开就直接停在列表最底部）。修法：记录页在**用户仍贴着顶部**时把视口钉回顶部、已翻到别处则一律不动（「用户有没有滚离」只认 `isScrollInProgress` 期间的位移，直接读 `firstVisibleItemIndex` 会把 LazyColumn 那次重排误判成用户翻页，于是永远不修）；选择页在首屏数据到达时钉回顶部。详见 `docs/android-app-spec.md` §8.1 / §8.5 / §14 第 29 行。
 
-当前状态（0.15，2026-10-04）：**首期功能已全部完成**。本版只修一个 bug——**详情页重分析的操作反馈**：0.14 之前提交成功后不关表单、不清空 notes，而且 SnackbarHost 在页面层、被全屏 Dialog 挡住，用户在详情里重分析/删照片时什么提示都看不见；现在①表单的 `onReanalyze` 回调带 `onSuccess`，真正更新完成才关表单（失败时 notes 原样保留），②详情打开期间 `RecordsTab` 把 VM 的 toast 路由给系统 `Toast`（独立窗口层，压在 Dialog 上），详情关闭时仍走 Snackbar。其余与 0.14 相同。
-
-0.14 修一个 bug——**Tab 切换滑动的方向**：0.13 想从 Nav3 的 `Scene.entries.contentKey` 反推方向，但 entry 已被默认装饰器链重建、`contentKey` 不是我们的路由对象，比较恒为 -1/-1，结果「怎么切都朝同一边滑」；现在方向在 Tab 的 `onClick` 里比较下标得出（`forward = index > currentIndex`），点右边的 Tab 时新页从右侧滑入、旧页向左退出。**不要再回到用 `contentKey` 推方向**。其余与 0.13 相同。
-
-0.13 是一批交互体验优化——**Tab 切换转场由渐入渐出改为方向性滑动**（覆盖 NavDisplay 默认转场；Tab 间还不能手指滑动，只改了转场）；**周/月视图改为 `HorizontalPager` 左右滑动切周/月**（箭头与「今天」变成遥控器，`pageCount` 右端封在本周/本月、滑不进未来，页下标存 `rememberSaveable`）；**餐卡长按菜单**（查看详情 / 重新分析… / 删除整餐…，后两者在 `RecordsTab` 统一弹确认，纯文本补录没有重分析入口）；**P/C/F 按网页端配色**（P `#51CF66`、C `#FFD43B`、F `#FF922B`，落在 `theme/Color.kt`，餐卡 / 吸顶分隔线 / 详情页三处字母数字同色）；**日视图删掉 TopAppBar**（它与吸顶 `DateSeparator` 的内容恒等——都取首个可见日期组，而 stickyHeader 保证该组可见时日期就钉在顶部，分隔线还多带 kcal/PCF/缺口 chip，所以顶栏纯冗余；日期只由吸顶分隔线承担，不要再加回来）。配套改动：`RangeViewModel` 从单一区间状态改为**按区间分槽缓存**（`chunks: Map<"start..end", RangeChunk>`）——pager 相邻两页会同时上屏，单一状态会让两页显示同一份数据；`invalidate()` 重拉所有已加载区间。
-
-首期完整能力：三 Tab 骨架 + 服务器配置向导 + 登录/登出（含使用中会话失效自动回登录页）+ **记录页三视图**（日：时间轴无限下拉、吸顶汇总含缺口 chip、下拉刷新、磁盘缓存冷启动秒开；周：双层柱状图 + 汇总 + 时间轴；月：圆环日历，点日期跳回日视图）+ **餐卡详情**（全屏画廊含双指缩放与多图翻页、照片明细按形态 A/B 区分、🤖 AI 决策块、组级重分析、整餐删除与单张移除两步确认）+ **设置页**（体征参数与 BMR、Calo 上下文窗口、服务器分组含数据概况、关于分组含 App 版本）+ **选择照片**（相册按天分页多选 ≤10、非食物置灰；本地上传走系统照片选择器，无 EXIF 时提示改期）+ **Calo 聊天页**（会话历史与惰性新建、过程层折叠步骤链、产物分流、统计卡、删除确认卡、聊天餐卡可进详情）。`domain/` 纯函数与 `data/` 共 15 个测试类、100 个 JVM 单测。**首期功能已无缺口**（§8.6 的 data-version 轮询已在 0.12 补上），只剩首期外的 §8.8（分享入口、桌面小组件）。`docs/android-app-spec.md` §15 有完整勾选、§8.x 各小节开头有状态。包名 `com.jerrylf.inkcal`。
-
-0.6 是非功能性版本：去掉 `network_security_config` 里的真实地址白名单（见上文），仓库转 public，并清理了源码/文档/APK 里的内网地址。功能与 0.5 相同。
-
-0.11 也是纯修复版本：记录页与 Calo 页内嵌 `TopAppBar` 的 `windowInsets` 与 Scaffold 重复垫了状态栏 inset，标题与列表之间出现一段空白；现显式清零（约定见下）。功能与 0.10 相同。
-
-0.12 是首期收尾版：补上 §8.6 的 data-version 轮询（基线存 ViewModel，存协程里会漏掉后台期间的写入），修掉聊天乐观消息 id 撞 key 导致的第二轮对话崩溃、以及周/月视图写后不刷新；设置页拆成「服务器」（数据概况，由 `/api/data-version` 指纹解析而来，UTC 转 HKT）与「关于」（App 版本，只显示 versionName）两组。
+更早的版本历史（0.6–0.15）与缓存/刷新、轮询等页面行为见 `docs/android-app-spec.md`（头部进度摘要、§8.1、§14 的逐项「进度」列）——那是客户端的权威记录，本文不再重复。包名 `com.jerrylf.inkcal`；`domain/` 与 `data/` 共 15 个测试类、100 个 JVM 单测，`cd android && ./gradlew :app:testDebugUnitTest`。首期之外只剩 §8.8（分享入口、桌面小组件）。
 
 详情页刻意用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本。组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
 
 Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaffold 已把状态栏 inset 消化进 innerPadding，页面内嵌的 TopAppBar 必须显式 `windowInsets = WindowInsets(0, 0, 0, 0)`，否则状态栏高度被垫两次、标题与列表之间出现大段空白。全屏 Dialog（选择照片）不经 Scaffold padding，其 TopAppBar 保留默认 inset。
-
-记录页缓存策略是 **stale-while-revalidate**：冷启动先画 `filesDir/records-cache.json` 里的上次结果，再后台重拉覆盖。不做「缓存没过期就不请求」——服务端 cron 随时写新记录，缓存永远不算可信。缓存 payload 带 `baseUrl`，换服务器即失效（`saveBaseUrl`/`logout` 也会主动清）。下拉刷新重拉的是**已加载的整个范围**（上限 365 天），不是只重拉最近 7 天，否则会把用户翻过的历史抖掉。
 
 依赖版本的硬约束：AGP 9.0.1 的 compileSdk 上限是 36，**任何新增依赖都必须 `minCompileSdk <= 36`**，否则编译直接失败。已因此钉住 `okhttp = 5.4.0`（5.5.0 要 37）、`coil = 3.5.0`（3.6.x 要 37）。升级这类依赖前先确认不再受 compileSdk 限制，或同时升 AGP + compileSdk 到 37。
 
@@ -215,7 +202,7 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 - 主区内容在超宽屏下限宽（约 1080px）居中。
 - 手机布局（<1024px）行为完全不变；断点判断在 `web/ui/src/App.vue` 的 `matchMedia('(min-width: 1024px)')`。
 
-### 记录 Tab（已实现主要骨架）
+### 记录 Tab
 
 - 日视图：最新记录在顶部，向下无限加载更早记录；**每日内卡片也按 `photo_time` 倒序**（`DayView.groupRecords` / `WeekView.timeline` 内排序， tie-break 用 `asset_id`）；日期吸顶分隔线（`.date-sep`）左侧显示日期/星期，右侧显示当天**总摄入热量与 P/C/F 宏营养素**（超过每日目标变红；今天也显示作为当日汇总锚点）；顶栏显示当前浏览日期。
 - 周视图：柱状图 + 餐食时间轴；可前后切换周，未来周禁用；暴露 `resetToCurrentWeek()` 供左栏「本周」快捷键回当前周。
@@ -228,7 +215,7 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 - `MealCard` 与 `MealLightbox` 是可复用组件；卡片点击任意区域（含缩略图图片区域）均可唤出详情；lightbox 已可展示 AI 决策审计和执行两步删除确认；lightbox 右上角关闭按钮为 SVG 细线 X + 圆形幽灵按钮样式（与 `.chat-plus` 同一视觉语言），不要退回裸文本 `✕`。
 - 已决定：**不在时间轴显示 SigLIP2/Luna 判为非食物的 skip 照片**。`/api/skipped` 可以为未来纠错留着，但不是一期 UI。
 
-### Calo Tab（已接通聊天后端与完整交互，2026-09-16）
+### Calo Tab
 
 前端 Tab 与助手形象正式确定为 **Calo**（取自 inkcal / calor，后半截 Cal 的演化），后端系统提示对应更新为「你是 inkcal 的饮食助手 Calo」。
 `web/ui/src/components/ChatPane.vue` 完整接通聊天后端：
@@ -272,70 +259,38 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 
 ---
 
-## 6. 下一步：优先任务（不要重复已完成工作）
+## 6. 模块级约定与后续任务
 
-### Phase 4.5：同餐组 UI（已实现，2026-09-04）
+### 同餐组 UI（§4 之外的补充契约）
 
-已实现（设计已与用户确认）：卡片 `×N` 角标 + lightbox 画廊 + **每张照片分行明细**（用户明确要求明细，不是只做组级信息）。要点：
+- 卡片 `×N` 角标 + lightbox 画廊 + **每张照片分行明细**（用户明确要求明细，不是只做组级信息）。
+- **photos[] 契约**：条目含 `asset_id / thumbnail_url / photo_time / meal / meal_detail / calories / protein_g / carbs_g / fat_g`，**刻意不含 confidence**（组级置信度在主记录上，逐照片无可操作场景）。
+- **形态 A 的从行在 UI 上显示「已并入整餐估算」**（判据：非主行且数值全零），**绝不显示 0 kcal**——防 8-29 式误读。形态 B 的从行带自己的 meal/数值，**行合计 = 组头**（`db.group_meals` 自动累加数值并拼接餐名，如「主食 + 饮品/甜点」）。
+- **双删除入口互不干扰**：行内 ✕ 两步确认（`mode:"photo"`）与「删除整餐」两步确认（`mode:"meal"`）各有独立武装态。单张移除后**原地重拉**——`DELETE /api/record` 的 photo 分支响应带 `promoted` 字段，删主行时前端按新主行锚点重拉 `/api/records?date=`；形态 A 删主行、0 值从行晋升时 toast 提示需要重估。
+- **Lightbox 重分析入口**：`notes` 必填（与 API 的 400 契约一致），走 `POST /api/reanalyze`（组级联合重估，后端自解析组根）；成功后必须 `refreshGroup(promoted, successMsg)` 原地重拉——形态 B 的从行会被清零，photos 显示不能只用响应体替换 rec。纯文本补录（全组无图）隐藏入口（`canReanalyze`，后端恒 502）。表单打开时解除删除武装态互斥。
+- **桌面端（≥1024px）lightbox 为左图右栏**（图区自适应 + 右栏固定 400px 独立滚动），`@media` 内只翻转 `.lb-inner` 主轴方向，不给 `.lightbox` 加新直接子元素。手机端维持纵向布局 + 主图左右滑动切换（40px 阈值）+ ←/→/Esc 键盘导航。
+- AI 决策区块的匹配范围是**组内全部 asset_id**（含 target_asset_id）。
+- 回归 `scripts/test_lightbox_smoke.py`（隔离库，覆盖 photos 字段 / 形态 B 组头累加与餐名拼接 / 删从行 / 晋升 / 整餐删 / 404，另含重分析的 4 个参数校验）。注意它预置 `INKCAL_USER=""` 空串，防 `.env` 被 load_dotenv 注入鉴权变量。
 
-- **桌面端（≥1024px）lightbоx 为左图右栏**（图区自适应 + 右栏固定 400px 独立滚动），`@media` 内只翻转 `.lb-inner` 主轴方向，不给 `.lightbox` 加新直接子元素。手机端维持纵向布局 + 主图左右滑动切换（40px 阈值）+ ←/→/Esc 键盘导航。
-- **photos[] 契约扩展**：条目含 `asset_id / thumbnail_url / photo_time / meal / meal_detail / calories / protein_g / carbs_g / fat_g`，**刻意不含 confidence**（组级置信度在主记录上，逐照片无可操作场景）。
-- **形态 A 从行显示「已并入整餐估算」**（判据：从行且数值全零），绝不在 UI 上显示 0 kcal——防 8-29 式误读。形态 B 从行带自己的 meal/数值，**行合计 = 组头**（`db.group_meals` 自动累加数值并拼接餐名如「主食 + 饮品/甜点」，2026-09-16 实现）。
-- **双删除入口**：行内 ✕ 两步确认（`mode:"photo"`，独立武装态）与「删除整餐」两步确认（`mode:"meal"`）互不干扰。单张移除后**原地刷新**（`DELETE /api/record` photo 分支响应含 `promoted` 字段——删主行时前端按新主行锚点重拉 `/api/records?date=`）；形态 A 删主行晋升 0 值行时 toast 提示需要重估。组不存在时兜底关闭 + touch()。
-- AI 决策区块匹配范围扩到**组内全部 asset_id**（含 target_asset_id）。
-- 回归：`scripts/test_lightbox_smoke.py`（26 checks，隔离库，覆盖 photos 字段/形态 B 组头累加与餐名拼接/删从行/晋升/整餐删/404）。注意该脚本预置 `INKCAL_USER=""` 空串防 `.env` 被 load_dotenv 注入鉴权变量。
-- 未做（刻意）：lightbox 内编辑宏营养素、跨零点组审计聚合。C 类历史数据（同分钟聚类）处理方式仍未讨论。
-- **Lightbox 重分析入口（2026-09-26 实现）**：`.lb-actions` 新增「重新分析」幽灵按钮 + 内联表单（notes 必填，与 API 400 契约一致），走既有 `POST /api/reanalyze`（组级联合重估，后端自解析组根）；成功后复用 `refreshGroup(promoted, successMsg)` 原地重拉（形态 B 从行会被清零，photos 显示必须重拉，不能只用响应体替换 rec）。纯文本补录（全组无图）记录隐藏入口（`canReanalyze`），后端恒 502。表单打开时解除删除武装态互斥。回归：`test_lightbox_smoke.py` 第 7 节补 4 个参数校验 check（Gemini 联合路径由 `test_group_reanalyze.py` 覆盖）。
+### 每日消耗（Burn）与热量缺口
 
-### Phase 5：接通 Calo 聊天 Pane（已实现，2026-09-16）
+**公式：TDEE = BMR + active_kcal，缺口 = TDEE − 摄入。** 前端三级降级链集中在 `tdeeOf()` / `deficitOf()`（`web/ui/src/utils/format.js`）：
 
-已完整实现并接通后端 `ChatAgent`：
-- **名称与定位**：前端界面与助手正式命名为 **Calo**（从 inkcal / calor 演化而来），系统提示词（`CHAT_SYSTEM_PROMPT`）同步更新为「你是 inkcal 的饮食助手 Calo」。
-- **组件架构**：新建 `web/ui/src/components/ChatPane.vue`，实现手机端第二 Pane 与 PC 端右侧三栏常驻/可折叠交互。
-- **会话持久化与切换**：进入时默认恢复最新 session，点击 `◷` 打开历史会话抽屉（`GET /api/chat/sessions`），点击 `＋` 即时新建会话（`POST /api/chat/sessions`）。
-- **发送与状态反馈**：非流式 `POST /api/chat/send`，发送中禁用输入并呈现思考脉冲动画；异常时友好 Toast 并保留用户输入以便重试。
-- **结构化 Artifact**：`get_records_in_range` 与 `search_meals` 查出的记录、`edit_record` 与 `reanalyze_record` 变更结果均渲染为可复用 `MealCard`，并支持直接点击唤出 `MealLightbox` 展开详情；`get_intake_stats` 结构化呈现摄入总热量与 P/C/F 营养素。
-- **两步安全删除**：`request_delete_record` 产生的 `confirm_card` 真实渲染为二次确认卡，仅在用户点击「确认删除」后调用既有 `DELETE /api/record` 并触发 `touch()` 联动更新时间轴，取消仅关闭卡片，绝不让模型或前端越权直接删除。
-- **设置入口**：通过顶部 `⚙️` 图标可直接读取并调节 `/api/settings` 的 `chat_window`（5～50 轮）。
-- **工具数据流补全**：`_record_brief` 与 `_group_brief` 补充 `thumbnail_url` 与 `replacement_image` 字段，使聊天 artifact 能够直接展示照片缩略图。
-- **回归测试**：`scripts/test_chat_smoke.py`。
-
-### Phase 6：每日身体消耗（Burn）与热量缺口后端（已实现，2026-09-23）
-
-支持从外部可穿戴设备（如 redroid 托管的 OPPO 健康/欢太健康）同步或手工录入每日卡路里消耗与步数：
-- **数据库表**：新增 `daily_burn`（主键 `date` 本地日历日，`active_kcal`、`steps`、`source`、`created_at`、`updated_at`），`_create_schema` 与 `_migrate_schema` 自动幂等建立；`get_data_version` 包含消耗更新时间戳 `b`。
-- **数据访问层**：`db.upsert_daily_burn`（`ON CONFLICT(date) DO UPDATE`）、`db.get_daily_burn`、`db.get_daily_burn_range`。
-- **CLI 入口**：`inkcal burn [--date YYYY-MM-DD] [--kcal N] [--steps N] [--source S] [--json]`，支持无参数查今天或录入当日消耗，纯本地 direct SQLite WAL 写入。
-- **API 端点**：`GET/PUT/POST /api/burn`；`/api/records` 与 `/api/today` 自动同级返回 `burn`，`/api/week` 的 `by_day` 字典与顶层返回 `burns`，供前端直接按日读取计算缺口。
-- **回归测试**：`scripts/test_daily_burn.py`（25 checks 覆盖 DB / CLI / API）。
-- **体征参数与 BMR（2026-09-23）**：`app_settings` 存 `user_height`/`user_weight`/`user_birthdate`/`user_gender`；`db.compute_bmr()` 用 Mifflin-St Jeor（男 +5 / 女 −161，年龄按 HKT 当日动态算），`db.get_user_bmr()` 聚合；`PUT /api/settings` 校验范围（身高 50–260、体重 20–300、gender ∈ male/female、日期 `_valid_date`）且**只更新请求中出现的键**（部分更新不得 KeyError），GET 返回体征+`bmr`。
-- **设置 Tab（2026-09-23）**：`web/ui/src/components/SettingsPane.vue`——体征表单 + BMR 实时结果 + 原 Calo 滑动窗口迁移至此；`App.vue` 三 Tab（记录/Calo/设置），滑动手势在设置页禁用，桌面左栏底部固定常驻「⚙️ 设置」入口（主区原位展示设置并限宽居中，右侧 Calo 侧栏完整保留不被挤走）；Calo 齿轮按钮与弹窗已删。
-- **Cron 同步**：`0 8-23 * * *` 抓今天每小时增量更新；`0 1 * * *` 凌晨 1 点执行 `scripts/burn_sources/heytap_ui.py --yesterday` 回溯昨日终值锁定收口；均直写 `inkcal burn`，日志 `~/heytap-pull.log`。保留 `~/heytap-pull.py` 软链接兼容旧调用。
-- **adb 串口不进仓库**：脚本从 `REDROID_SERIAL` 环境变量读（默认 `127.0.0.1:5555`），实际地址写在 crontab 行首的 `REDROID_SERIAL=host:port`。仓库是公开的，写死地址等于公开内网拓扑。注意 redroid 的 5555 只发布在 LAN 地址上（回环连不上），所以必须显式传值，默认值只在 redroid 绑到本机时可用。
-- **redroid 资产归档（2026-09-24）**：全部收敛至 `~/Docker/redroid/`——compose 文件与 `.env`、`data/` 数据卷（登录态/adb_keys，`~/rd` 软链兼容）、`apk/`（官方原件 + 防截屏补丁版）、`apktool-work/` 逆向工作区、`scripts/`（post-start / hide-root / install / heyweb 等全套维护脚本）、`build/` 镜像构建工程。镜像 `redroid:14.0.0_heytap`（su 改名、release-keys、zh-CN 等文件级伪装已 `docker commit` 固化）。日常管理：`~/.local/bin/docker-compose -f ~/Docker/redroid/docker-compose.yml up -d` 之后**必须跑 `scripts/post-start.sh`**（binder 权限 + bind-ro 运行时伪装；compose 无 post-start 钩子，漏跑则欢太健康重新弹 root 框）。详见该目录 `README.md`。
-
-### Phase 6.5：热量缺口前端展示（已实现，2026-09-24）
-
-缺口公式 **TDEE = BMR + active_kcal，缺口 = TDEE − 摄入**，前端三级降级链集中在 `tdeeOf()` / `deficitOf()`（`web/ui/src/utils/format.js`）：
-
-- 有 BMR + 当天 burn 行 → BMR + active_kcal（正式口径）
-- 有 BMR、当天 burn 未同步 → 仅 BMR（偏保守，历史日期常态）
-- 未填体征 → 固定 2500（`DAILY_TARGET_KCAL` 已降级为纯兜底常量，不再是正式基准；日/周/月视图的「超标变红」阈值一律走 TDEE）
-
-各视图实现：
-
-- **BMR 全局缓存**：`store.bmr` + `store.ensureBmr()`，`App.vue` onMounted 拉取一次；`SettingsPane` 保存体征后直接写缓存并 `touch()` 联动全部视图。
-- **日视图**：吸顶分隔线摄入数后加缺口 chip（绿「缺口 N」/ 红「超 N」，`.sep-deficit`，悬停 title 显示当日 TDEE）；**今天**加 `~` 前缀 + `.partial` 弱化 + title 注明「截至目前」半天数据（已拍板：照显不隐藏）。
-- **周视图**：双层柱状图（已拍板）——底层灰柱（`.burn`，#2c313a）= 当日 TDEE，上层蓝柱（55% 宽）= 摄入，摄入超过 TDEE 变红，悬停显示「摄入 X / 消耗 Y」；汇总行改为「本周已记录 N 天 · 日均 X kcal · 累计缺口/盈余 Z kcal」，**累计缺口只统计有记录的天**（未记录视为漏记不计入，避免 0 摄入虚增缺口；已拍板不换算体重）。
-- **月视图**：圆环分母 = 当日 TDEE；**二值缺口语义**（已拍板，取代原三档蓝/绿/红）：绿环 = 有缺口、红环 = 超消耗，数字保持中性白（颜色只由圆环承载，避免双语义打架）；图例两项「有缺口 / 超消耗」。
-
-已知口径：无 burn 数据的历史日期按仅 BMR 计算，绿红判定偏严格属真实反映；手表历史数据回溯同步未做（需要时另议）。
+- 有 BMR + 当天 burn 行 → BMR + active_kcal（正式口径）；有 BMR 但当天 burn 未同步 → 仅 BMR（偏保守，历史日期的常态）；未填体征 → 固定 2500（`DAILY_TARGET_KCAL` 已降级为纯兜底常量，不再是正式基准）。**日/周/月视图的「超标变红」阈值一律走 TDEE，不走 2500。**
+- **数据面**：`daily_burn` 表（date 主键）；CLI `inkcal burn [--date --kcal --steps --source --json]`；`GET/PUT/POST /api/burn`，且 `/api/records`、`/api/today` 同级返回 `burn`、`/api/week` 返回 `burns`；`get_data_version` 指纹含消耗更新时间戳。回归 `scripts/test_daily_burn.py`。
+- **BMR**：体征存 `app_settings`，`db.compute_bmr()` 用 Mifflin-St Jeor（男 +5 / 女 −161，年龄按 HKT 当日动态算）。`PUT /api/settings` 校验范围（身高 50–260、体重 20–300、gender ∈ male/female、日期走 `_valid_date`）且**只更新请求中出现的键**（部分更新不得 KeyError）；GET 返回体征 + `bmr`。客户端侧 `store.bmr` 全局缓存，`App.vue` onMounted 拉一次，设置页保存后直接写缓存并 `touch()` 联动全部视图。
+- **各视图口径（已拍板）**：日视图吸顶分隔线带缺口 chip（绿「缺口 N」/ 红「超 N」，悬停 title 显示当日 TDEE），**今天**加 `~` 前缀 + 弱化 + title 注明「截至目前」半天数据（照显不隐藏）。周视图为**双层柱状图**（底层灰柱 = 当日 TDEE，上层窄柱 = 摄入，摄入超过 TDEE 变红），汇总写「本周已记录 N 天 · 日均 X kcal · 累计缺口/盈余 Z kcal」，**累计缺口只统计有记录的天**（未记录视为漏记，避免 0 摄入虚增缺口；不换算体重）。月视图圆环分母 = 当日 TDEE，**二值缺口语义**：绿 = 有缺口、红 = 超消耗，数字保持中性白（颜色只由圆环承载，避免双语义打架）。
+- 已知口径：无 burn 数据的历史日期按**仅 BMR** 算，绿红判定偏严格属真实反映；手表历史数据回溯同步未做（需要时另议）。
+- **Cron 同步**：`0 8-23 * * *` 抓今天每小时增量；`0 1 * * *` 跑 `scripts/burn_sources/heytap_ui.py --yesterday` 回溯昨日终值锁定收口；两者都直写 `inkcal burn`，日志 `~/heytap-pull.log`（保留 `~/heytap-pull.py` 软链接兼容旧调用）。
+- **adb 串口不进仓库**：脚本从 `REDROID_SERIAL` 环境变量读（默认 `127.0.0.1:5555`），真实地址写在 crontab 行首的 `REDROID_SERIAL=host:port`。仓库是公开的，写死地址等于公开内网拓扑。注意 redroid 的 5555 只发布在 LAN 地址上（回环连不上），所以必须显式传值。
+- **redroid 资产全部在 `~/Docker/redroid/`**（compose 与 `.env`、`data/` 登录态与 adb_keys（`~/rd` 软链兼容）、`apk/`、`apktool-work/`、`scripts/`、`build/`），镜像 `redroid:14.0.0_heytap` 已 `docker commit` 固化。日常：`~/.local/bin/docker-compose -f ~/Docker/redroid/docker-compose.yml up -d` 之后**必须跑 `scripts/post-start.sh`**（binder 权限 + bind-ro 运行时伪装；compose 没有 post-start 钩子，漏跑则欢太健康重新弹 root 框）。详见该目录 `README.md`。
 
 ### 后续任务
 
 - 主动确认队列：`/api/data-version` 已有 `pending: 0` 占位；在设计确认前不要自造 schema。
 - Lightbox 内部能力扩展：宏营养素手动编辑。
 - SSE：后端当前刻意是非流式，因为 relay SSE 能力未验证。先完成可靠同步模式，再决定流式和降级策略。
+- 跨零点组审计聚合；C 类历史数据（同分钟聚类）的处理方式仍没讨论过。
 - 聊天传图、同餐分组缩略图可视化、时间轴 skip 卡均不在一期。
 
 ---
@@ -372,22 +327,8 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 
 ### 部署与环境变量
 
-- 安装：`setup.sh` 创建 `~/.local/bin/inkcal` wrapper（调 venv Python）并幂等添加 cron `*/10 * * * * inkcal run`。burn 同步 cron 见 Phase 6。
-- 环境变量以 `.env.example` 为唯一清单（含 `SOURCE`、`PHOTOPRISM_*`、`LUNA_*`、`AGENT_ENABLED`、`AGENT_BATCH_SIZE`、`INKCAL_DEBUG`、`INKCAL_DB`）；新增变量必须同步写入该文件。`INKCAL_DB` 供测试隔离数据库路径。
-
-### 鉴权与图片
-
-- Web 认证为可选；`INKCAL_USER` 和 `INKCAL_PASS` 必须同时有或同时为空。
-- `INKCAL_SECRET` 必须固定，否则 Flask 重启会丢 session。
-- 只有请求来自 loopback 时才信任 `X-Forwarded-For` / `X-Real-IP`。
-- 图片代理只允许 Immich/PhotoPrism 配置 URL 前缀；本地图片路由有 `Path.is_relative_to()` 防路径穿越。不要弱化。
-
-### 运行与上传
-
-- 一定用 `venv/bin/python` 启动；系统 Python 会造成上传/HEIC/Gemini 相关的隐性失败。
-- 手动上传先做 Immich pHash 匹配再分析（幂等键先行）；无 EXIF 时应提供日期修正。
-- SQLite 使用 WAL；不要在 server 运行时删除 `.db-wal` / `.db-shm`。
-- SIGLIP2 对饮料存在漏检盲点；“选择照片”是正式补救路径，不是冗余功能。
+- 安装：`setup.sh` 创建 `~/.local/bin/inkcal` wrapper（调 venv Python）并幂等添加 cron `*/10 * * * * inkcal run`。burn 同步 cron 见 §6「每日消耗（Burn）与热量缺口」。
+- 环境变量放仓库根 `.env`，以 `.env.example` 为唯一清单（含 `SOURCE`、`PHOTOPRISM_*`、`LUNA_*`、`AGENT_ENABLED`、`AGENT_BATCH_SIZE`、`INKCAL_DEBUG`、`INKCAL_DB`）；新增变量必须同步写入该文件。`INKCAL_DB` 供测试隔离数据库路径。
 
 ### Agent 批处理关键规则
 
@@ -402,17 +343,15 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 
 ## 8. 运行、服务与安全约定
 
-- 日历日以照片 Exif 拍摄地当地日历日（`substr(photo_time, 1, 10)`）为准；无 Exif 时区回退至 `Asia/Hong_Kong`（UTC+8）。禁止在 SQLite 中使用 `date(photo_time)`。
 - 幂等由 `asset_id` 保障；`already_processed()` 按日期检查。手动记录使用 `manual-<timestamp>` 作为 asset ID。
 - 数据库是 `data/inkcal.db`，包含 records、重分析历史、忽略资产、非食物、Agent 审计、事件和聊天表；所有 schema 以 `src/db.py` 为准。
 - 不直接用 SQLite shell 修改业务数据。优先走 CLI、`src/db.py` 既有业务函数或 Flask API；变更后用 `inkcal view`、`inkcal label --status` 或对应 API 验证。
-- 环境变量放根目录 `.env`；关键值为 `IMMICH_URL`、`IMMICH_API_KEY`、`GEMINI_API_KEY`、`INKCAL_SECRET`、`INKCAL_USER` 和 `INKCAL_PASS`。后两者必须同时设置或同时为空。
 - 项目曾从 `intake`（更早为 foodlens）改名为 `inkcal`。发现旧脚本或配置引用时，统一使用 `INKCAL_*`、`inkcal` 与 `data/inkcal.db`。
 
 ### Flask 服务与安全约定
 
-- 默认端口 `5800`，可用 `INKCAL_PORT` 覆盖；从项目根目录用 `INKCAL_PORT=5800 venv/bin/python web/server.py` 启动。
-- `INKCAL_USER` 与 `INKCAL_PASS` 都设置时要求登录；登录 session 是 HTTP-only、SameSite=Lax、30 天；`INKCAL_HTTPS=1` 时 cookie 必须 Secure。`INKCAL_SECRET` 未固定会导致服务重启后丢登录。
+- 默认端口 `5800`，可用 `INKCAL_PORT` 覆盖（改 `.env` 后重启 systemd 单元生效）。启动方式见 §2，**不要手动跑 `server.py`**。
+- `INKCAL_USER` 与 `INKCAL_PASS` **必须同时设置或同时为空**（只设一个服务拒绝启动）；都设置时要求登录，登录 session 是 HTTP-only、SameSite=Lax、30 天；`INKCAL_HTTPS=1` 时 cookie 必须 Secure。`INKCAL_SECRET` 未固定会导致服务重启后丢登录。
 - 登录限速为每 IP 5 次 / 300 秒。只有 `request.remote_addr` 是 `127.0.0.1` 或 `::1` 时才能信任 `X-Forwarded-For` / `X-Real-IP`；不要扩大可信代理范围。
 - `/api/image` 只代理以 `IMMICH_URL` 或 `PHOTOPRISM_URL` 开头的 URL；Immich 使用 API key。`/api/local-image` 的 `Path.is_relative_to()` 路径穿越保护不可移除。
 - Flask 自带 server 不应裸露公网；手机/外部访问应经反向代理与 HTTPS。FRP 场景保留真实 IP 逻辑。
@@ -422,7 +361,7 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 - 相册选择器查询所有启用源的未处理照片，按日期分页（7 天/页）；用户明确选择图片后不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。选择器支持**多选（≤10 张）**：批量 shape `{items: [...]}` 在 `AGENT_ENABLED=1` 时整批进一次 Luna harness（同餐状态延续合并为一组），harness 失败逐张降级；单条 shape 保持旧响应契约不变。
 - 记录读取 API（`/api/records`、`/api/today`、`/api/week`）返回**分组后**的数据：`records` 只含主记录，主记录带 `photos` 数组（组内全部照片，按拍摄时间排序，含 asset_id/thumbnail_url/photo_time/meal/calories）；`summary` 基于原始行求和（形态 A 从行 0 值、形态 B 从行自带数值，都正确）。聊天工具（get_records_in_range/search_meals）同样按组聚合。
 - 删除：`DELETE /api/record` 默认 `mode="meal"`（整餐级联：组内所有行删除 + 全部 asset_id 进 ignored_assets）；`mode="photo"` 仅移除单张照片，删主行时最早从行自动晋升。CLI `inkcal delete` 同理（`--photo` 仅删单张）。`inkcal merge <主> <从>` 把已有记录并入同餐组（默认从行清零=状态延续，`--keep` 保留数值=独立条目）。
-- 同餐组多图评估（已实现）：同批多图或跨批次状态延续（吃前/吃后残局更新）时，均通过 `analyze_with_gemini`（回溯原图 + 联合对比）对全组照片进行综合摄入评估；形态 B（独立条目）由 `group_meals` 自动在组头累加各照片数值并拼接餐名与明细。
+- 同餐组多图评估：同批多图或跨批次状态延续（吃前/吃后残局更新）时，均通过 `analyze_with_gemini`（回溯原图 + 联合对比）对全组照片进行综合摄入评估；形态 B（独立条目）由 `group_meals` 自动在组头累加各照片数值并拼接餐名与明细。
 - `AGENT_ENABLED=1` 时手动路径（相册选择、本地上传、`inkcal analyze`）统一经 `src/pipeline_ops.py::analyze_assets_via_agent` 进 Luna harness：跳过 SigLIP2 但保留 Luna skip 契约（skip → `classified_non_food`，decided_by=agent），决策审计写入 `agent_decisions`；`update` 决策与 cron 保持一致（通过 `resolve_group_root` 更新主记录最新摄入数值并将新照片落 0 值从行，支持跨批次状态延续回溯原图对比），仅当目标不存在时降级为 `add`。harness 失败或决策未覆盖时逐张降级原直发路径。
 - 手动上传先做 Immich pHash 匹配（幂等键先行，已处理返回 409），再走 Luna 或 Gemini；非食物返回 422。无 EXIF 时需允许后续日期修正，经 `/api/move-record` 重新尝试匹配。
 - EXIF 时间必须用 Immich 的 `asset.exifInfo.dateTimeOriginal` 和 `timeZone`，不要下载缩略图再读 EXIF；缩略图可能没有 EXIF。`UTC+8` 与 IANA 时区均要兼容，未知时区回退 HKT。
