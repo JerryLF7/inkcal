@@ -115,19 +115,16 @@ private fun backwardPop(): ContentTransform =
       fadeOut(tween(DetailMotionMillis)))
 
 /**
- * **跟手预览**：返回手势进行中，按进度逐帧落到与 [backwardPop] 同形状的位置上。
+ * **跟手预览**（手势进行中用的转场）：与 [backwardPop] **同形状**即可。
  *
- * `progress` 是手势进度 0..100：0 = 刚起手（详情页还在位上、列表在左侧屏外），
- * 100 = 已滑到底（详情页滑出、列表完全归位）。这里用 `tween(0)`——跟手不是补间动画，
- * 是每一帧直接落到进度对应的位置，松手后由 [backwardPop] 接着把剩余的走完。
+ * 这里**千万不要**写 `tween(0)` 之类的「逐帧落位」——那是错的（2026-10-16 实测：改成 tween(0)
+ * 之后返回直接变成瞬间切换、一点动画都没有）。原因：跟手的定位是 Compose 自己在转场层做的
+ * （它按手势进度 seek 正在跑的转场），spec 只负责定义**转场的形状与真实时长**，时长给 0 就等于没有动画。
+ * 另外，nav3 默认实现里那个 `progress` 参数其实**根本没被读取**（反编译确认：lambda 收下 Int 就丢掉，
+ * 只返回 `fadeIn(spring) togetherWith scaleOut(0.7f)`）——所以别想着自己拿 progress 算偏移。
  */
-private fun backwardPopPreview(progress: Int): ContentTransform {
-  val p = progress.coerceIn(0, 100) / 100f
-  return (slideInHorizontally(tween(0)) { (-it / 4 * (1f - p)).toInt() } +
-    fadeIn(tween(0), initialAlpha = p)) togetherWith
-    (slideOutHorizontally(tween(0)) { (it / 4 * p).toInt() } +
-      fadeOut(tween(0), targetAlpha = 1f - p))
-}
+@Suppress("UNUSED_PARAMETER")
+private fun backwardPopPreview(progress: Int): ContentTransform = backwardPop()
 
 /**
  * 一级导航骨架：底部 Tab + Nav3，栈里同时装着「一级目的地」和「详情页」。
@@ -226,8 +223,9 @@ fun MainScaffold(appViewModel: AppViewModel) {
           topLevelFadeThrough()
         }
       },
-      // 退场与跟手预览：**必须显式写**——NavDisplay 默认的退场/跟手是「整页等比缩小」，
-      // 与「返回上一级」的语义对不上（见 backwardPop / backwardPopPreview 的注释）。
+      // 退场与跟手预览：**必须显式写**——NavDisplay 默认的跟手预览是「整页缩到 70%」
+      // （`scaleOut(0.7f)`，反编译确认），与「返回上一级」的语义对不上。
+      // 两者必须是**同一形状 + 真实时长**，见 backwardPop / backwardPopPreview 的注释。
       popTransitionSpec = { backwardPop() },
       predictivePopTransitionSpec = { progress -> backwardPopPreview(progress) },
       entryProvider =
