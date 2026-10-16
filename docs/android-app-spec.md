@@ -4,6 +4,8 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
+> **实现进度（0.18，2026-10-16）**：**详情页从全屏弹窗升级为导航层级里的一页**（`MealDetailRoute`）——接上 Nav3 原生的**预测性返回**（手势过程中页面跟手、中途松手会弹回），推入用 M3 的 Forward-and-backward（滑 1/4 屏 + 淡入，靠**栈深**与 Tab 切换的 fade through 区分），左上角 ✕ 改成返回箭头；锚点解析、开关同步与提示（Snackbar）统一移到 `MainScaffold`，0.15 那个「详情打开期间改用系统 Toast」的兜底随之删除；记录页与区间页两个 ViewModel 因此提到 `MainScaffold`（副作用：切 Tab 不再重建）。记录页顶栏的日/周/月切换**去掉选中态的对钩**（`icon = {}`）。M3 的 `SegmentedButton` 默认 icon 槽位是 `SegmentedButtonDefaults.Icon(selected)`，选中时会自动加勾；但规范里那个勾是给「图标 + 文字」的配置用的（选中时用勾替换图标），我们只有文字、没有可替换的图标，选中态已经由容器色表达，勾是重复信息（用户反馈）。其余与 0.17 相同。
+>
 > **实现进度（0.17，2026-10-16）**：**M3 规范对齐工程开工**（审计结论、阶段划分与待办见 §16）。本批落地两项图标修正：详情页「单张移除」的第一步由文字 `✕` 改为图标按钮（内容描述「删除这张照片」——文字符号没有无障碍语义，字重与基线也跟图标不是一套），设置页出生日期的 `trailingIcon` 由文字按钮「选择」改为日历图标按钮（M3 规定该槽位放图标）。**一级 Tab 切换的转场同时由横向滑动改为 M3 规定的 Top level 过渡（fade through）**——横向平移是 Lateral 的语汇，点底部导航项必须用 Top level（§16.1 第 1 项）。同时**撤回两项审计初期提出的建议**并把结论写进对应小节：设置页是表单不是列表，不改 `ListItem`（§8.7）；选择照片页「返回键先退出选择态」不采用（该页点击即选中、没有独立浏览态，M3 的选择模式规则不适用，§8.5）。无障碍语义与选中态双通道表达记为待办，留最后统一做（§16）。其余与 0.16 相同。
 >
 > **实现进度（0.16，2026-10-15）**：修「自动刷新后新卡片不在列表顶部」。记录页与选择照片页是**同一个根因**：LazyColumn 在 item 集合变化时会按 key 把「原来第一个可见项」钉在视口顶部，于是插到它前面的新内容被顶到视口**上方**——记录页那个锚点是旧的日期头（冷启动先画缓存、网络数据整体替换时新记录插到了前面），选择页那个锚点是页脚（首屏加载时列表里只有页脚，7 天的照片全插在它前面，打开就直接停在列表最底部）。修法：记录页在用户仍贴着顶部时把视口钉回顶部、已翻到别处则一律不动；选择页在首屏数据到达时钉回顶部。见 §8.1 / §8.5 / §14 第 29 行。其余与 0.15 相同。
@@ -211,6 +213,9 @@ deficit(kcal, ...) = tdee - kcal      // 正=有缺口，负=超标
 > **状态：✅ 已实现**（0.2 日视图与餐卡；0.3 补下拉刷新 + 冷启动磁盘缓存；0.7 补日/周/月切换与月视图跳转；0.13 删顶栏标题）
 - **没有标题栏（0.13 拍板）**：原先 TopAppBar 显示「当前可见日期 + 星期」，与吸顶 `DateSeparator` **恒等**——两者都取"首个可见项所属的日期组"，而 `stickyHeader` 保证只要该日期组还有卡片可见、那行日期就钉在顶部，所以顶栏是纯冗余（分隔线还多带 kcal / PCF / 缺口 chip）。删掉后列表直接顶到状态栏下方，多出一段竖向空间；空态有自己的引导文案，页面身份由底部 Tab 承担。**不要再把日期标题加回来**。动作（视图切换、「选择照片」）都在下面那一行，不依赖顶栏。
 - 视图切换用 SingleChoiceSegmentedButtonRow：日 / 周 / 月，右侧是「选择照片」的 ＋ 按钮。
+  - **选中态不显示对钩（0.18）**：`icon = {}` 把 icon 槽位清空了。M3 的 `SegmentedButton` 默认 icon 是 `SegmentedButtonDefaults.Icon(selected)`，选中时自动加勾；但规范里那个勾是给「图标 + 文字」的配置用的（选中时用勾替换图标）——我们只有文字、没有可替换的图标，选中态已由容器色表达，勾是重复信息。**别把 icon 槽位加回来**。
+  - M3 expressive 起**不再推荐 SegmentedButton**（建议换 connected button group），但 `material3 1.4.0` 只带了对应令牌、没有可用的 composable，等 Compose 提供后再换（§16.1 第 10 项）。
+  - 大屏（expanded）时不要让它铺满整宽（M3：段内 padding 过大会降低可用性），归入 §16.2 第 7 阶段的自适应。
 - 日视图是无限向下滚动的时间轴，LazyColumn，最新日期在顶。
   - 初始加载 end=今天、start=end 减 6 天，调 GET /api/records?start&end；触底再加载更早 7 天。
   - 用 /api/dates 的最早日期作 minDate，end 小于 minDate 即到底。
@@ -277,7 +282,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 ```
 卡片缩略图必须用 size=thumbnail（约 7KB），不要换成 preview（约 157KB，慢网下很痛）。Coil 配磁盘缓存；图片请求走同一个带 cookie 的 OkHttpClient。
 
-详情页（推荐全屏 Dialog 或新页面，便于大图缩放）：
+详情页（**0.18 起是导航层级里的一页**，不是弹窗；见 §16.1 第 4 项）：
 - 大图区：当前选中照片大图，支持双指缩放；多图时 HorizontalPager 左右滑动，显示 i / N，下方 LazyRow 缩略图条，选中高亮。照片按 photo_time 升序排列（后端只保证主行在前，不是全序，客户端必须自己排）。
 - 信息区：meal、meal_detail（全文不截断）、kcal 与 P/C/F、副行「详细时间 · 来源 · 置信度 高/中/低」。
 - 多照片组才显示「照片明细」：每张一行（缩略图、HH:mm）；形态 A 从行显示「已并入整餐估算」；形态 B 显示该张的 meal、meal_detail（2 行省略）、kcal 与 PCF。点行切换大图。
@@ -286,7 +291,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 点「重新分析」展开内联表单：多行输入（占位「修正说明，例：米饭只吃了一半 / 其实是玉米猪肉馅」），notes 必填，空则提交按钮禁用。
   - 提交 POST /api/reanalyze（asset_id 用主行的），进行中文案「分析中…（约半分钟）」，期间禁用表单。
   - **成功后关闭表单并清空 notes**（0.15 起）：表单的提交回调带 `onSuccess`，只有真正更新完成后才调，失败时表单原样保留 notes 方便改完重试。之前提交完表单不关、不清空，像没提交成功（0.14 的 bug）。
-  - **详情打开期间，操作提示用系统 Toast 而不是 Snackbar**（0.15 起）：SnackbarHost 在页面层，全屏 Dialog 压在它上面，在详情里重分析/删照片时 Snackbar 根本看不见。详情打开期间 `RecordsTab` 把 VM 的 toast 路由给 `android.widget.Toast`（独立窗口层，压在 Dialog 上）；详情关闭时仍走 Snackbar。
+  - **操作提示统一走 Snackbar（0.18 起）**：详情是导航栈里的一页，`SnackbarHost` 挂在 `MainScaffold` 上，在详情里重分析/删照片的提示直接显示在它上面。0.15 那个「详情打开期间改用系统 Toast」的兜底**已删除**——它当时存在只是因为详情是全屏 Dialog，把挂在记录页的 Snackbar 挡住了。
   - 成功后必须重拉当天分组并原地替换（组级联合重估会把形态 B 从行清零，photos 显示必须重拉，不能只用响应里的 record 覆盖）。提示文案「已更新：{calories} kcal」。失败「重新分析失败: {error}」。
   - 打开表单时解除删除的武装态。
 - 删除有两个互不干扰的入口，都是两步确认：
@@ -295,7 +300,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 原生实现可用 AlertDialog 做确认，但必须保留两步，且整餐与单张不能共用同一个确认状态。
   - 删除后服务端会把资产写入忽略列表，客户端无需处理。
 - 原地刷新 refreshGroup：请求 GET /api/records?date={该记录日期}，按 promoted 或当前主行 asset_id 找，找不到按已知 asset_id 交集找，都找不到视为组已消失。刷新失败不要关闭详情，提示「操作已完成，但刷新失败——关闭后页面会自动更新」。
-- 系统返回键关闭详情。
+- 系统返回键 / 返回手势退出详情：**预测性返回由 Nav3 原生接管**（手势过程中页面跟着手指走，中途松手会弹回，不用自己写动画）。退出时**必须同步清掉锚点**，否则会被 MainScaffold 的同步 effect 又推回来。
 
 ### 8.5 选择照片（补漏入口）
 
@@ -446,7 +451,7 @@ android/
 
 几点约定：
 - `domain/` 全是纯 Kotlin（无 Android 依赖），是单测重点，也是唯一能在这台机器上验证的部分。
-- **详情弹窗、Snackbar、写操作都在 `RecordsTab` 那一层**，不在各子视图里——三个视图的卡片都要能进详情，写完还要让当前视图重拉。子视图只负责渲染。
+- **详情页、Snackbar、写操作挂在 `MainScaffold` 那一层**（0.18 起；详情升为导航栈里的一页之后，它不再是 `RecordsTab` 的子节点）。记录页与区间页两个 ViewModel 也提到 `MainScaffold` 再往下传——副作用是切 Tab 不再重建它们（少一次重拉），这是已拍板的取舍。三个视图的卡片都要能进详情，写完还要让当前视图重拉；子视图只负责渲染。
 - `RangeViewModel` 是周/月共用的区间数据源；`RecordsViewModel` 管日视图 + 详情锚点 + 写操作。
 - 单例（store / cookie / repository / 两个 cache）走 `AppContainer`，别在各 ViewModel 里各建一份——CookieStore 有内存缓存，两份会互相看不见对方的 cookie。
 
@@ -516,6 +521,8 @@ android/
 | 29 | 刷新后视口不在顶部（记录页 + 选择照片页） | 两页同一根因：LazyColumn 按 key 把「原来第一个可见项」钉在视口顶部，插到它前面的新内容被顶到视口上方。记录页锚点是旧日期头（冷启动缓存 → 网络数据整体替换时新记录插到了前面），选择页锚点是页脚（首屏加载时列表里只有页脚）。修法见 §8.1 / §8.5 | ✅ 0.16 |
 | 30 | M3 规范对齐（进行中）第一批：图标修正 | §8.4 / §8.7 / §16 | 否（后续） | ✅ 0.17（详情页单张移除、设置页日期行改图标按钮；另撤回两项不适用建议，见 §8.5 / §8.7） |
 | 31 | M3 对齐：一级 Tab 切换转场 | §16.1 第 1 项 | 否（后续） | ✅ 0.17（横向滑动 → Top level fade through） |
+| 32 | 记录页顶栏日/周/月去掉选中对钩 | §8.1 | 否（后续） | ✅ 0.18 |
+| 33 | M3 对齐：详情页升级为导航层级 + 预测性返回 | §8.4 / §16.1 第 4–5 项 | 否（后续） | ✅ 0.18（共享元素 / container transform 与 Calo 那条路径仍待做） |
 ## 15. 建议实施顺序
 
 1. ✅ 0.1 搭环境与空壳（三 Tab、主题、Base URL、登录、OkHttp + cookie）。里程碑 A：能登录并拉到 /api/data-version。
@@ -548,12 +555,13 @@ android/
 | 1 | 一级 Tab 切换转场 | 点底部导航项必须用 Top level（fade through） | ✅ **0.17 已修**：原先横向滑动（Lateral 的语汇），现为 fade through（旧页 90ms 淡出 → 新页延后 90ms 再 210ms 淡入）；`tabSlide` 与那个方向布尔已删除，别再往回改 | `MainScaffold.kt` 的 `topLevelFadeThrough()` |
 | 2 | 导航栏图标 | 选中 filled、未选中 outlined，对比度 ≥3:1 | 两态同一个 filled 图标 | `MainScaffold.kt` 的 `Tab` 枚举 |
 | 3 | 重复点当前 Tab | 应回到页面顶部 | `if (current != tab.route)` 直接忽略 | 同上 |
-| 4 | 详情页层级 | 卡片→详情属 Container transform / Forward-and-backward | 全屏 Dialog（另一窗口）：无导航层级、无预测性返回、无共享元素 | `MealDetailDialog.kt` / `RecordsTab.kt` / `CaloScreen.kt` |
-| 5 | 反馈层 | 瞬时反馈用 Snackbar | 详情打开期间改用 `android.widget.Toast` | `RecordsTab.kt` |
+| 4 | 详情页层级 | 卡片→详情属 Container transform / Forward-and-backward | ✅ **0.18 已修**：详情是导航栈里的一页（`MealDetailRoute`），接上 Nav3 原生预测性返回；推入用 Forward-and-backward（滑 1/4 屏 + 淡入，靠**栈深**与 Tab 的 fade through 区分），左上角 ✕ 换成返回箭头。**还差**：共享元素 / container transform（卡片长大）、Calo 那条路径仍是弹窗 | `MainScaffold.kt` / `MealDetailDialog.kt` |
+| 5 | 反馈层 | 瞬时反馈用 Snackbar | ✅ **0.18 已修**：Toast 兜底删除，`SnackbarHost` 移到 `MainScaffold`（详情页里也能看见提示了） | `MainScaffold.kt` |
 | 6 | 语义色 | 颜色来自 color scheme / 令牌 | 20 处硬编码（盈亏绿红、周图柱色、P/C/F、链接蓝） | `theme/Color.kt` 等 5 个文件 |
 | 7 | 形状 | 圆角走 shape scale（4/8/12/16/28） | 14 处硬编码 `RoundedCornerShape(4/6/8/12)` | 6 个文件 |
 | 8 | 动效 | 用官方动效令牌 | 只有一处手写 `tween(280)` | `MainScaffold.kt` |
 | 9 | 自适应 | expanded 断点用 NavigationRail，底部导航栏只用于 compact/medium | 任何窗口尺寸都是底部导航栏 | 同上 |
+| 10 | 日/周/月切换的组件 | M3 expressive 起**不再推荐 SegmentedButton**，建议改用 connected button group | 用的是 `SegmentedButton`（勾已按 0.18 去掉）；`material3 1.4.0` 只带了 `ConnectedButtonGroupSmallTokens` 令牌、**没有可用的 composable**，暂时无法迁移。另：现在 `weight(1f)` 铺满整宽，大屏上违反「段内 padding 别过大」 | `RecordsTab.kt`、`SettingsScreen.kt` 的性别选择 |
 
 **已拍板前提**：**只做深色界面，不做浅色**。因此语义色的对比度只需在深色底上达标，`InkcalTheme` 的 `isSystemInDarkTheme()` 分支按此收敛。
 

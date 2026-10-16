@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -108,6 +109,61 @@ fun MealDetailDialog(
   onDeletePhoto: (String) -> Unit,
   /** 第二个参数是成功回调：外层在真正更新完成后才调，用于关表单；失败时不调，notes 留着好改。 */
   onReanalyze: (String, () -> Unit) -> Unit,
+  /**
+   * true = 作为**导航层级里的一页**渲染（左上角是返回箭头 ←），false = 全屏弹窗（左上角是 ✕）。
+   *
+   * M3 语义：✕ 是"关闭/取消一层模式"，← 才是"回到上一级"。详情页现在在栈里，所以走 ←；
+   * Calo 那条路径暂时还是弹窗，仍用 ✕。两边的行为都只是调 onClose。
+   */
+  asPage: Boolean = false,
+) {
+  // 页面形态（详情页在导航栈里）**不能**再套 Dialog 窗口：套了它又变成压在 App 上的浮层，
+  // 返回手势会打在浮层窗口上、Nav3 收不到，预测性返回就白做了。
+  if (asPage) {
+    MealDetailContent(
+      record = record,
+      baseUrl = baseUrl,
+      decisions = decisions,
+      busy = busy,
+      onClose = onClose,
+      onDeleteMeal = onDeleteMeal,
+      onDeletePhoto = onDeletePhoto,
+      onReanalyze = onReanalyze,
+      asPage = true,
+    )
+  } else {
+    // Calo 那条路径暂时仍是全屏弹窗（记录页这条验证过之后再迁）
+    Dialog(
+      onDismissRequest = onClose,
+      properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+      MealDetailContent(
+        record = record,
+        baseUrl = baseUrl,
+        decisions = decisions,
+        busy = busy,
+        onClose = onClose,
+        onDeleteMeal = onDeleteMeal,
+        onDeletePhoto = onDeletePhoto,
+        onReanalyze = onReanalyze,
+        asPage = false,
+      )
+    }
+  }
+}
+
+/** 详情内容本体。外层壳（弹窗 / 页面）由 [MealDetailDialog] 决定。 */
+@Composable
+private fun MealDetailContent(
+  record: RecordDto,
+  baseUrl: String,
+  decisions: List<DecisionDto>,
+  busy: Boolean,
+  onClose: () -> Unit,
+  onDeleteMeal: () -> Unit,
+  onDeletePhoto: (String) -> Unit,
+  onReanalyze: (String, () -> Unit) -> Unit,
+  asPage: Boolean,
 ) {
   val photos = remember(record) { MealGrouping.sortedPhotos(record) }
   val pagerState = rememberPagerState(pageCount = { photos.size })
@@ -145,11 +201,7 @@ fun MealDetailDialog(
   val canReanalyze =
     photos.any { it.thumbnailUrl.isNotBlank() } || record.replacementImage.isNotBlank()
 
-  Dialog(
-    onDismissRequest = onClose,
-    properties = DialogProperties(usePlatformDefaultWidth = false),
-  ) {
-    Surface(modifier = Modifier.fillMaxSize()) {
+  Surface(modifier = Modifier.fillMaxSize()) {
       Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Row(
           modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp),
@@ -162,7 +214,11 @@ fun MealDetailDialog(
             modifier = Modifier.weight(1f),
           )
           IconButton(onClick = onClose) {
-            Icon(Icons.Filled.Close, contentDescription = "关闭")
+            if (asPage) {
+              Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+            } else {
+              Icon(Icons.Filled.Close, contentDescription = "关闭")
+            }
           }
         }
 
@@ -403,7 +459,6 @@ fun MealDetailDialog(
         }
       }
     }
-  }
 }
 
 /** 单张照片一行：缩略图、时间，以及形态 A/B 各自的明细。 */

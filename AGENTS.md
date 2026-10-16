@@ -153,7 +153,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 包名 `com.jerrylf.inkcal`；`domain/` 与 `data/` 共 16 个测试类、100 个 JVM 单测，`cd android && ./gradlew :app:testDebugUnitTest`。首期之外只剩 §8.8（分享入口、桌面小组件）。页面行为与逐版历史见 `docs/android-app-spec.md`（头部进度摘要、§8.x、§14 的逐项「进度」列）——客户端的权威记录在那边，本文不重复。有一条容易被「优化」掉的判据留在 §8.1：判断记录页「用户有没有滚离顶部」只能看 `isScrollInProgress` 期间的位移，直接读 `firstVisibleItemIndex` 会把 LazyColumn 的重排误判成用户翻页，于是永远不修。
 
-详情页刻意用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本。组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
+详情页自 0.18（2026-10-16）起是**导航栈里的一页**（`MealDetailRoute`），不再是全屏 Dialog——预测性返回由 Nav3 原生接管。它渲染的数据仍然**来自列表状态**：解析、栈同步与提示都挂在 `MainScaffold`，按 `RecordsViewModel.detailAnchor` 的 asset_id 查，**路由参数只是入栈凭据、渲染取锚点**（单张移除会把锚点切到晋升的新主行，参数不会跟着变）。所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本；组被删光、且不在 busy 期间就退出详情。两条容易踩的：① 记录页与区间页两个 ViewModel 因此提到 `MainScaffold` 再往下传（副作用：切 Tab 不再重建它们，已拍板）；② 详情内容是「本体 + 外壳」分开的（`MealDetailContent` / `MealDetailDialog`），**页面形态绝不能再套 `Dialog` 窗口**——套了返回手势会打在浮层窗口上、Nav3 收不到，预测性返回直接失效（这次差点踩到）。Calo 那条路径暂时仍是弹窗。
 
 Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaffold 已把状态栏 inset 消化进 innerPadding，页面内嵌的 TopAppBar 必须显式 `windowInsets = WindowInsets(0, 0, 0, 0)`，否则状态栏高度被垫两次、标题与列表之间出现大段空白。全屏 Dialog（选择照片）不经 Scaffold padding，其 TopAppBar 保留默认 inset。
 
@@ -178,6 +178,7 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
   4. **先 `git push`**，再发 release（原因见下条）
   5. `cd android && ./release.sh`
   6. 验证：`gh release view v<版本>` 看 asset；再匿名拉一次 `curl -sIL https://github.com/JerryLF7/inkcal/releases/download/v<版本>/inkcal-<版本>.apk`，应为 302 → 200
+- **每个工作单元改完就发（2026-10-16 用户明确要求）**：不要攒批次，也不要只 build 不 release。用户是用 Obtainium 从 release 装包的，本地 `app-release.apk` 他拿不到——只本地打包等于这个改动他测不了。所以一次做完：升版本 → 同步文档 → 按文件名 commit → push → `release.sh` → 验证。
 - **顺序：先 `git push` 代码，再发 release**。`gh release create` 把 tag 建在**远程**默认分支的 HEAD 上，本地没推送就发版，tag 会指向上一个提交（release 页面点进去是一份不含本次代码的树）。`release.sh` 开头会 fetch 后比对 `origin/master` 与 `HEAD`，不一致直接报错——这条护栏不能用 `@{u}` 写，没配上游时它会静默失效。
 - **仓库已转 public（2026-10-02，为了配合 Obtainium 自动更新）**，所以 release 资源匿名可下：`curl -sIL https://github.com/JerryLF7/inkcal/releases/download/<tag>/inkcal-<version>.apk` 应返回 302 → 200。Obtainium 走的是匿名 `api.github.com/repos/JerryLF7/inkcal/releases/latest`，因此 release **必须保持非 prerelease**，否则它拿不到。验证也用 `gh release download <tag> -p inkcal-<version>.apk`。用户自己装 APK 测试，agent 无法点真机。
 - 转 public 的副作用：仓库里的内网地址（`android/app/src/main/res/xml/network_security_config.xml`、`scripts/burn_sources/heytap_ui.py`、`main.py` 与 `.env.example` 的 Immich 默认地址）对外可见。已确认**历史里没有任何真密钥或数据**（`.env`/keystore/`data/` 从未提交，全历史扫 `AIza`/`ghp_`/`PRIVATE KEY` 零命中）。注意把 IP 从仓库删掉并不等于隐藏——它已经编译进 APK，而 APK 现在是匿名可下载的。

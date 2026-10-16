@@ -4,6 +4,9 @@ import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
@@ -13,16 +16,27 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import com.jerrylf.inkcal.domain.TimeFmt
 import com.jerrylf.inkcal.ui.calo.CaloScreen
+import com.jerrylf.inkcal.ui.records.MealDetailDialog
+import com.jerrylf.inkcal.ui.records.RangeViewModel
 import com.jerrylf.inkcal.ui.records.RecordsTab
+import com.jerrylf.inkcal.ui.records.RecordsViewModel
 import com.jerrylf.inkcal.ui.settings.SettingsScreen
 import kotlinx.serialization.Serializable
 
@@ -34,6 +48,16 @@ data object CaloRoute : NavKey
 
 @Serializable
 data object SettingsRoute : NavKey
+
+/**
+ * 餐卡详情页。
+ *
+ * **参数只是入栈时的凭据**：真正渲染哪条记录取的是 `RecordsViewModel.detailAnchor`——
+ * 单张移除后锚点会被切到晋升的新主行，路由参数不会跟着变，但那个锚点会
+ * （详情页因此永远不会渲染成一条已经不存在的记录）。
+ */
+@Serializable
+data class MealDetailRoute(val assetId: String) : NavKey
 
 /**
  * 三个一级 Tab。图标取自 material-icons-core（material3 不自带，见版本目录注释），
@@ -49,6 +73,9 @@ private enum class Tab(val route: NavKey, val label: String, val icon: ImageVect
 private const val FadeOutMillis = 90
 private const val FadeInMillis = 210
 
+/** 推进/退回层级的时长（M3 medium2 = 300ms）。 */
+private const val DetailMotionMillis = 300
+
 /**
  * 一级 Tab 之间的转场：M3 的 **Top level** 过渡（fade through）——
  * "The exiting screen quickly fades out and then the entering screen fades in."
@@ -63,18 +90,82 @@ private fun topLevelFadeThrough(): ContentTransform =
   )
 
 /**
- * 一级导航骨架：底部 Tab + Nav3。
+ * 推进一层（进详情页）：M3 的 **Forward and backward**。
+ * M3 原文说 Android 的做法是 "a fade as screens slide"，并且**不用滑满整屏宽**
+ * （减少运动量），所以这里只滑 1/4 屏宽并配合淡入淡出。
  *
- * **以后往这个栈里推进层级时**（例如详情页变成真正的路由），转场判据**不要**去认「这是哪一页」：
- * `Scene.entries` 里的 entry 被装饰器链重建过，`contentKey` 不是我们的路由对象
- * （2026-10-04 踩坑：Tab 方向因此退化成永远同一个）。用**栈深**区分就够了——
- * 1→1 是 Tab 切换（Top level 过渡），+1 是推进一层，−1 是后退。
+ * 退场（`popTransitionSpec`）与跟手预览（`predictivePopTransitionSpec`）**故意留空**：
+ * NavDisplay 的默认值本来就是配好的一对（跟手预览由手势进度驱动），
+ * 自己只写一个容易和另一边对不上。真机看过手感再决定要不要换成对称滑动。
+ */
+private fun forwardPush(): ContentTransform =
+  (slideInHorizontally(tween(DetailMotionMillis)) { it / 4 } +
+    fadeIn(tween(DetailMotionMillis))) togetherWith
+    (slideOutHorizontally(tween(DetailMotionMillis)) { -it / 4 } +
+      fadeOut(tween(DetailMotionMillis)))
+
+/**
+ * 一级导航骨架：底部 Tab + Nav3，栈里同时装着「一级目的地」和「详情页」。
+ *
+ * 转场判据用**栈深**，不要认「这是哪一页」：`Scene.entries` 里的 entry 被装饰器链
+ * 重建过，`contentKey` 不是我们的路由对象（2026-10-04 踩坑：Tab 方向因此退化成永远
+ * 同一个）。栈深变了就是推进/退回层级，没变就是 Tab 之间切换。
  */
 @Composable
-fun MainScaffold(viewModel: AppViewModel) {
+fun MainScaffold(appViewModel: AppViewModel) {
+  // 记录页的两个 ViewModel 提到这一层：详情页是导航层级里的一页，要在这里取数据、做写操作。
+  // 已拍板的副作用：它们不再随 Tab 切换重建，切回来时不会重新拉一次。
+  val recordsViewModel: RecordsViewModel = viewModel()
+  val rangeViewModel: RangeViewModel = viewModel()
+
   val backStack = rememberNavBackStack(RecordsRoute)
+  val snackbarHostState = remember { SnackbarHostState() }
+
+  val detailAnchor by recordsViewModel.detailAnchor.collectAsStateWithLifecycle()
+  val baseUrl by recordsViewModel.baseUrl.collectAsStateWithLifecycle()
+  val decisionsByDate by recordsViewModel.decisionsByDate.collectAsStateWithLifecycle()
+  val busy by recordsViewModel.busy.collectAsStateWithLifecycle()
+  val toast by recordsViewModel.toast.collectAsStateWithLifecycle()
+  val dayState by recordsViewModel.state.collectAsStateWithLifecycle()
+  val rangeState by rangeViewModel.state.collectAsStateWithLifecycle()
+
+  // 详情从「当前视图」的记录里查；区间数据按周/月分槽缓存，全部拼起来查最稳：
+  // 在某一页点开详情后再滑走，原来的槽位还在，详情不会被误关。
+  val activeRecords = remember(dayState.groups, rangeState.chunks) {
+    (dayState.groups + rangeState.chunks.values.flatMap { it.groups })
+      .flatMap { it.records }
+      .distinctBy { it.assetId }
+  }
+  val detailRecord = detailAnchor?.let { anchor -> activeRecords.firstOrNull { it.assetId == anchor } }
+
+  // 锚点 → 导航栈：锚点是唯一真相，栈跟着它走。
+  LaunchedEffect(detailAnchor, detailRecord, busy, activeRecords.size) {
+    val anchor = detailAnchor
+    val top = backStack.lastOrNull()
+    when {
+      anchor != null && detailRecord != null && top !is MealDetailRoute ->
+        backStack.add(MealDetailRoute(anchor))
+      // 该收起详情了：锚点被清空，或组没了（整餐被删 / 单张移除后只剩这张）。
+      // busy 期间不判——单张移除会把锚点切到晋升的新主行，那一刻它还没出现在列表里。
+      top is MealDetailRoute && !busy &&
+        (detailAnchor == null || (detailRecord == null && activeRecords.isNotEmpty())) -> {
+        recordsViewModel.closeDetail()
+        backStack.removeLastOrNull()
+      }
+    }
+  }
+
+  // 提示统一挂在这一层。原来挂在记录页，详情一盖住就看不见，才退化成系统 Toast
+  // （2026-10-04 踩坑）；现在详情是栈里的一页，Snackbar 在自己身上显示才对。
+  LaunchedEffect(toast) {
+    toast?.let {
+      snackbarHostState.showSnackbar(it)
+      recordsViewModel.consumeToast()
+    }
+  }
 
   Scaffold(
+    snackbarHost = { SnackbarHost(snackbarHostState) },
     bottomBar = {
       NavigationBar {
         val current = backStack.lastOrNull()
@@ -97,15 +188,61 @@ fun MainScaffold(viewModel: AppViewModel) {
   ) { inner ->
     NavDisplay(
       backStack = backStack,
-      onBack = { backStack.removeLastOrNull() },
+      onBack = {
+        // 手势/返回键退出详情时，锚点要跟着清掉，否则会被下面的 effect 又推回来
+        if (backStack.lastOrNull() is MealDetailRoute) recordsViewModel.closeDetail()
+        backStack.removeLastOrNull()
+      },
       modifier = Modifier.padding(inner),
-      // 一级 Tab 切换走 M3 的 Top level 过渡（fade through）
-      transitionSpec = { topLevelFadeThrough() },
+      transitionSpec = {
+        if (targetState.entries.size != initialState.entries.size) {
+          forwardPush()
+        } else {
+          topLevelFadeThrough()
+        }
+      },
       entryProvider =
         entryProvider {
-          entry<RecordsRoute> { RecordsTab() }
+          entry<RecordsRoute> {
+            RecordsTab(dayViewModel = recordsViewModel, rangeViewModel = rangeViewModel)
+          }
           entry<CaloRoute> { CaloScreen() }
-          entry<SettingsRoute> { SettingsScreen(appViewModel = viewModel) }
+          entry<SettingsRoute> { SettingsScreen(appViewModel = appViewModel) }
+          entry<MealDetailRoute> {
+            // 取锚点而不是路由参数，见 MealDetailRoute 的注释
+            val record = detailRecord
+            if (record != null) {
+              MealDetailDialog(
+                record = record,
+                baseUrl = baseUrl,
+                decisions = decisionsByDate[TimeFmt.dateOf(record.photoTime)].orEmpty(),
+                busy = busy,
+                asPage = true,
+                onClose = recordsViewModel::closeDetail,
+                onDeleteMeal = {
+                  recordsViewModel.delete(
+                    record.assetId,
+                    photoOnly = false,
+                    onSuccess = rangeViewModel::invalidate,
+                  )
+                },
+                onDeletePhoto = { assetId ->
+                  recordsViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
+                },
+                onReanalyze = { notes, done ->
+                  recordsViewModel.reanalyze(
+                    record.assetId,
+                    notes,
+                    onSuccess = {
+                      rangeViewModel.invalidate()
+                      // 真正更新完才让详情关表单，失败时 notes 原样留在框里
+                      done()
+                    },
+                  )
+                },
+              )
+            }
+          }
         },
     )
   }

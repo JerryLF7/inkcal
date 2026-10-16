@@ -22,8 +22,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,7 +40,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jerrylf.inkcal.data.AppContainer
 import com.jerrylf.inkcal.data.RecordDto
 import com.jerrylf.inkcal.domain.Periods
@@ -76,8 +73,8 @@ private const val MONTH_CENTER = 1200
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordsTab(
-  dayViewModel: RecordsViewModel = viewModel(),
-  rangeViewModel: RangeViewModel = viewModel(),
+  dayViewModel: RecordsViewModel,
+  rangeViewModel: RangeViewModel,
 ) {
   val today = remember { TimeFmt.hktToday() }
   val todayMonday = remember { Periods.mondayOf(today) }
@@ -112,11 +109,7 @@ fun RecordsTab(
   val rangeState by rangeViewModel.state.collectAsStateWithLifecycle()
   val decisionsByDate by dayViewModel.decisionsByDate.collectAsStateWithLifecycle()
   val busy by dayViewModel.busy.collectAsStateWithLifecycle()
-  val toast by dayViewModel.toast.collectAsStateWithLifecycle()
-  val detailAnchor by dayViewModel.detailAnchor.collectAsStateWithLifecycle()
   val scrollTarget by dayViewModel.scrollTarget.collectAsStateWithLifecycle()
-
-  val snackbarHostState = remember { SnackbarHostState() }
 
   // Calo 里补记/改/删成功、或 §8.6 轮询发现服务端有新数据，这里都要重拉
   val context = LocalContext.current
@@ -131,36 +124,8 @@ fun RecordsTab(
     }
   }
 
-  // 详情从「当前视图」的记录里查；区间数据按周/月分槽缓存，全部拼起来查最稳：
-  // 在某一页点开详情后再滑走，原来的槽位还在，详情不会被误关。
-  val activeRecords = remember(dayState.groups, rangeState.chunks) {
-    (dayState.groups + rangeState.chunks.values.flatMap { it.groups })
-      .flatMap { it.records }
-      .distinctBy { it.assetId }
-  }
-  val detailRecord = detailAnchor?.let { anchor -> activeRecords.firstOrNull { it.assetId == anchor } }
-
-  LaunchedEffect(toast) {
-    toast?.let {
-      // 详情是全屏 Dialog，SnackbarHost 会被它挡在后面看不见（2026-10-04 踩坑：
-      // 在详情里重分析/删照片，列表确实更新了但用户什么提示都看不到）。
-      // 详情打开期间改用系统 Toast——它是独立窗口层，压在 Dialog 上面。
-      if (detailAnchor != null) {
-        android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
-      } else {
-        snackbarHostState.showSnackbar(it)
-      }
-      dayViewModel.consumeToast()
-    }
-  }
-
-  // 组没了（整餐被删、或单张移除后只剩这张）就收起详情。
-  // busy 期间不判：单张移除会把锚点切到晋升的新主行，那一刻它还没出现在列表里。
-  LaunchedEffect(detailAnchor, activeRecords, busy) {
-    if (!busy && detailAnchor != null && detailRecord == null && activeRecords.isNotEmpty()) {
-      dayViewModel.closeDetail()
-    }
-  }
+  // 详情的锚点解析、开关同步、提示（Snackbar）都不在这一层了：
+  // 详情是导航层级里的一页，这些统一挂在 MainScaffold（见 MealDetailRoute 的注释）。
 
   Column(modifier = Modifier.fillMaxSize()) {
     Row(
@@ -174,6 +139,10 @@ fun RecordsTab(
             selected = mode == item,
             onClick = { mode = item },
             shape = SegmentedButtonDefaults.itemShape(index = index, count = RecordsMode.entries.size),
+            // 清空 icon 槽位：M3 的 SegmentedButton 默认 icon 是 SegmentedButtonDefaults.Icon(selected)，
+            // 选中时自动加一个对钩。我们的选中态已经由容器色表达，勾是重复信息
+            // （2026-10-16 用户反馈"对钩有点多余"）。
+            icon = {},
           ) {
             Text(item.label)
           }
@@ -254,43 +223,7 @@ fun RecordsTab(
             )
           }
       }
-
-      SnackbarHost(
-        hostState = snackbarHostState,
-        modifier = Modifier.align(Alignment.BottomCenter),
-      )
     }
-  }
-
-  detailRecord?.let { detailRecord ->
-    MealDetailDialog(
-      record = detailRecord,
-      baseUrl = baseUrl,
-      decisions = decisionsByDate[TimeFmt.dateOf(detailRecord.photoTime)].orEmpty(),
-      busy = busy,
-      onClose = dayViewModel::closeDetail,
-      onDeleteMeal = {
-        dayViewModel.delete(
-          detailRecord.assetId,
-          photoOnly = false,
-          onSuccess = rangeViewModel::invalidate,
-        )
-      },
-      onDeletePhoto = { assetId ->
-        dayViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
-      },
-      onReanalyze = { notes, done ->
-        dayViewModel.reanalyze(
-          detailRecord.assetId,
-          notes,
-          onSuccess = {
-            rangeViewModel.invalidate()
-            // 真正更新完才让详情关表单，失败时 notes 原样留在框里
-            done()
-          },
-        )
-      },
-    )
   }
 
   // ── 长按菜单的确认弹窗 ────────────────────────────────────────
