@@ -4,6 +4,8 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
+> **实现进度（0.19，2026-10-16）**：修**详情页的返回动画**。0.18 只覆盖了「推进」的转场，退场与跟手预览用的是 NavDisplay 默认值——而那对默认值是**整页等比缩小**，跟「返回上一级」对不上（用户实测反馈："只是整个页面等比缩放，和原生的返回动画完全不一样"）。现在三处都显式写：推进 = 向右滑入 1/4 屏 + 淡入（`forwardPush`），退场 = 它的镜像（`backwardPop`），跟手预览按手势进度逐帧落位（`backwardPopPreview`，`tween(0)`）。依据是 M3 的 Forward and backward：Android 用「滑动 + 淡入淡出」，且**不滑满整屏宽**；缩放是 M3 在 Enter/exit 里明确劝阻的做法。
+>
 > **实现进度（0.18，2026-10-16）**：**详情页从全屏弹窗升级为导航层级里的一页**（`MealDetailRoute`）——接上 Nav3 原生的**预测性返回**（手势过程中页面跟手、中途松手会弹回），推入用 M3 的 Forward-and-backward（滑 1/4 屏 + 淡入，靠**栈深**与 Tab 切换的 fade through 区分），左上角 ✕ 改成返回箭头；锚点解析、开关同步与提示（Snackbar）统一移到 `MainScaffold`，0.15 那个「详情打开期间改用系统 Toast」的兜底随之删除；记录页与区间页两个 ViewModel 因此提到 `MainScaffold`（副作用：切 Tab 不再重建）。记录页顶栏的日/周/月切换**去掉选中态的对钩**（`icon = {}`）。M3 的 `SegmentedButton` 默认 icon 槽位是 `SegmentedButtonDefaults.Icon(selected)`，选中时会自动加勾；但规范里那个勾是给「图标 + 文字」的配置用的（选中时用勾替换图标），我们只有文字、没有可替换的图标，选中态已经由容器色表达，勾是重复信息（用户反馈）。其余与 0.17 相同。
 >
 > **实现进度（0.17，2026-10-16）**：**M3 规范对齐工程开工**（审计结论、阶段划分与待办见 §16）。本批落地两项图标修正：详情页「单张移除」的第一步由文字 `✕` 改为图标按钮（内容描述「删除这张照片」——文字符号没有无障碍语义，字重与基线也跟图标不是一套），设置页出生日期的 `trailingIcon` 由文字按钮「选择」改为日历图标按钮（M3 规定该槽位放图标）。**一级 Tab 切换的转场同时由横向滑动改为 M3 规定的 Top level 过渡（fade through）**——横向平移是 Lateral 的语汇，点底部导航项必须用 Top level（§16.1 第 1 项）。同时**撤回两项审计初期提出的建议**并把结论写进对应小节：设置页是表单不是列表，不改 `ListItem`（§8.7）；选择照片页「返回键先退出选择态」不采用（该页点击即选中、没有独立浏览态，M3 的选择模式规则不适用，§8.5）。无障碍语义与选中态双通道表达记为待办，留最后统一做（§16）。其余与 0.16 相同。
@@ -300,7 +302,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 原生实现可用 AlertDialog 做确认，但必须保留两步，且整餐与单张不能共用同一个确认状态。
   - 删除后服务端会把资产写入忽略列表，客户端无需处理。
 - 原地刷新 refreshGroup：请求 GET /api/records?date={该记录日期}，按 promoted 或当前主行 asset_id 找，找不到按已知 asset_id 交集找，都找不到视为组已消失。刷新失败不要关闭详情，提示「操作已完成，但刷新失败——关闭后页面会自动更新」。
-- 系统返回键 / 返回手势退出详情：**预测性返回由 Nav3 原生接管**（手势过程中页面跟着手指走，中途松手会弹回，不用自己写动画）。退出时**必须同步清掉锚点**，否则会被 MainScaffold 的同步 effect 又推回来。
+- 系统返回键 / 返回手势退出详情：**预测性返回由 Nav3 原生接管**（手势过程中页面跟着手指走，中途松手会弹回，不用自己写动画）。退出时**必须同步清掉锚点**，否则会被 MainScaffold 的同步 effect 又推回来。**三处转场必须显式写**（推进 / 退场 / 跟手预览，见 `MainScaffold.kt`）——NavDisplay 的默认退场是「整页等比缩小」，见 §16.5。
 
 ### 8.5 选择照片（补漏入口）
 
@@ -523,6 +525,7 @@ android/
 | 31 | M3 对齐：一级 Tab 切换转场 | §16.1 第 1 项 | 否（后续） | ✅ 0.17（横向滑动 → Top level fade through） |
 | 32 | 记录页顶栏日/周/月去掉选中对钩 | §8.1 | 否（后续） | ✅ 0.18 |
 | 33 | M3 对齐：详情页升级为导航层级 + 预测性返回 | §8.4 / §16.1 第 4–5 项 | 否（后续） | ✅ 0.18（共享元素 / container transform 与 Calo 那条路径仍待做） |
+| 34 | 详情页返回动画（退场 + 跟手） | §8.4 / §16.5 | 否（后续） | ✅ 0.19（默认的整页缩放 → 与推进对称的滑出 + 淡出；跟手按进度逐帧落位） |
 ## 15. 建议实施顺序
 
 1. ✅ 0.1 搭环境与空壳（三 Tab、主题、Base URL、登录、OkHttp + cookie）。里程碑 A：能登录并拉到 /api/data-version。
@@ -595,4 +598,5 @@ android/
 - **预测性返回**：target 36 在 Android 16+ 默认开启，系统不再调用 `onBackPressed`、也不再派发 `KEYCODE_BACK`；项目里没有任何遗留返回 API。`NavDisplay` 原生支持——公开 API `defaultPredictivePopTransitionSpec()` 收手势进度，内部走 `androidx.navigationevent`。
 - **共享元素**：`SharedTransitionLayout` 包住 `NavDisplay`，屏幕里用 `LocalNavAnimatedContentScope` 取 `AnimatedVisibilityScope`；Nav3 各版本都支持预测性返回（官方文档：Navigation with shared elements）。
 - **过渡分槽**：`transitionSpec`（推进）、`popTransitionSpec`（后退）、`predictivePopTransitionSpec`（手势进度）。判据**不要**去认路由对象（0.13 的 `contentKey` 坑），用「栈深有没有变」区分 Tab 切换与推进层级。
+- **NavDisplay 的默认退场与跟手都是「整页等比缩小」，不是滑动**（0.19 实测踩到）：要「返回上一级」的观感必须**显式覆盖**这两个槽位（`popTransitionSpec` / `predictivePopTransitionSpec`），别把它们当冗余删掉。跟手预览要按进度逐帧落位（`tween(0)`），不是补间动画。
 - **动效令牌**：`material3 1.4.0` 的 `MaterialTheme(colorScheme, motionScheme, …)` 提供六种 spec——空间类 `defaultSpatialSpec` / `fastSpatialSpec` / `slowSpatialSpec`（Expressive 档是弹簧），效果类 `defaultEffectsSpec` / `fastEffectsSpec` / `slowEffectsSpec`；需要 opt-in。

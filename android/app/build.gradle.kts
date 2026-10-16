@@ -18,8 +18,8 @@ android {
         applicationId = "com.jerrylf.inkcal"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "0.18"
+        versionCode = 20
+        versionName = "0.19"
     }
 
     signingConfigs {

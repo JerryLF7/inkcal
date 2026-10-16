@@ -93,16 +93,41 @@ private fun topLevelFadeThrough(): ContentTransform =
  * 推进一层（进详情页）：M3 的 **Forward and backward**。
  * M3 原文说 Android 的做法是 "a fade as screens slide"，并且**不用滑满整屏宽**
  * （减少运动量），所以这里只滑 1/4 屏宽并配合淡入淡出。
- *
- * 退场（`popTransitionSpec`）与跟手预览（`predictivePopTransitionSpec`）**故意留空**：
- * NavDisplay 的默认值本来就是配好的一对（跟手预览由手势进度驱动），
- * 自己只写一个容易和另一边对不上。真机看过手感再决定要不要换成对称滑动。
  */
 private fun forwardPush(): ContentTransform =
   (slideInHorizontally(tween(DetailMotionMillis)) { it / 4 } +
     fadeIn(tween(DetailMotionMillis))) togetherWith
     (slideOutHorizontally(tween(DetailMotionMillis)) { -it / 4 } +
       fadeOut(tween(DetailMotionMillis)))
+
+/**
+ * 退出一层（从详情返回）：[forwardPush] 的**镜像**——详情页向右滑出、底下的列表从左侧滑回。
+ *
+ * **不要退回 NavDisplay 的默认退场**：它默认是「整页等比缩小」
+ * （2026-10-16 用户实测："只是整个页面等比缩放，和原生的返回动画完全不一样"）。
+ * M3 的 Forward and backward 要求用「滑动 + 淡入淡出」，缩放是 Enter/exit 里被明确劝阻的做法
+ * （Scale and z-axis motion is avoided since they imply elevation change）。
+ */
+private fun backwardPop(): ContentTransform =
+  (slideInHorizontally(tween(DetailMotionMillis)) { -it / 4 } +
+    fadeIn(tween(DetailMotionMillis))) togetherWith
+    (slideOutHorizontally(tween(DetailMotionMillis)) { it / 4 } +
+      fadeOut(tween(DetailMotionMillis)))
+
+/**
+ * **跟手预览**：返回手势进行中，按进度逐帧落到与 [backwardPop] 同形状的位置上。
+ *
+ * `progress` 是手势进度 0..100：0 = 刚起手（详情页还在位上、列表在左侧屏外），
+ * 100 = 已滑到底（详情页滑出、列表完全归位）。这里用 `tween(0)`——跟手不是补间动画，
+ * 是每一帧直接落到进度对应的位置，松手后由 [backwardPop] 接着把剩余的走完。
+ */
+private fun backwardPopPreview(progress: Int): ContentTransform {
+  val p = progress.coerceIn(0, 100) / 100f
+  return (slideInHorizontally(tween(0)) { (-it / 4 * (1f - p)).toInt() } +
+    fadeIn(tween(0), initialAlpha = p)) togetherWith
+    (slideOutHorizontally(tween(0)) { (it / 4 * p).toInt() } +
+      fadeOut(tween(0), targetAlpha = 1f - p))
+}
 
 /**
  * 一级导航骨架：底部 Tab + Nav3，栈里同时装着「一级目的地」和「详情页」。
@@ -201,6 +226,10 @@ fun MainScaffold(appViewModel: AppViewModel) {
           topLevelFadeThrough()
         }
       },
+      // 退场与跟手预览：**必须显式写**——NavDisplay 默认的退场/跟手是「整页等比缩小」，
+      // 与「返回上一级」的语义对不上（见 backwardPop / backwardPopPreview 的注释）。
+      popTransitionSpec = { backwardPop() },
+      predictivePopTransitionSpec = { progress -> backwardPopPreview(progress) },
       entryProvider =
         entryProvider {
           entry<RecordsRoute> {
