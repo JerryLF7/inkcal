@@ -28,8 +28,31 @@ def adb(*args, timeout=30):
                           capture_output=True, text=True, timeout=timeout)
 
 
+def ensure_adb():
+    """确保 adb 连接可用；卡在 unauthorized 时重启 server 自愈。
+
+    2026-10 事故：adb server 长时间运行后状态卡死为 unauthorized，
+    cron 每小时全部失败（ERR: 首页拉不起来）且无人察觉，静默断更 4 天。
+    这里主动检测 + kill-server 重连，让 cron 自我修复。
+    """
+    for _ in range(3):
+        try:
+            d = subprocess.run(["adb", "devices"], capture_output=True,
+                               text=True, timeout=20).stdout or ""
+            if f"{SERIAL}\tdevice" in d:
+                return True
+        except subprocess.TimeoutExpired:
+            pass
+        # 状态异常：重启 server 清除卡死状态，再重连
+        subprocess.run(["adb", "kill-server"], capture_output=True, timeout=20)
+        time.sleep(1)
+        subprocess.run(["adb", "connect", SERIAL], capture_output=True, timeout=20)
+        time.sleep(2)
+    return False
+
+
 def ensure_home():
-    subprocess.run(["adb", "connect", SERIAL], capture_output=True, timeout=10)
+    ensure_adb()
     for _ in range(3):
         adb("shell", "am", "start", "-n", "com.heytap.health/.oobe.LaunchActivity")
         time.sleep(4)
@@ -107,15 +130,38 @@ def parse_detail_page(root):
     return steps, kcal
 
 
+def enter_detail_page():
+    """从首页点进「每日活动」详情页。
+
+    入口坐标随 App 版本/首页滚动位置变化（2026-10 变过一次），故动态定位：
+    从 UI 树找「活动消耗」标签，点其数字区域（标签下缘 +33px 处）。
+    """
+    xml = dump_xml()
+    if not xml:
+        return False
+    root = ET.fromstring(xml)
+    for n in root.iter("node"):
+        if (n.get("text") or "").strip() == "活动消耗":
+            nums = re.findall(r"\d+", n.get("bounds") or "")
+            if len(nums) == 4:
+                x1, y1, x2, y2 = map(int, nums)
+                adb("shell", "input", "tap", str((x1 + x2) // 2), str(y2 + 33))
+                return True
+    return False
+
+
 def pull_history(days_back: int):
     """进入每日活动详情页，点击前一天按钮回溯并读取数据"""
-    # 确保进入二级详情页
+    # 确保进入二级详情页（动态定位入口，最多试 3 次）
     for _ in range(3):
-        adb("shell", "input", "tap", "846", "448")
+        if not enter_detail_page():
+            time.sleep(2)
+            continue
         time.sleep(2.5)
         w = adb("shell", "dumpsys", "window")
         if "DailyActivityDetailActivity" in (w.stdout or ""):
             break
+        time.sleep(1.5)
 
     # 循环点击前一天按钮 iv_last (90, 270)
     for _ in range(days_back):
