@@ -4,6 +4,8 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
+> **实现进度（0.21，2026-10-16）**：详情页进/退场改成**安卓原生样式**——**整屏位移 + 底页 1/3 屏宽视差，不做透明度混合**，`targetContentZIndex` 显式写（推进 +1、回退 −1，否则回退时列表会盖在详情页上滑）。0.19/0.20 那版按 M3 转场页那句 "a fade as screens slide… don't have to slide the full width" 做成了「滑 1/4 屏 + 淡入淡出」，真机观感是**"跟手淡入淡出"**、和原生不一样（用户第二次反馈）。结论：这个场景照**安卓平台的 push/pop 惯例**走，M3 那句是给同级内容/容器变换的减量建议。
+>
 > **实现进度（0.20，2026-10-16）**：修 0.19 的回归——**返回动画恢复**。0.19 的跟手预览用了 `tween(0)` 想「逐帧落位」，实际效果是**把动画时长设成 0 = 没有动画**，返回变成瞬间切换。真相：跟手的定位是 Compose 自己在转场层按手势进度 seek 正在跑的转场，spec 只负责**形状 + 真实时长**。现在 `predictivePopTransitionSpec` 与 `popTransitionSpec` 同形状（`backwardPop()`，300ms 滑动 + 淡出）。反编译 `defaultPredictivePopTransitionSpec` 的结论也要记住：它收下 `progress` 参数**根本没用**，返回的是 `fadeIn(spring) togetherWith scaleOut(0.7f)`——默认的「整页缩到 70%」。
 >
 > **实现进度（0.19，2026-10-16）**：修**详情页的返回动画**。0.18 只覆盖了「推进」的转场，退场与跟手预览用的是 NavDisplay 默认值——而那对默认值是**整页等比缩小**，跟「返回上一级」对不上（用户实测反馈："只是整个页面等比缩放，和原生的返回动画完全不一样"）。本版把三处都显式写了：推进 = 向右滑入 1/4 屏 + 淡入（`forwardPush`），退场 = 它的镜像（`backwardPop`）。依据是 M3 的 Forward and backward：Android 用「滑动 + 淡入淡出」，且**不滑满整屏宽**；缩放是 M3 在 Enter/exit 里明确劝阻的做法。**⚠️ 但这个版本是坏的**：跟手预览误用 `tween(0)`，返回会瞬间切换，0.20 已修。
@@ -529,6 +531,7 @@ android/
 | 33 | M3 对齐：详情页升级为导航层级 + 预测性返回 | §8.4 / §16.1 第 4–5 项 | 否（后续） | ✅ 0.18（共享元素 / container transform 与 Calo 那条路径仍待做） |
 | 34 | 详情页返回动画（退场 + 跟手） | §8.4 / §16.5 | 否（后续） | ✅ 0.19（默认的整页缩放 → 与推进对称的滑出 + 淡出）⚠️ 0.19 跟手误用 `tween(0)` 导致返回没有动画，0.20 修 |
 | 35 | 详情页返回动画（0.19 回归修复） | §16.5 | 否（后续） | ✅ 0.20（跟手预览与退场同形状、给真实时长；`tween(0)` = 没有动画） |
+| 36 | 详情页进/退场改安卓原生样式（整屏位移 + 视差） | §16.5 | 否（后续） | ✅ 0.21（去掉「1/4 滑 + 淡入淡出」；zIndex 显式写） |
 ## 15. 建议实施顺序
 
 1. ✅ 0.1 搭环境与空壳（三 Tab、主题、Base URL、登录、OkHttp + cookie）。里程碑 A：能登录并拉到 /api/data-version。
@@ -600,6 +603,7 @@ android/
 
 - **预测性返回**：target 36 在 Android 16+ 默认开启，系统不再调用 `onBackPressed`、也不再派发 `KEYCODE_BACK`；项目里没有任何遗留返回 API。`NavDisplay` 原生支持——公开 API `defaultPredictivePopTransitionSpec()` 收手势进度，内部走 `androidx.navigationevent`。
 - **共享元素**：`SharedTransitionLayout` 包住 `NavDisplay`，屏幕里用 `LocalNavAnimatedContentScope` 取 `AnimatedVisibilityScope`；Nav3 各版本都支持预测性返回（官方文档：Navigation with shared elements）。
+- **进/退场的形状（本项目已拍板，别再改）**：详情页用**安卓原生的 push/pop 惯例**——**整屏位移 + 底页 1/3 屏宽视差、不做透明度混合**，`targetContentZIndex` 显式写（推进 +1 / 回退 −1）。M3 转场页那句 "a fade as screens slide… don't have to slide the full width" 试过（0.19/0.20），真机观感是「跟手淡入淡出」、不像原生，已废弃——那句是给同级内容/容器变换的减量建议，不适用于层级推进。
 - **过渡分槽**：`transitionSpec`（推进）、`popTransitionSpec`（后退）、`predictivePopTransitionSpec`（手势进度）。判据**不要**去认路由对象（0.13 的 `contentKey` 坑），用「栈深有没有变」区分 Tab 切换与推进层级。
 - **NavDisplay 的默认退场与跟手都是「整页等比缩小」，不是滑动**（0.19 实测踩到）：要「返回上一级」的观感必须**显式覆盖**这两个槽位（`popTransitionSpec` / `predictivePopTransitionSpec`），别把它们当冗余删掉。两条坑：① 跟手预览**必须给真实时长**——写成 `tween(0)` 等于把动画长度设成 0，返回会变成瞬间切换（0.19 踩过，0.20 修）；② `predictivePopTransitionSpec` 收到的 `progress` 参数在 nav3 默认实现里**根本没被读取**，别自己拿它算偏移——跟手的定位由 Compose 在转场层按手势进度 seek 完成，spec 只管形状与时长。
 - **动效令牌**：`material3 1.4.0` 的 `MaterialTheme(colorScheme, motionScheme, …)` 提供六种 spec——空间类 `defaultSpatialSpec` / `fastSpatialSpec` / `slowSpatialSpec`（Expressive 档是弹簧），效果类 `defaultEffectsSpec` / `fastEffectsSpec` / `slowEffectsSpec`；需要 opt-in。

@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
@@ -90,32 +89,38 @@ private fun topLevelFadeThrough(): ContentTransform =
   )
 
 /**
- * 推进一层（进详情页）：M3 的 **Forward and backward**。
- * M3 原文说 Android 的做法是 "a fade as screens slide"，并且**不用滑满整屏宽**
- * （减少运动量），所以这里只滑 1/4 屏宽并配合淡入淡出。
+ * 推进一层（进详情页）：与安卓原生一致的「整屏位移 + 底页视差」——
+ * 新页从右侧整屏滑入，旧页向左让 1/3 屏宽（走得慢、形成视差）。**不做透明度混合**。
  */
 private fun forwardPush(): ContentTransform =
-  (slideInHorizontally(tween(DetailMotionMillis)) { it / 4 } +
-    fadeIn(tween(DetailMotionMillis))) togetherWith
-    (slideOutHorizontally(tween(DetailMotionMillis)) { -it / 4 } +
-      fadeOut(tween(DetailMotionMillis)))
+  ContentTransform(
+    targetContentEnter = slideInHorizontally(tween(DetailMotionMillis)) { it },
+    initialContentExit = slideOutHorizontally(tween(DetailMotionMillis)) { -it / 3 },
+    // 新页压在旧页之上
+    targetContentZIndex = 1f,
+  )
 
 /**
- * 退出一层（从详情返回）：[forwardPush] 的**镜像**——详情页向右滑出、底下的列表从左侧滑回。
+ * 退出一层（从详情返回）：[forwardPush] 的镜像——详情页向右整屏滑出（跟手时与手指 1:1），
+ * 列表从左侧 1/3 屏宽处滑回原位。
  *
- * **不要退回 NavDisplay 的默认退场**：它默认是「整页等比缩小」
- * （2026-10-16 用户实测："只是整个页面等比缩放，和原生的返回动画完全不一样"）。
- * M3 的 Forward and backward 要求用「滑动 + 淡入淡出」，缩放是 Enter/exit 里被明确劝阻的做法
- * （Scale and z-axis motion is avoided since they imply elevation change）。
+ * **不要退回 NavDisplay 的默认退场**：它默认的跟手预览是「整页缩到 70%」
+ * （`scaleOut(0.7f)`，反编译确认），与「返回上一级」的语义对不上。
+ *
+ * **也不要用「滑 1/4 屏 + 淡入淡出」**（0.19/0.20 试过）：M3 那页写的是 "a fade as screens
+ * slide… don't have to slide the full width"，但真机上观感是「跟手淡入淡出」，和原生不一样
+ * （2026-10-16 用户两次实测反馈）。原生样式就是整屏位移、不做透明度混合。
  */
 private fun backwardPop(): ContentTransform =
-  (slideInHorizontally(tween(DetailMotionMillis)) { -it / 4 } +
-    fadeIn(tween(DetailMotionMillis))) togetherWith
-    (slideOutHorizontally(tween(DetailMotionMillis)) { it / 4 } +
-      fadeOut(tween(DetailMotionMillis)))
+  ContentTransform(
+    targetContentEnter = slideInHorizontally(tween(DetailMotionMillis)) { -it / 3 },
+    initialContentExit = slideOutHorizontally(tween(DetailMotionMillis)) { it },
+    // 回退时目标（列表）在**下**，详情页在上滑走，露出下面的列表
+    targetContentZIndex = -1f,
+  )
 
 /**
- * **跟手预览**（手势进行中用的转场）：与 [backwardPop] **同形状**即可。
+ * **跟手预览**（手势进行中用的转场）：与 [backwardPop] **同形状同时长**即可。
  *
  * 这里**千万不要**写 `tween(0)` 之类的「逐帧落位」——那是错的（2026-10-16 实测：改成 tween(0)
  * 之后返回直接变成瞬间切换、一点动画都没有）。原因：跟手的定位是 Compose 自己在转场层做的
