@@ -1,9 +1,12 @@
 package com.jerrylf.inkcal.ui.app
 
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.padding
@@ -72,15 +75,27 @@ private enum class Tab(val route: NavKey, val label: String, val icon: ImageVect
 private const val FadeOutMillis = 90
 private const val FadeInMillis = 210
 
-/** 推进/退回层级的时长（M3 medium2 = 300ms）。 */
+/** 推进一层（进详情页）的时长（M3 medium2 = 300ms）。 */
 private const val DetailMotionMillis = 300
 
-/**
- * predictive back 的 `Int` 参数：手指从哪条边进入。与 androidx.navigationevent.NavigationEvent.EDGE_* 同值，
- * 这里不直接引用，避免依赖传递细节。
- */
-private const val EDGE_LEFT = 0
+/** predictive back 的 `Int` 参数是手指进入的边缘：与 androidx.navigationevent.NavigationEvent.EDGE_* 同值。 */
 private const val EDGE_RIGHT = 1
+
+/*
+ * 返回动画的**原生样式**，对齐 AOSP `CrossActivityBackAnimation`（WM Shell）：
+ * MIN_WINDOW_SCALE=0.9、WINDOW_X_SHIFT_DP=48、POST_ANIMATION_DURATION=350、
+ * STANDARD_DECELERATE、ENTER_ALPHA_THRESHOLD=0.22。
+ * 数值来自 AOSP 源码（2022 版）；新系统版本可能微调，但形状一致。
+ */
+private const val NATIVE_MOTION_MS = 350
+private const val NATIVE_EXIT_SCALE = 0.9f
+/** 48dp 按常见屏宽约 411dp 换算成比例。Transition 作用域拿不到 density，只能用比例。 */
+private const val NATIVE_SHIFT_FRACTION = 0.12f
+/** 退场页在手势进度约 0.44 时降到透明（原生 alpha 阈值 0.22 对应的手势进度）。 */
+private const val NATIVE_EXIT_FADE_END_MS = 154
+/** 底页从同一时刻开始淡入，到提交结束时满透明度。 */
+private const val NATIVE_ENTER_FADE_START_MS = 154
+private val NativeStandardDecelerate = CubicBezierEasing(0f, 0f, 0f, 1f)
 
 /**
  * 一级 Tab 之间的转场：M3 的 **Top level** 过渡（fade through）——
@@ -108,24 +123,46 @@ private fun forwardPush(): ContentTransform =
   )
 
 /**
- * 退出一层（从详情返回）：[forwardPush] 的镜像，**方向由手势边缘决定**。
+ * 退出一层（从详情返回）：AOSP 原生的返回动画。
  *
- * - 手指从左缘进入（[EDGE_LEFT]）：详情页向右滑出，列表从左侧 1/3 屏宽处滑回。
- * - 手指从右缘进入（[EDGE_RIGHT]）：左右互换——详情页向左滑出，列表从右侧滑回。
+ * - 退场页（详情）：缩到 0.9；手指从左缘进入时向右移 48dp；快速淡出。
+ * - 底页（列表）：从左侧 48dp 处滑回原位并淡入，不缩放。
+ * - 手指从右缘进入时退场页不位移（AOSP 原生就是不对称的）。
  *
- * **不能写死方向**：0.21 写死成从左侧，右缘返回时也向右走，观感就是 iOS 式的固定左侧返回。
- * 方向来自 predictive back 的 `Int` 参数（FirebaseUI 文档：Int 是滑动边缘）。
- * 普通返回键没有边缘，走默认的左侧。
- *
- * **不要退回 NavDisplay 的默认退场**（默认跟手是「整页缩到 70%」，`scaleOut(0.7f)`，反编译确认）。
- * **也不要用「滑 1/4 屏 + 淡入淡出」**（0.19/0.20 试过，真机是「跟手淡入淡出」，不像原生）。
+ * 不要退回 NavDisplay 的默认退场（默认跟手是「整页缩到 70%」，`scaleOut(0.7f)`，反编译确认）。
+ * 也不要用「滑 1/4 屏 + 淡入淡出」（0.19/0.20 真机观感是跟手淡入淡出，不像原生）。
  */
-private fun backwardPop(fromEdge: Int = EDGE_LEFT): ContentTransform {
-  val dir = if (fromEdge == EDGE_RIGHT) -1 else 1
+private fun nativeBackPop(fromRightEdge: Boolean): ContentTransform {
+  val exitFade = fadeOut(
+    keyframes<Float> {
+      durationMillis = NATIVE_MOTION_MS
+      1f at 0
+      0f at NATIVE_EXIT_FADE_END_MS
+    },
+  )
+  val enterFade = fadeIn(
+    keyframes<Float> {
+      durationMillis = NATIVE_MOTION_MS
+      0f at 0
+      0f at NATIVE_ENTER_FADE_START_MS
+      1f at NATIVE_MOTION_MS
+    },
+  )
   return ContentTransform(
-    targetContentEnter = slideInHorizontally(tween(DetailMotionMillis)) { -dir * it / 3 },
-    initialContentExit = slideOutHorizontally(tween(DetailMotionMillis)) { dir * it },
-    // 回退时目标（列表）在**下**，详情页在上滑走，露出下面的列表
+    targetContentEnter =
+      slideInHorizontally(tween(NATIVE_MOTION_MS, easing = NativeStandardDecelerate)) {
+        -(it * NATIVE_SHIFT_FRACTION).toInt()
+      } + enterFade,
+    initialContentExit =
+      slideOutHorizontally(tween(NATIVE_MOTION_MS, easing = NativeStandardDecelerate)) {
+        if (fromRightEdge) 0 else (it * NATIVE_SHIFT_FRACTION).toInt()
+      } +
+        exitFade +
+        scaleOut(
+          tween(NATIVE_MOTION_MS, easing = NativeStandardDecelerate),
+          targetScale = NATIVE_EXIT_SCALE,
+        ),
+    // 回退时目标（列表）在**下**，详情页在上，露出下面的列表
     targetContentZIndex = -1f,
   )
 }
@@ -228,10 +265,10 @@ fun MainScaffold(appViewModel: AppViewModel) {
         }
       },
       // 退场与跟手预览：**必须显式写**——NavDisplay 默认的跟手预览是「整页缩到 70%」
-      // （`scaleOut(0.7f)`，反编译确认），与「返回上一级」的语义对不上。
-      // 跟手预览的 Int 参数是手势边缘，方向跟着它走（见 backwardPop）；形状与时长与退场一致。
-      popTransitionSpec = { backwardPop() },
-      predictivePopTransitionSpec = { edge -> backwardPop(edge) },
+      // （`scaleOut(0.7f)`，反编译确认），与原生返回不一致。
+      // 跟手预览的 Int 参数是手势边缘，决定 AOSP 那种不对称的位移（见 nativeBackPop）。
+      popTransitionSpec = { nativeBackPop(fromRightEdge = false) },
+      predictivePopTransitionSpec = { edge -> nativeBackPop(fromRightEdge = edge == EDGE_RIGHT) },
       entryProvider =
         entryProvider {
           entry<RecordsRoute> {
