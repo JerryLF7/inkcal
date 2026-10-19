@@ -76,6 +76,13 @@ private const val FadeInMillis = 210
 private const val DetailMotionMillis = 300
 
 /**
+ * predictive back 的 `Int` 参数：手指从哪条边进入。与 androidx.navigationevent.NavigationEvent.EDGE_* 同值，
+ * 这里不直接引用，避免依赖传递细节。
+ */
+private const val EDGE_LEFT = 0
+private const val EDGE_RIGHT = 1
+
+/**
  * 一级 Tab 之间的转场：M3 的 **Top level** 过渡（fade through）——
  * "The exiting screen quickly fades out and then the entering screen fades in."
  *
@@ -101,35 +108,27 @@ private fun forwardPush(): ContentTransform =
   )
 
 /**
- * 退出一层（从详情返回）：[forwardPush] 的镜像——详情页向右整屏滑出（跟手时与手指 1:1），
- * 列表从左侧 1/3 屏宽处滑回原位。
+ * 退出一层（从详情返回）：[forwardPush] 的镜像，**方向由手势边缘决定**。
  *
- * **不要退回 NavDisplay 的默认退场**：它默认的跟手预览是「整页缩到 70%」
- * （`scaleOut(0.7f)`，反编译确认），与「返回上一级」的语义对不上。
+ * - 手指从左缘进入（[EDGE_LEFT]）：详情页向右滑出，列表从左侧 1/3 屏宽处滑回。
+ * - 手指从右缘进入（[EDGE_RIGHT]）：左右互换——详情页向左滑出，列表从右侧滑回。
  *
- * **也不要用「滑 1/4 屏 + 淡入淡出」**（0.19/0.20 试过）：M3 那页写的是 "a fade as screens
- * slide… don't have to slide the full width"，但真机上观感是「跟手淡入淡出」，和原生不一样
- * （2026-10-16 用户两次实测反馈）。原生样式就是整屏位移、不做透明度混合。
+ * **不能写死方向**：0.21 写死成从左侧，右缘返回时也向右走，观感就是 iOS 式的固定左侧返回。
+ * 方向来自 predictive back 的 `Int` 参数（FirebaseUI 文档：Int 是滑动边缘）。
+ * 普通返回键没有边缘，走默认的左侧。
+ *
+ * **不要退回 NavDisplay 的默认退场**（默认跟手是「整页缩到 70%」，`scaleOut(0.7f)`，反编译确认）。
+ * **也不要用「滑 1/4 屏 + 淡入淡出」**（0.19/0.20 试过，真机是「跟手淡入淡出」，不像原生）。
  */
-private fun backwardPop(): ContentTransform =
-  ContentTransform(
-    targetContentEnter = slideInHorizontally(tween(DetailMotionMillis)) { -it / 3 },
-    initialContentExit = slideOutHorizontally(tween(DetailMotionMillis)) { it },
+private fun backwardPop(fromEdge: Int = EDGE_LEFT): ContentTransform {
+  val dir = if (fromEdge == EDGE_RIGHT) -1 else 1
+  return ContentTransform(
+    targetContentEnter = slideInHorizontally(tween(DetailMotionMillis)) { -dir * it / 3 },
+    initialContentExit = slideOutHorizontally(tween(DetailMotionMillis)) { dir * it },
     // 回退时目标（列表）在**下**，详情页在上滑走，露出下面的列表
     targetContentZIndex = -1f,
   )
-
-/**
- * **跟手预览**（手势进行中用的转场）：与 [backwardPop] **同形状同时长**即可。
- *
- * 这里**千万不要**写 `tween(0)` 之类的「逐帧落位」——那是错的（2026-10-16 实测：改成 tween(0)
- * 之后返回直接变成瞬间切换、一点动画都没有）。原因：跟手的定位是 Compose 自己在转场层做的
- * （它按手势进度 seek 正在跑的转场），spec 只负责定义**转场的形状与真实时长**，时长给 0 就等于没有动画。
- * 另外，nav3 默认实现里那个 `progress` 参数其实**根本没被读取**（反编译确认：lambda 收下 Int 就丢掉，
- * 只返回 `fadeIn(spring) togetherWith scaleOut(0.7f)`）——所以别想着自己拿 progress 算偏移。
- */
-@Suppress("UNUSED_PARAMETER")
-private fun backwardPopPreview(progress: Int): ContentTransform = backwardPop()
+}
 
 /**
  * 一级导航骨架：底部 Tab + Nav3，栈里同时装着「一级目的地」和「详情页」。
@@ -216,7 +215,7 @@ fun MainScaffold(appViewModel: AppViewModel) {
     NavDisplay(
       backStack = backStack,
       onBack = {
-        // 手势/返回键退出详情时，锚点要跟着清掉，否则会被下面的 effect 又推回来
+        // 手势/返回键退出详情时，锚点要跟着清掉，否则会被上面的 effect 又推回来
         if (backStack.lastOrNull() is MealDetailRoute) recordsViewModel.closeDetail()
         backStack.removeLastOrNull()
       },
@@ -230,9 +229,9 @@ fun MainScaffold(appViewModel: AppViewModel) {
       },
       // 退场与跟手预览：**必须显式写**——NavDisplay 默认的跟手预览是「整页缩到 70%」
       // （`scaleOut(0.7f)`，反编译确认），与「返回上一级」的语义对不上。
-      // 两者必须是**同一形状 + 真实时长**，见 backwardPop / backwardPopPreview 的注释。
+      // 跟手预览的 Int 参数是手势边缘，方向跟着它走（见 backwardPop）；形状与时长与退场一致。
       popTransitionSpec = { backwardPop() },
-      predictivePopTransitionSpec = { progress -> backwardPopPreview(progress) },
+      predictivePopTransitionSpec = { edge -> backwardPop(edge) },
       entryProvider =
         entryProvider {
           entry<RecordsRoute> {
