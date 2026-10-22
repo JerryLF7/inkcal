@@ -149,11 +149,15 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.17，2026-10-16）：**首期功能已全部完成**，当前在做 **M3 规范对齐工程**——**不是重写**：组件层本来就是 material3 组件（`NavigationBar` / `TopAppBar` / `Card` / `AlertDialog` / `ModalBottomSheet` / `SegmentedButton` / `PullToRefreshBox` / `DatePickerDialog`），动态取色已开，字体基本走 `Typography` 令牌；差距集中在**动效、导航层级语义、反馈层、令牌化与少数交互细节**。审计结论、8 个阶段、无障碍待办、**已复核撤回的建议**（别再提：设置页改 `ListItem`、选择照片页「返回键先退选择态」、加 `enableOnBackInvokedCallback`）以及平台事实（预测性返回 / 共享元素 / 动效令牌）都在 `docs/android-app-spec.md` §16——**改客户端前先读那一节**。已拍板前提：**只做深色界面，不做浅色**。
+当前状态（0.24，2026-10-22）：**首期功能已全部完成**，当前在做 **M3 规范对齐工程**——**不是重写**：组件层本来就是 material3 组件（`NavigationBar` / `TopAppBar` / `Card` / `AlertDialog` / `ModalBottomSheet` / `SegmentedButton` / `PullToRefreshBox` / `DatePickerDialog`），动态取色已开，字体基本走 `Typography` 令牌；差距集中在**动效、导航层级语义、反馈层、令牌化与少数交互细节**。审计结论、8 个阶段、无障碍待办、**已复核撤回的建议**（别再提：设置页改 `ListItem`、选择照片页「返回键先退选择态」、加 `enableOnBackInvokedCallback`、把详情塞进 Nav3 栈靠 `predictivePopTransitionSpec` 手写跟手）以及平台事实（预测性返回 / 共享元素 / 动效令牌）都在 `docs/android-app-spec.md` §16——**改客户端前先读那一节**。已拍板前提：**只做深色界面，不做浅色**。
 
 包名 `com.jerrylf.inkcal`；`domain/` 与 `data/` 共 16 个测试类、100 个 JVM 单测，`cd android && ./gradlew :app:testDebugUnitTest`。首期之外只剩 §8.8（分享入口、桌面小组件）。页面行为与逐版历史见 `docs/android-app-spec.md`（头部进度摘要、§8.x、§14 的逐项「进度」列）——客户端的权威记录在那边，本文不重复。有一条容易被「优化」掉的判据留在 §8.1：判断记录页「用户有没有滚离顶部」只能看 `isScrollInProgress` 期间的位移，直接读 `firstVisibleItemIndex` 会把 LazyColumn 的重排误判成用户翻页，于是永远不修。
 
-详情页刻意用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本。组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
+详情页是 `RecordsTab` 内的**同窗口全屏覆盖层**（`AnimatedVisibility`，`asPage = true`），既不是 `Dialog` 窗口、也不是 Nav3 路由。它渲染的数据**来自列表状态**（按 `detailAnchor` 的 asset_id 查），所以删除/重分析后只要重拉列表，详情就自动更新，不需要维护副本；组被删光、且不在 busy 期间（单张移除会把锚点切到晋升的新主行，那一刻它还没进列表），就关闭详情。
+
+预测性返回的跟手动画由**页面自己**做：`PredictiveBackHandler` + `graphicsLayer`。数值照 Telegram Android（`DrKLO/Telegram` 的 `ActionBarLayout.onBackProgress` / `drawChild`）——缩放 `1 - progress*0.10`（1.00→0.90）、位移 `progress * 56dp` 且**符号按 `swipeEdge` 取**（写死一侧 = iOS 式固定方向）、`clip` + `RoundedCornerShape(progress * 28dp)`。松手确认调 `onClose()`；松手取消必须捕获 `CancellationException` 并用 `Animatable.animateTo(spring)` 弹回，否则会停在中间态。
+
+**不要把详情塞进 Nav3 栈、靠 `predictivePopTransitionSpec` 手写跟手**——0.18～0.23 六个版本都试过并已整条回滚（代码基线回到 0.17 重写）。四个硬伤：① Nav3 默认实现根本不读那个 `progress` 参数（反编译确认是 `scaleOut(0.7f)`，整页缩到 70%）；② 覆盖时容易写成 `tween(0)`，松手瞬间切换、返回动画直接消失（0.19 踩过）；③ spec 里拿不到手势触摸坐标，Telegram 那种以手指为缩放中心的跟手做不出来；④ 为了转场把它包进独立 `Dialog` 窗口时，手势打在浮层上、Nav3 收不到，预测性返回直接失效，还连带 Snackbar 被挡住（才衍生出 0.15 的「详情期间改走系统 Toast」补丁，0.24 已删除）。细节与完整教训见 `docs/android-app-spec.md` §16.4。Calo 页那条路径暂时仍是 `Dialog`（`asPage = false`），所以入口保留 `MealDetailDialog(asPage=…)` 两个分支，内容本体在 `MealDetailContent`。
 
 Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaffold 已把状态栏 inset 消化进 innerPadding，页面内嵌的 TopAppBar 必须显式 `windowInsets = WindowInsets(0, 0, 0, 0)`，否则状态栏高度被垫两次、标题与列表之间出现大段空白。全屏 Dialog（选择照片）不经 Scaffold padding，其 TopAppBar 保留默认 inset。
 

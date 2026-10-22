@@ -4,6 +4,8 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
+> **实现进度（0.24，2026-10-22）**：**详情页的预测性返回重做**。0.18～0.23 六个版本走的是「把详情塞进 Nav3 栈里、靠 `predictivePopTransitionSpec` 手写跟手动画」的路子，反复调不好，**已整条回滚**（那六个 tag 保留在远端，代码基线回到 0.17）。现在改成：详情在 `RecordsTab` 内做**同窗口全屏覆盖层**（`AnimatedVisibility` 推进/退场），跟手动画由页面自己的 `PredictiveBackHandler` + `graphicsLayer` 完成，数值照抄 Telegram Android（缩放 1.00→0.90、位移 ≤56dp 且方向跟随手势边缘、跟手时加 28dp 圆角）；松手确认走 `onClose()`，松手取消用 `Animatable.animateTo(spring)` 弹回。因为不再是独立 `Dialog` 窗口，Snackbar 也不再被挡，0.15 那套「详情期间改走系统 Toast」的临时方案随之删除（§8.4 / §16.1 / §16.4）。**版本号从 0.23 直接跳到 0.24**：`versionCode` 必须大于已发布的 24，Obtainium 才会认作更新。其余与 0.17 相同。
+>
 > **实现进度（0.17，2026-10-16）**：**M3 规范对齐工程开工**（审计结论、阶段划分与待办见 §16）。本批落地两项图标修正：详情页「单张移除」的第一步由文字 `✕` 改为图标按钮（内容描述「删除这张照片」——文字符号没有无障碍语义，字重与基线也跟图标不是一套），设置页出生日期的 `trailingIcon` 由文字按钮「选择」改为日历图标按钮（M3 规定该槽位放图标）。**一级 Tab 切换的转场同时由横向滑动改为 M3 规定的 Top level 过渡（fade through）**——横向平移是 Lateral 的语汇，点底部导航项必须用 Top level（§16.1 第 1 项）。同时**撤回两项审计初期提出的建议**并把结论写进对应小节：设置页是表单不是列表，不改 `ListItem`（§8.7）；选择照片页「返回键先退出选择态」不采用（该页点击即选中、没有独立浏览态，M3 的选择模式规则不适用，§8.5）。无障碍语义与选中态双通道表达记为待办，留最后统一做（§16）。其余与 0.16 相同。
 >
 > **实现进度（0.16，2026-10-15）**：修「自动刷新后新卡片不在列表顶部」。记录页与选择照片页是**同一个根因**：LazyColumn 在 item 集合变化时会按 key 把「原来第一个可见项」钉在视口顶部，于是插到它前面的新内容被顶到视口**上方**——记录页那个锚点是旧的日期头（冷启动先画缓存、网络数据整体替换时新记录插到了前面），选择页那个锚点是页脚（首屏加载时列表里只有页脚，7 天的照片全插在它前面，打开就直接停在列表最底部）。修法：记录页在用户仍贴着顶部时把视口钉回顶部、已翻到别处则一律不动；选择页在首屏数据到达时钉回顶部。见 §8.1 / §8.5 / §14 第 29 行。其余与 0.15 相同。
@@ -286,7 +288,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 点「重新分析」展开内联表单：多行输入（占位「修正说明，例：米饭只吃了一半 / 其实是玉米猪肉馅」），notes 必填，空则提交按钮禁用。
   - 提交 POST /api/reanalyze（asset_id 用主行的），进行中文案「分析中…（约半分钟）」，期间禁用表单。
   - **成功后关闭表单并清空 notes**（0.15 起）：表单的提交回调带 `onSuccess`，只有真正更新完成后才调，失败时表单原样保留 notes 方便改完重试。之前提交完表单不关、不清空，像没提交成功（0.14 的 bug）。
-  - **详情打开期间，操作提示用系统 Toast 而不是 Snackbar**（0.15 起）：SnackbarHost 在页面层，全屏 Dialog 压在它上面，在详情里重分析/删照片时 Snackbar 根本看不见。详情打开期间 `RecordsTab` 把 VM 的 toast 路由给 `android.widget.Toast`（独立窗口层，压在 Dialog 上）；详情关闭时仍走 Snackbar。
+  - **提示统一走 Snackbar**（0.24 起）：详情现在是同一窗口里的覆盖层，`SnackbarHost` 挂在 `RecordsTab` 最外层、压在详情之上，不再需要 0.15 那套「详情期间改走 `android.widget.Toast`」的绕行方案——那段分支已删除，别加回来。
   - 成功后必须重拉当天分组并原地替换（组级联合重估会把形态 B 从行清零，photos 显示必须重拉，不能只用响应里的 record 覆盖）。提示文案「已更新：{calories} kcal」。失败「重新分析失败: {error}」。
   - 打开表单时解除删除的武装态。
 - 删除有两个互不干扰的入口，都是两步确认：
@@ -295,7 +297,12 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 原生实现可用 AlertDialog 做确认，但必须保留两步，且整餐与单张不能共用同一个确认状态。
   - 删除后服务端会把资产写入忽略列表，客户端无需处理。
 - 原地刷新 refreshGroup：请求 GET /api/records?date={该记录日期}，按 promoted 或当前主行 asset_id 找，找不到按已知 asset_id 交集找，都找不到视为组已消失。刷新失败不要关闭详情，提示「操作已完成，但刷新失败——关闭后页面会自动更新」。
-- 系统返回键关闭详情。
+- **系统返回键 / 预测性返回关闭详情**（0.24 起）：
+  - 详情是 `RecordsTab` 里的全屏覆盖层（`asPage = true`），**不是** `Dialog` 窗口，也不是 Nav3 路由。理由与那六版踩过的坑见 §16.4。
+  - 跟手动画在本页内完成：`PredictiveBackHandler` 收 `BackEventCompat`，把 `progress` 写进 `Animatable`，外层 `graphicsLayer` 按 Telegram Android 的数值变换——缩放 `1 - progress*0.10`（1.00→0.90）、位移 `progress * 56dp` 且**方向按 `swipeEdge` 取正负**（写死一侧就是 iOS 式固定方向，0.22 踩过）、`clip` + `RoundedCornerShape(progress * 28dp)` 露出底页。
+  - 松手确认 → `flow` 正常结束 → 调 `onClose()`；松手取消 → 捕获 `CancellationException` → `animateTo(0f, spring(StiffnessMediumLow))` 弹回。**取消分支不能省**，否则拉到一半松手会停在半透明的中间态。
+  - Calo 页那条路径暂时仍是 `Dialog`（`asPage = false`），所以顶层 API 保留 `MealDetailDialog(asPage = ...)` 两个入口，内容本体在 `MealDetailContent`，不要合并回去。
+  - 系统返回键（无手势的旧设备）与手势走同一条 `onClose()`。
 
 ### 8.5 选择照片（补漏入口）
 
@@ -512,10 +519,11 @@ android/
 | 25 | 设置页分组：服务器 / 关于 | 「服务器」组显示可读的数据概况（`domain/DataVersion` 解析 `/api/data-version` 指纹：记录条数 + 最后写入，UTC 转 HKT），末尾「关于」组显示 App 版本（BuildConfig）。原先是两行并列的「App 版本 / 数据版本（原始指纹）」，用户反馈看不懂 | ✅ 0.12 |
 | 26 | 交互体验优化（一批） | ① 一级 Tab 切换改为方向性滑动转场（覆盖 NavDisplay 默认淡入淡出，方向在点击处比较 Tab 下标得出；0.13 曾用 Nav3 的 contentKey 反推而退化成单方向，0.14 修正）；② 周/月视图改 HorizontalPager 左右滑动切周/月，箭头与「今天」变成遥控器，`pageCount` 右端封在本周/本月；③ 餐卡长按菜单（查看详情 / 重新分析… / 删除整餐…，后两者带确认弹窗）；④ P/C/F 按网页端配色（餐卡、日期分隔线、详情页）。配套：`RangeViewModel` 改为按区间分槽缓存（相邻两页同屏必需） | ✅ 0.13；转场方向 0.14 修正 |
 | 27 | 删掉日视图顶栏 | 日视图 TopAppBar 的日期与吸顶 `DateSeparator` 内容恒等（都取自首个可见日期组），用户反馈「有点多余」→ 已删除，日期只由吸顶分隔线承担（§8.1） | ✅ 0.13 |
-| 28 | 详情重分析的反馈修复 | ① 提交成功后关闭表单并清空 notes（`onReanalyze` 回调带 `onSuccess`，失败时表单原样保留）；② 详情打开期间操作提示改走系统 Toast——SnackbarHost 在页面层，被全屏 Dialog 挡住看不见 | ✅ 0.15 |
+| 28 | 详情重分析的反馈修复 | ① 提交成功后关闭表单并清空 notes（`onReanalyze` 回调带 `onSuccess`，失败时表单原样保留）；② 详情打开期间操作提示改走系统 Toast——SnackbarHost 在页面层，被全屏 Dialog 挡住看不见。**② 已于 0.24 撤销**：详情不再是 Dialog 窗口，Snackbar 压得住，Toast 分支删除 | ✅ 0.15；②0.24 改回 Snackbar |
 | 29 | 刷新后视口不在顶部（记录页 + 选择照片页） | 两页同一根因：LazyColumn 按 key 把「原来第一个可见项」钉在视口顶部，插到它前面的新内容被顶到视口上方。记录页锚点是旧日期头（冷启动缓存 → 网络数据整体替换时新记录插到了前面），选择页锚点是页脚（首屏加载时列表里只有页脚）。修法见 §8.1 / §8.5 | ✅ 0.16 |
 | 30 | M3 规范对齐（进行中）第一批：图标修正 | §8.4 / §8.7 / §16 | 否（后续） | ✅ 0.17（详情页单张移除、设置页日期行改图标按钮；另撤回两项不适用建议，见 §8.5 / §8.7） |
 | 31 | M3 对齐：一级 Tab 切换转场 | §16.1 第 1 项 | 否（后续） | ✅ 0.17（横向滑动 → Top level fade through） |
+| 32 | 详情页预测性返回（重做） | §8.4 / §16.1 第 4 项 | 否（后续） | ✅ 0.24（同窗口覆盖层 + `PredictiveBackHandler`：缩放 1.00→0.90、位移 ≤56dp 跟手方向、28dp 跟手圆角，松手取消弹回。0.18～0.23 的 Nav3 路由方案整条回滚，否决理由见 §16.4） |
 ## 15. 建议实施顺序
 
 1. ✅ 0.1 搭环境与空壳（三 Tab、主题、Base URL、登录、OkHttp + cookie）。里程碑 A：能登录并拉到 /api/data-version。
@@ -548,8 +556,8 @@ android/
 | 1 | 一级 Tab 切换转场 | 点底部导航项必须用 Top level（fade through） | ✅ **0.17 已修**：原先横向滑动（Lateral 的语汇），现为 fade through（旧页 90ms 淡出 → 新页延后 90ms 再 210ms 淡入）；`tabSlide` 与那个方向布尔已删除，别再往回改 | `MainScaffold.kt` 的 `topLevelFadeThrough()` |
 | 2 | 导航栏图标 | 选中 filled、未选中 outlined，对比度 ≥3:1 | 两态同一个 filled 图标 | `MainScaffold.kt` 的 `Tab` 枚举 |
 | 3 | 重复点当前 Tab | 应回到页面顶部 | `if (current != tab.route)` 直接忽略 | 同上 |
-| 4 | 详情页层级 | 卡片→详情属 Container transform / Forward-and-backward | 全屏 Dialog（另一窗口）：无导航层级、无预测性返回、无共享元素 | `MealDetailDialog.kt` / `RecordsTab.kt` / `CaloScreen.kt` |
-| 5 | 反馈层 | 瞬时反馈用 Snackbar | 详情打开期间改用 `android.widget.Toast` | `RecordsTab.kt` |
+| 4 | 详情页层级 | 卡片→详情属 Container transform / Forward-and-backward | ✅ **0.24 已做预测性返回**：同窗口全屏覆盖层 + `PredictiveBackHandler` 跟手（缩放 0.9 / 位移 ≤56dp / 圆角，数值照 Telegram）。**仍缺**共享元素（container transform）——见 §16.4 为什么不再走 Nav3 路由 | `MealDetailDialog.kt` / `RecordsTab.kt` |
+| 5 | 反馈层 | 瞬时反馈用 Snackbar | ✅ **0.24 已修**：详情变同窗口覆盖层后 `SnackbarHost` 压得住，Toast 分支删除并统一走 Snackbar | `RecordsTab.kt` |
 | 6 | 语义色 | 颜色来自 color scheme / 令牌 | 20 处硬编码（盈亏绿红、周图柱色、P/C/F、链接蓝） | `theme/Color.kt` 等 5 个文件 |
 | 7 | 形状 | 圆角走 shape scale（4/8/12/16/28） | 14 处硬编码 `RoundedCornerShape(4/6/8/12)` | 6 个文件 |
 | 8 | 动效 | 用官方动效令牌 | 只有一处手写 `tween(280)` | `MainScaffold.kt` |
@@ -562,7 +570,7 @@ android/
 每阶段完成后必须跑 `cd android && ./gradlew :app:testDebugUnitTest :app:assembleRelease`，真机由用户安装验证（agent 无法点真机），并同步本文 §14 / §15 与头部进度摘要。
 
 1. 基建：锁定深色主题 + 接入 `MaterialTheme.motionScheme` 官方动效令牌 + 圆角收敛到 shapes 令牌 + 语义色令牌化
-2. 导航层级与转场：详情页升级为真实导航层级（共享元素 / container transform）+ 一级 Tab 切换改为 Top level 过渡
+2. 导航层级与转场：一级 Tab 切换已改 Top level 过渡（0.17）；详情页预测性返回已做（0.24，同窗口覆盖层 + `PredictiveBackHandler`，**不走 Nav3 路由**，理由见 §16.4）。剩共享元素 / container transform
 3. 导航栏细节：选中/未选中图标变体、重复点当前项回到顶部、明确并记录「切走是否保留各页状态」
 4. 反馈层：`Toast` → Snackbar 载体；核对各处关闭/确认动作是否符合 M3
 5. 组件结构：设置页组织方式、选择照片页语义
@@ -581,6 +589,12 @@ android/
 - **设置页改 `ListItem`**：该页是表单，`OutlinedTextField` 才是对的（理由见 §8.7）。
 - **选择照片页「返回键先退出选择态」**：该页点击即选中、没有独立浏览态，M3 选择模式规则不适用（理由见 §8.5）。
 - **加 `android:enableOnBackInvokedCallback="true"`**：**targetSdk ≥ 35 不需要**这个 flag（我们是 36），加了也没用。
+- **把详情页做成 Nav3 路由、靠 `predictivePopTransitionSpec` 手写跟手动画**：0.18～0.23 六个版本都在这条路上调，全部失败并整条回滚（代码基线回到 0.17）。四个硬伤，任何一个都足以否掉这条路：
+  1. **跟手预览的 `progress` 参数在 Nav3 默认实现里根本没被读取**（反编译确认是 `fadeIn(spring) togetherWith scaleOut(0.7f)`，即"整页缩到 70%"），肉眼看就是整页缩放而不是滑动。
+  2. 显式覆盖时容易写成 `tween(0)`——发布日期 0.19 就这么干过，跟手时长设 0 等于松手瞬间切换、返回动画直接消失（0.20 才修）。
+  3. `predictivePopTransitionSpec` 里只能拿到进度，**拿不到手势的触摸 Y 坐标**，所以 Telegram 那种「以手指位置为缩放中心」的效果做不出来；手势边缘（`EDGE_LEFT/EDGE_RIGHT`）也得自己想办法传，0.21 就写死成单方向、变成 iOS 式固定方向（0.22 修）。
+  4. 一旦为了转场把详情塞进独立 `Dialog` 窗口（0.18 起这么做的反例），返回手势会打在浮层窗口上、Nav3 收不到，预测性返回直接失效；同时 Snackbar 被压在底下看不见，才衍生出「详情期间改用系统 Toast」的补丁（0.24 已删）。
+  **结论**：跟手是「页面自己感知 Back 进度、变换自身」的活，不是「两页之间的转场」的活。用 `PredictiveBackHandler` + `graphicsLayer`，详情留作覆盖层，比塞进导航栈简单得多、也可控得多。
 
 ### 16.5 平台事实（免得再查一遍）
 

@@ -25,6 +25,11 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -142,14 +147,8 @@ fun RecordsTab(
 
   LaunchedEffect(toast) {
     toast?.let {
-      // 详情是全屏 Dialog，SnackbarHost 会被它挡在后面看不见（2026-10-04 踩坑：
-      // 在详情里重分析/删照片，列表确实更新了但用户什么提示都看不到）。
-      // 详情打开期间改用系统 Toast——它是独立窗口层，压在 Dialog 上面。
-      if (detailAnchor != null) {
-        android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
-      } else {
-        snackbarHostState.showSnackbar(it)
-      }
+      // 详情现在是同窗口覆盖层，SnackbarHost 移到最外层顶层，提示统一走 Snackbar
+      snackbarHostState.showSnackbar(it)
       dayViewModel.consumeToast()
     }
   }
@@ -162,134 +161,149 @@ fun RecordsTab(
     }
   }
 
-  Column(modifier = Modifier.fillMaxSize()) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-      SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
-        RecordsMode.entries.forEachIndexed { index, item ->
-          SegmentedButton(
-            selected = mode == item,
-            onClick = { mode = item },
-            shape = SegmentedButtonDefaults.itemShape(index = index, count = RecordsMode.entries.size),
-          ) {
-            Text(item.label)
+  Box(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
+          RecordsMode.entries.forEachIndexed { index, item ->
+            SegmentedButton(
+              selected = mode == item,
+              onClick = { mode = item },
+              shape = SegmentedButtonDefaults.itemShape(index = index, count = RecordsMode.entries.size),
+              // 清空 icon 槽位：M3 的 SegmentedButton 默认 icon 是 SegmentedButtonDefaults.Icon(selected)，
+              // 选中时自动加一个对钩。我们的选中态已经由容器色表达，勾是重复信息
+              // （2026-10-16 用户反馈"对钩有点多余"）。
+              icon = {},
+            ) {
+              Text(item.label)
+            }
           }
         }
+        // 三个视图都要能进选择照片，所以放在这层而不是各自的标题栏里
+        IconButton(onClick = { showPicker = true }) {
+          Icon(Icons.Filled.Add, contentDescription = "选择照片")
+        }
       }
-      // 三个视图都要能进选择照片，所以放在这层而不是各自的标题栏里
-      IconButton(onClick = { showPicker = true }) {
-        Icon(Icons.Filled.Add, contentDescription = "选择照片")
-      }
-    }
 
-    when (mode) {
-      RecordsMode.Day -> {}
-      RecordsMode.Week -> {
-        ArrowHeader(
-          title = if (Periods.isCurrentWeek(monday, today)) "本周" else Periods.weekLabel(monday),
-          subtitle = Periods.weekLabel(monday),
-          canGoForward = weekPager.currentPage < WEEK_CENTER,
-          onPrev = { scope.launch { weekPager.animateScrollToPage(weekPager.currentPage - 1) } },
-          onNext = { scope.launch { weekPager.animateScrollToPage(weekPager.currentPage + 1) } },
-          onToday =
-            if (Periods.isCurrentWeek(monday, today)) null
-            else ({ scope.launch { weekPager.scrollToPage(WEEK_CENTER) } }),
-        )
-      }
-      RecordsMode.Month -> {
-        ArrowHeader(
-          title = Periods.monthLabel(monthAnchor),
-          subtitle = null,
-          canGoForward = monthPager.currentPage < MONTH_CENTER,
-          onPrev = { scope.launch { monthPager.animateScrollToPage(monthPager.currentPage - 1) } },
-          onNext = { scope.launch { monthPager.animateScrollToPage(monthPager.currentPage + 1) } },
-          onToday =
-            if (Periods.isCurrentMonth(monthAnchor, today)) null
-            else ({ scope.launch { monthPager.scrollToPage(MONTH_CENTER) } }),
-        )
-      }
-    }
-
-    Box(modifier = Modifier.weight(1f)) {
       when (mode) {
-        RecordsMode.Day ->
-          RecordsScreen(
-            viewModel = dayViewModel,
-            scrollTarget = scrollTarget,
-            onScrollHandled = dayViewModel::consumeScrollTarget,
-            onOpenDetail = dayViewModel::openDetail,
-            onReanalyze = { reanalyzeTarget = it },
-            onDeleteMeal = { deleteTarget = it },
+        RecordsMode.Day -> {}
+        RecordsMode.Week -> {
+          ArrowHeader(
+            title = if (Periods.isCurrentWeek(monday, today)) "本周" else Periods.weekLabel(monday),
+            subtitle = Periods.weekLabel(monday),
+            canGoForward = weekPager.currentPage < WEEK_CENTER,
+            onPrev = { scope.launch { weekPager.animateScrollToPage(weekPager.currentPage - 1) } },
+            onNext = { scope.launch { weekPager.animateScrollToPage(weekPager.currentPage + 1) } },
+            onToday =
+              if (Periods.isCurrentWeek(monday, today)) null
+              else ({ scope.launch { weekPager.scrollToPage(WEEK_CENTER) } }),
           )
+        }
+        RecordsMode.Month -> {
+          ArrowHeader(
+            title = Periods.monthLabel(monthAnchor),
+            subtitle = null,
+            canGoForward = monthPager.currentPage < MONTH_CENTER,
+            onPrev = { scope.launch { monthPager.animateScrollToPage(monthPager.currentPage - 1) } },
+            onNext = { scope.launch { monthPager.animateScrollToPage(monthPager.currentPage + 1) } },
+            onToday =
+              if (Periods.isCurrentMonth(monthAnchor, today)) null
+              else ({ scope.launch { monthPager.scrollToPage(MONTH_CENTER) } }),
+          )
+        }
+      }
 
-        RecordsMode.Week ->
-          HorizontalPager(state = weekPager, modifier = Modifier.fillMaxSize()) { page ->
-            WeekView(
-              viewModel = rangeViewModel,
-              monday = Periods.addWeeks(todayMonday, (page - WEEK_CENTER).toLong()),
-              today = today,
-              baseUrl = baseUrl,
-              decisionsByDate = decisionsByDate,
-              onEnsureDecisions = dayViewModel::ensureDecisions,
+      Box(modifier = Modifier.weight(1f)) {
+        when (mode) {
+          RecordsMode.Day ->
+            RecordsScreen(
+              viewModel = dayViewModel,
+              scrollTarget = scrollTarget,
+              onScrollHandled = dayViewModel::consumeScrollTarget,
               onOpenDetail = dayViewModel::openDetail,
               onReanalyze = { reanalyzeTarget = it },
               onDeleteMeal = { deleteTarget = it },
             )
-          }
 
-        RecordsMode.Month ->
-          HorizontalPager(state = monthPager, modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp)) { page ->
-            MonthView(
-              viewModel = rangeViewModel,
-              monthAnchor = Periods.addMonths(todayMonth, (page - MONTH_CENTER).toLong()),
-              today = today,
-              // 点某天：切回日视图并滚到那天
-              onPickDate = { date ->
-                mode = RecordsMode.Day
-                dayViewModel.jumpTo(date)
-              },
-            )
-          }
-      }
+          RecordsMode.Week ->
+            HorizontalPager(state = weekPager, modifier = Modifier.fillMaxSize()) { page ->
+              WeekView(
+                viewModel = rangeViewModel,
+                monday = Periods.addWeeks(todayMonday, (page - WEEK_CENTER).toLong()),
+                today = today,
+                baseUrl = baseUrl,
+                decisionsByDate = decisionsByDate,
+                onEnsureDecisions = dayViewModel::ensureDecisions,
+                onOpenDetail = dayViewModel::openDetail,
+                onReanalyze = { reanalyzeTarget = it },
+                onDeleteMeal = { deleteTarget = it },
+              )
+            }
 
-      SnackbarHost(
-        hostState = snackbarHostState,
-        modifier = Modifier.align(Alignment.BottomCenter),
+          RecordsMode.Month ->
+            HorizontalPager(state = monthPager, modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp)) { page ->
+              MonthView(
+                viewModel = rangeViewModel,
+                monthAnchor = Periods.addMonths(todayMonth, (page - MONTH_CENTER).toLong()),
+                today = today,
+                // 点某天：切回日视图并滚到那天
+                onPickDate = { date ->
+                  mode = RecordsMode.Day
+                  dayViewModel.jumpTo(date)
+                },
+              )
+            }
+        }
+
+
+    }
+  }
+
+  AnimatedVisibility(
+    visible = detailRecord != null,
+    enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+    exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+  ) {
+    detailRecord?.let { record ->
+      MealDetailDialog(
+        record = record,
+        baseUrl = baseUrl,
+        decisions = decisionsByDate[TimeFmt.dateOf(record.photoTime)].orEmpty(),
+        busy = busy,
+        onClose = dayViewModel::closeDetail,
+        onDeleteMeal = {
+          dayViewModel.delete(
+            record.assetId,
+            photoOnly = false,
+            onSuccess = rangeViewModel::invalidate,
+          )
+        },
+        onDeletePhoto = { assetId ->
+          dayViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
+        },
+        onReanalyze = { notes, done ->
+          dayViewModel.reanalyze(
+            record.assetId,
+            notes,
+            onSuccess = {
+              rangeViewModel.invalidate()
+              // 真正更新完才让详情关表单，失败时 notes 原样留在框里
+              done()
+            },
+          )
+        },
+        asPage = true,
       )
     }
   }
 
-  detailRecord?.let { detailRecord ->
-    MealDetailDialog(
-      record = detailRecord,
-      baseUrl = baseUrl,
-      decisions = decisionsByDate[TimeFmt.dateOf(detailRecord.photoTime)].orEmpty(),
-      busy = busy,
-      onClose = dayViewModel::closeDetail,
-      onDeleteMeal = {
-        dayViewModel.delete(
-          detailRecord.assetId,
-          photoOnly = false,
-          onSuccess = rangeViewModel::invalidate,
-        )
-      },
-      onDeletePhoto = { assetId ->
-        dayViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
-      },
-      onReanalyze = { notes, done ->
-        dayViewModel.reanalyze(
-          detailRecord.assetId,
-          notes,
-          onSuccess = {
-            rangeViewModel.invalidate()
-            // 真正更新完才让详情关表单，失败时 notes 原样留在框里
-            done()
-          },
-        )
-      },
+    SnackbarHost(
+      hostState = snackbarHostState,
+      modifier = Modifier.align(Alignment.BottomCenter),
     )
   }
 
