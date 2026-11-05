@@ -625,7 +625,11 @@ def api_manual_upload():
                        fallback)
 
     # ── Legacy Gemini single-photo analysis ──────────────────────────────
-    from src.calorie_analyzer import CalorieAnalyzer
+    from src.calorie_analyzer import (
+        CalorieAnalyzer,
+        is_failed_result,
+        is_non_food,
+    )
 
     analyzer = CalorieAnalyzer(
         os.getenv("GEMINI_API_KEY", ""),
@@ -634,9 +638,12 @@ def api_manual_upload():
     )
     result = analyzer.analyze(image_bytes)
     analyzer.close()
-
-    if result.get("meal") in ("not real food", "unknown"):
-        return jsonify({"error": "not food", "detail": result.get("meal", "")}), 422
+    if is_non_food(result):
+        return jsonify({"error": "not food", "detail": "not real food"}), 422
+    if is_failed_result(result):
+        # 分析失败≠不是食物：不能回 422，否则前端会把它当「非食物」丢掉，
+        # 也不能落库——以前这里会写一条 meal=unknown / 0 kcal 的空记录。
+        return jsonify({"error": "分析失败，请重试"}), 502
 
     record = {
         "asset_id": asset_id,
@@ -1150,7 +1157,9 @@ def api_reanalyze():
 
     updated = reanalyze_record(asset_id, notes, config)
     if updated is None:
-        return jsonify({"error": "image unavailable"}), 502
+        # 区分不了「图挂了」和「模型挂了」——两种情况都不该改写记录，
+        # 前者本来就 502，后者以前会假成功写入 0 kcal（2026-11-01 事故）。
+        return jsonify({"error": "重新分析失败，记录未改动，请重试"}), 502
 
     return jsonify({"ok": True, "record": updated})
 

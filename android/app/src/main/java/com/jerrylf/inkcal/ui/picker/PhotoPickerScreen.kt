@@ -48,7 +48,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -264,9 +263,8 @@ private fun DayHeader(day: AlbumDayDto) {
       fontWeight = FontWeight.SemiBold,
       modifier = Modifier.weight(1f),
     )
-    val selectable = day.photos.count { !it.classifiedNonFood }
     Text(
-      text = if (selectable == 0) "均不可选" else "$selectable 张可选",
+      text = "${day.photos.size} 张",
       style = MaterialTheme.typography.labelSmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -281,7 +279,9 @@ private fun PhotoCell(
   onToggle: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val disabled = photo.classifiedNonFood
+  // 曾被判非食物的照片照样可选：置灰会把 SigLIP2 误杀的补救通道关死。
+  // 只留左上角角标提示，是否真是食物交给 Luna/Gemini 复核。
+  val flagged = photo.classifiedNonFood
   Box(
     modifier =
       modifier
@@ -289,15 +289,14 @@ private fun PhotoCell(
         .aspectRatio(1f)
         .clip(RoundedCornerShape(6.dp))
         .background(MaterialTheme.colorScheme.surfaceVariant)
-        .then(if (disabled) Modifier else Modifier.clickable(onClick = onToggle))
+        .clickable(onClick = onToggle)
         .then(
           if (selected) {
             Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp))
           } else {
             Modifier
           }
-        )
-        .alpha(if (disabled) 0.35f else 1f),
+        ),
     contentAlignment = Alignment.Center,
   ) {
     AsyncImage(
@@ -331,13 +330,15 @@ private fun PhotoCell(
         Text("✓", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary)
       }
     }
-    if (disabled) {
+    if (flagged) {
       Text(
         text = "非食物",
         style = MaterialTheme.typography.labelSmall,
         color = Color.White,
         modifier =
-          Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+          Modifier.align(Alignment.TopStart)
+            .padding(4.dp)
+            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
             .padding(horizontal = 4.dp, vertical = 1.dp),
       )
     }

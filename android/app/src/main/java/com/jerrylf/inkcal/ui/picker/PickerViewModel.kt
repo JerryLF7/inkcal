@@ -104,9 +104,14 @@ class PickerViewModel(app: Application) : AndroidViewModel(app) {
     }
   }
 
-  /** 非食物照片不可选；到上限后不再接受新增（取消选中不受限），并提示一次。 */
+  /**
+   * 非食物照片**必须可选**：SigLIP2 会误杀真餐（2026-11-04 麦当劳套餐 0.286 < 0.35），
+   * 而「用户主动从相册选图」正是设计上唯一允许绕过本地过滤的补救通道——
+   * 选择页把它置灰就等于把补救通道关掉。只用角标提示这张曾被判非食物，
+   * 最终仍由 Luna/Gemini 二次判断（真非食物会返回 not_food）。
+   * 到上限后不再接受新增（取消选中不受限），并提示一次。
+   */
   fun toggle(photo: AlbumPhotoDto) {
-    if (photo.classifiedNonFood) return
     _state.update { current ->
       val selected = current.selected
       when {

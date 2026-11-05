@@ -10,7 +10,7 @@ import os
 import time
 from typing import Any
 
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 
 from src.env_file import raw_env
 from src.prompts.loader import get_analyze_prompt, get_reanalyze_prompt, get_analyze_text_prompt
@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 5
 RETRY_BACKOFF = 2  # seconds, doubles each retry
+# 单次请求超时。SDK 默认 600s，配合上面 6 次尝试，一张卡死的图能把 run 锁住一小时，
+# 期间 cron 每 10 分钟的那次全部被单实例锁挡掉。正常一餐约 50s（high 档），180s 留了 3 倍余量。
+REQUEST_TIMEOUT = 180
 
 # ── 推理强度（thinking budget）────────────────────────────────────────
 # 网关只认 OpenAI 的 `reasoning_effort`，其他形状——reasoning.effort、
@@ -73,10 +76,31 @@ def get_reasoning_effort() -> str:
 
 # Prompts live in src/prompts/*.md — see src/prompts/loader.py.
 
+# 失败与「不是食物」是两件不同的事，别混用：
+#   _empty_result() → {}（失败，调用方必须中止，绝不写库）
+#   meal="not real food" → 合法判定，跳过入库
+def is_non_food(result: dict | None) -> bool:
+    """Gemini 明确判定「这不是食物」——合法跳过，不是失败。"""
+    return bool(result) and str(result.get("meal", "")).strip().lower() == "not real food"
+
+
+def is_failed_result(result: dict | None) -> bool:
+    """分析没产出可用估算（API 报错 / JSON 解析失败 / meal 缺失）。
+
+    2026-11-01 事故：失败时 `_empty_result()` 曾返回一整套假数值
+    （meal="unknown"、calories=0、confidence="low"），而调用方写的是
+    `result.get("calories", primary["calories"])`——键存在，默认值永不生效，
+    于是一次重分析失败就把已有记录刷成 0 kcal。现在失败返回 `{}`，
+    并且统一用这个函数判断，别再看 meal == "unknown"。
+    """
+    if not result:
+        return True
+    return str(result.get("meal", "")).strip().lower() in ("", "unknown")
+
 
 class CalorieAnalyzer:
     def __init__(self, api_key: str, base_url: str | None = None, model: str = "gemini-3-flash-preview"):
-        client_kwargs = {"api_key": api_key}
+        client_kwargs = {"api_key": api_key, "timeout": REQUEST_TIMEOUT}
         if base_url:
             client_kwargs["base_url"] = base_url
         self.model = model
@@ -120,12 +144,16 @@ class CalorieAnalyzer:
     def _should_retry(self, e: Exception, attempt: int) -> bool:
         if attempt >= MAX_RETRIES:
             return False
+        # SDK 超时抛 APITimeoutError，文案是 "Request timed out."——不是 "timeout"，
+        # 只靠下面的字符串匹配会漏掉，一次卡死就等于静默丢结果（2026-10-27 实测）。
+        if isinstance(e, APITimeoutError):
+            return True
         msg = str(e).lower()
         return (
             "429" in msg or "503" in msg or "502" in msg or "504" in msg
             or "rate" in msg or "overloaded" in msg
             or "bad gateway" in msg or "gateway timeout" in msg
-            or "connection error" in msg or "timeout" in msg
+            or "connection error" in msg or "timeout" in msg or "timed out" in msg
         )
 
     def _parse_response(self, r: Any) -> dict[str, Any]:
@@ -268,15 +296,14 @@ class CalorieAnalyzer:
         return self._empty_result()
 
     def _empty_result(self) -> dict[str, Any]:
-        return {
-            "meal": "unknown",
-            "calories": 0,
-            "protein_g": 0,
-            "carbs_g": 0,
-            "fat_g": 0,
-            "confidence": "low",
-            "emoji": "",
-        }
+        """分析失败的哨兵值：**空字典**，不是一整套假数值。
+
+        以前这里返回 meal="unknown" + 全 0 的完整字典，调用方写
+        `result.get("x", 旧值)` 时默认值永远不生效，一次失败就把库里
+        正常记录覆盖成 0 kcal（2026-11-01 夜宵记录事故）。返回 {} 之后
+        `is_failed_result()` 为真、`.get()` 的默认值也真正生效。
+        """
+        return {}
 
     def close(self):
         pass

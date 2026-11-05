@@ -42,7 +42,7 @@ def analyze_asset(
     Error values: "already_processed", "download_failed", "not_food", "analysis_failed".
     """
     from src import db
-    from src.calorie_analyzer import CalorieAnalyzer
+    from src.calorie_analyzer import CalorieAnalyzer, is_failed_result, is_non_food
 
     # Race-condition guard
     if db.get_record_by_asset_id(asset_id):
@@ -72,12 +72,12 @@ def analyze_asset(
         if own:
             analyzer.close()
 
-    if result.get("meal") == "not real food":
+    if is_non_food(result):
         logger.info("Gemini rejected %s as non-food", asset_id[:8])
         return None, "not_food"
 
-    if result.get("meal") == "unknown":
-        logger.warning("Gemini analysis failed for %s (returned unknown)", asset_id[:8])
+    if is_failed_result(result):
+        logger.warning("Gemini analysis failed for %s (no usable estimate)", asset_id[:8])
         return None, "analysis_failed"
 
     # Build thumbnail URL for the record (unless caller provided one)
@@ -367,7 +367,7 @@ def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
     Returns the updated primary record dict, or None if unavailable.
     """
     from src import db
-    from src.calorie_analyzer import CalorieAnalyzer
+    from src.calorie_analyzer import CalorieAnalyzer, is_failed_result, is_non_food
 
     found = db.get_record_by_asset_id(asset_id)
     if not found:
@@ -416,6 +416,18 @@ def reanalyze_record(asset_id: str, notes: str, config: dict) -> dict | None:
 
     result = analyzer.reanalyze(images, current_result, notes)
     analyzer.close()
+
+    # 失败即中止：一次 API 抖动 / JSON 截断不能让已有记录掉进 0 kcal。
+    # 2026-11-01 夜宵记录就是被连续两次失败的重分析清空的——
+    # 那时 _empty_result() 返回 meal="unknown"+全 0，而下面的
+    # result.get("calories", primary["calories"]) 因为键存在拿不到默认值。
+    if is_non_food(result):
+        logger.error("Reanalyze rejected %s as non-food, keeping current values", root_id[:8])
+        return None
+    if is_failed_result(result):
+        logger.error("Reanalyze failed for %s (%r), keeping current values",
+                     root_id[:8], (result or {}).get("meal"))
+        return None
 
     # Preserve current primary values in history before overwriting
     db.append_reanalysis_history(root_id, {

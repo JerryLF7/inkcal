@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.calorie_analyzer import get_reasoning_effort
+from src.calorie_analyzer import get_reasoning_effort, is_failed_result, is_non_food
 
 logger = logging.getLogger("inkcal.agent_tools")
 
@@ -530,8 +530,10 @@ def add_record(args: dict, deps: dict) -> dict:
     )
 
     analysis = analyzer.analyze_text(description, user_calories=user_cal)
-    if not analysis or analysis.get("meal") == "not real food":
+    if is_non_food(analysis):
         return {"ok": False, "error": "未能识别为有效食物描述，未添加记录"}
+    if is_failed_result(analysis):
+        return {"ok": False, "error": "热量分析失败，未添加记录，请重试"}
 
     asset_id = f"manual-{now_hkt.strftime('%Y%m%d%H%M%S%f')}"
     record_data = {

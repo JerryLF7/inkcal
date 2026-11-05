@@ -102,7 +102,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `src/immich_client.py` / `src/photoprism_client.py` | 照片源客户端与时间解析 |
 | `src/food_detector.py` | SigLIP2 本地过滤（仅基础模型）；判定线由 `food_threshold()` / `grey_zone()` **每次调用现取**（读 `.env` 的 `FOOD_THRESHOLD`，默认 0.35），不是模块常量——改配置不用重启 |
 | `src/env_file.py` | 仓库根 `.env` 的直读解析（`raw_env`）。长驻进程靠它做到「改配置不重启」（`load_dotenv()` 只在启动时快照一次）；`food_detector.food_threshold()` 与 `calorie_analyzer.get_reasoning_effort()` 共用，测试用 `DOTENV_PATH` 隔离生产 `.env` |
-| `src/calorie_analyzer.py` | Gemini/OpenAI-compatible 视觉估算；推理强度由 `get_reasoning_effort()` 每次调用现取（读 `.env` 的 `GEMINI_REASONING_EFFORT`，默认 high），见 §7 |
+| `src/calorie_analyzer.py` | Gemini/OpenAI-compatible 视觉估算；推理强度由 `get_reasoning_effort()` 每次调用现取（读 `.env` 的 `GEMINI_REASONING_EFFORT`，默认 high），见 §7。单次请求超时 `REQUEST_TIMEOUT=180s`（SDK 默认 600s × 6 次尝试会把 run 锁一小时，期间 cron 全被单实例锁挡掉）；超时按可重试处理——`APITimeoutError` 的文案是 `Request timed out.`，只做 `"timeout" in msg` 匹配抓不到，等于静默丢结果 |
 | `src/prompts/` | 提示词模板 `analyze.md` / `reanalyze.md` / `analyze_text.md`，`loader.py` 只做 `read_text`（2026-09-30 起无用户覆盖层、无内联兜底，文件缺失直接报错；改提示词就改仓库里的 `.md`） |
 | `src/pipeline_ops.py` | CLI 和 Web 共用的强制分析/重新分析业务路径；`analyze_asset` 也是 cron 降级路径（`main._legacy_analyze_single`）的唯一实现，记录行组装统一走 `_build_record`（`main.append_log` 亦委托它），`analyzer=` 参数可复用 cron 的共享 Gemini 客户端 |
 | `src/resolver.py` | CLI 记录指代解析：`--ref` / `--id` / `--last` / `--meal + --date` |
@@ -149,7 +149,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 | `android/` | 原生 Android 客户端，**独立 Gradle 根**（AGP 9.0.1 / Kotlin 2.3.20 / Compose BOM 2026.03.01 / Gradle 9.1.0 / Navigation 3），与 `web/` 平级；不共享 Python 或 Vue 代码，只调 Flask API |
 | `docs/android-app-spec.md` | 客户端实现规格（API 契约、页面行为、验收清单）；改客户端前先读它，代码与文档冲突时以代码为准并回来改文档 |
 
-当前状态（0.24，2026-10-22）：**首期功能已全部完成**，当前在做 **M3 规范对齐工程**——**不是重写**：组件层本来就是 material3 组件（`NavigationBar` / `TopAppBar` / `Card` / `AlertDialog` / `ModalBottomSheet` / `SegmentedButton` / `PullToRefreshBox` / `DatePickerDialog`），动态取色已开，字体基本走 `Typography` 令牌；差距集中在**动效、导航层级语义、反馈层、令牌化与少数交互细节**。审计结论、8 个阶段、无障碍待办、**已复核撤回的建议**（别再提：设置页改 `ListItem`、选择照片页「返回键先退选择态」、加 `enableOnBackInvokedCallback`、把详情塞进 Nav3 栈靠 `predictivePopTransitionSpec` 手写跟手）以及平台事实（预测性返回 / 共享元素 / 动效令牌）都在 `docs/android-app-spec.md` §16——**改客户端前先读那一节**。已拍板前提：**只做深色界面，不做浅色**。
+当前状态（0.25，2026-11-04）：**首期功能已全部完成**，当前在做 **M3 规范对齐工程**——**不是重写**：组件层本来就是 material3 组件（`NavigationBar` / `TopAppBar` / `Card` / `AlertDialog` / `ModalBottomSheet` / `SegmentedButton` / `PullToRefreshBox` / `DatePickerDialog`），动态取色已开，字体基本走 `Typography` 令牌；差距集中在**动效、导航层级语义、反馈层、令牌化与少数交互细节**。审计结论、8 个阶段、无障碍待办、**已复核撤回的建议**（别再提：设置页改 `ListItem`、选择照片页「返回键先退选择态」、加 `enableOnBackInvokedCallback`、把详情塞进 Nav3 栈靠 `predictivePopTransitionSpec` 手写跟手）以及平台事实（预测性返回 / 共享元素 / 动效令牌）都在 `docs/android-app-spec.md` §16——**改客户端前先读那一节**。已拍板前提：**只做深色界面，不做浅色**。
 
 包名 `com.jerrylf.inkcal`；`domain/` 与 `data/` 共 16 个测试类、100 个 JVM 单测，`cd android && ./gradlew :app:testDebugUnitTest`。首期之外只剩 §8.8（分享入口、桌面小组件）。页面行为与逐版历史见 `docs/android-app-spec.md`（头部进度摘要、§8.x、§14 的逐项「进度」列）——客户端的权威记录在那边，本文不重复。有一条容易被「优化」掉的判据留在 §8.1：判断记录页「用户有没有滚离顶部」只能看 `isScrollInProgress` 期间的位移，直接读 `firstVisibleItemIndex` 会把 LazyColumn 的重排误判成用户翻页，于是永远不修。
 
@@ -160,6 +160,8 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 **不要把详情塞进 Nav3 栈、靠 `predictivePopTransitionSpec` 手写跟手**——0.18～0.23 六个版本都试过并已整条回滚（代码基线回到 0.17 重写）。四个硬伤：① Nav3 默认实现根本不读那个 `progress` 参数（反编译确认是 `scaleOut(0.7f)`，整页缩到 70%）；② 覆盖时容易写成 `tween(0)`，松手瞬间切换、返回动画直接消失（0.19 踩过）；③ spec 里拿不到手势触摸坐标，Telegram 那种以手指为缩放中心的跟手做不出来；④ 为了转场把它包进独立 `Dialog` 窗口时，手势打在浮层上、Nav3 收不到，预测性返回直接失效，还连带 Snackbar 被挡住（才衍生出 0.15 的「详情期间改走系统 Toast」补丁，0.24 已删除）。细节与完整教训见 `docs/android-app-spec.md` §16.4。Calo 页那条路径暂时仍是 `Dialog`（`asPage = false`），所以入口保留 `MealDetailDialog(asPage=…)` 两个分支，内容本体在 `MealDetailContent`。
 
 Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaffold 已把状态栏 inset 消化进 innerPadding，页面内嵌的 TopAppBar 必须显式 `windowInsets = WindowInsets(0, 0, 0, 0)`，否则状态栏高度被垫两次、标题与列表之间出现大段空白。全屏 Dialog（选择照片）不经 Scaffold padding，其 TopAppBar 保留默认 inset。
+
+**选择照片页的 `classified_non_food` 照片必须可选中，只加角标不置灰**（2026-11-04 修复）：SigLIP2 会误杀真餐（当晚麦当劳套餐照 0.286 < 0.35），而「用户主动从相册选图」是全系统唯一允许绕过本地过滤的补救通道，置灰等于把补救通道关死，用户只能去网页版救。真实非食物仍由 Luna/Gemini 二次判定返回 `not_food`。
 
 依赖版本的硬约束：AGP 9.0.1 的 compileSdk 上限是 36，**任何新增依赖都必须 `minCompileSdk <= 36`**，否则编译直接失败。已因此钉住 `okhttp = 5.4.0`（5.5.0 要 37）、`coil = 3.5.0`（3.6.x 要 37）。升级这类依赖前先确认不再受 compileSdk 限制，或同时升 AGP + compileSdk 到 37。
 
@@ -289,7 +291,7 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 - 已知口径：无 burn 数据的历史日期按**仅 BMR** 算，绿红判定偏严格属真实反映；手表历史数据回溯同步未做（需要时另议）。
 - **Cron 同步**：`0 8-23 * * *` 抓今天每小时增量；`0 1 * * *` 跑 `scripts/burn_sources/heytap_ui.py --yesterday` 回溯昨日终值锁定收口；两者都直写 `inkcal burn`，日志 `~/heytap-pull.log`（保留 `~/heytap-pull.py` 软链接兼容旧调用）。**这条链路会静默失败**：adb server 卡成 `unauthorized` 时每小时都报 `ERR: 首页拉不起来` 而没有任何通知（2026-10 断更 4 天无人察觉）——怀疑断更先看日志尾部；脚本里的 `ensure_adb()`（检测 → `adb kill-server` → 重连）就是为此加的，不要当冗余删掉（注意它重启的是整机 adb server，会打断当时正在用 adb 的其他任务）。库内 `daily_burn.updated_at` 存的是 **UTC**（`datetime('now')`），核对时间别当成 HKT。
 - **adb 串口不进仓库**：脚本从 `REDROID_SERIAL` 环境变量读（默认 `127.0.0.1:5555`），真实地址写在 crontab 行首的 `REDROID_SERIAL=host:port`。仓库是公开的，写死地址等于公开内网拓扑。注意 redroid 的 5555 只发布在 LAN 地址上（回环连不上），所以必须显式传值。
-- **redroid 资产全部在 `~/Docker/redroid/`**（compose 与 `.env`、`data/` 登录态与 adb_keys（`~/rd` 软链兼容）、`apk/`、`apktool-work/`、`scripts/`、`build/`），镜像 `redroid:14.0.0_heytap` 已 `docker commit` 固化。日常：`~/.local/bin/docker-compose -f ~/Docker/redroid/docker-compose.yml up -d` 之后**必须跑 `scripts/post-start.sh`**（binder 权限 + bind-ro 运行时伪装；compose 没有 post-start 钩子，漏跑则欢太健康重新弹 root 框）。详见该目录 `README.md`。
+- **redroid 资产全部在 `~/Docker/redroid/`**（compose 与 `.env`、`data/` 登录态与 adb_keys（`~/rd` 软链兼容）、`apk/`、`apktool-work/`、`scripts/`、`build/`），镜像 `redroid:14.0.0_heytap` 已 `docker commit` 固化。日常：`~/.local/bin/docker-compose -f ~/Docker/redroid/docker-compose.yml up -d` 之后**必须跑 `scripts/post-start.sh`**（binder 权限 + bind-ro 运行时伪装；compose 没有 post-start 钩子，漏跑则欢太健康重新弹 root 框）。该步骤现已由 `redroid-post-start.service` 在开机时自动执行；手动 restart 容器后需 `sudo systemctl restart redroid-post-start` 补一次。详见该目录 `README.md`；宿主机侧 binder 配置与 2026-10 整机卡死故障的完整复盘见 [`docs/incidents/2026-10-26-redroid-host-freeze.md`](./docs/incidents/2026-10-26-redroid-host-freeze.md)。
 
 ### 后续任务
 
@@ -381,6 +383,7 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 4. SigLIP2 对透明杯饮料、咖啡、奶茶等有漏检；“选择照片”是预期补救，不要删。**判定线默认 0.35**：2026-09-27 由 0.5 下调（基础模型对中餐/米饭类漏检严重，当晚晚餐照仅 0.436 被误杀并永久进 `classified_non_food`），标定依据是当时近两周 175 张拒收样本的 Gemini 真值标注。
    **2026-10-02 改成环境变量 `FOOD_THRESHOLD`（默认 0.35），且每次分类时现取**：实现是直接回读 `.env` 文件（不是只读 `os.environ`——长驻进程启动时 `load_dotenv()` 只快照一次，只读环境变量会需要重启）。注意分类**只在管线里跑**（`inkcal run`，cron 每 10 分钟一个全新进程），Web 路径不跑 SigLIP2，所以实际**生效延迟 = 下一次 cron（≤10 分钟）**。非法值回退默认并告警，避免把 `45` 当成 45 而静默判掉全部照片。回归：`scripts/test_food_threshold.py`。
    **2026-10-02 复核结论：不要往上调**。对 130 张重新打分（50 张漏放的非食物 + 80 张真食物，同一缩略图同一模型）：非食物中位数 **0.782**、真食物 **0.791**，两组几乎完全重叠，漏放样本里低于 0.35 的有 0 张、低于 0.5 的仅 2 张。调到 0.55 只能拦住 9/50，却要误杀 12/80 真餐。漏放的都是截图、自拍、菜单、毛绒玩具这类「食物相关但不是真餐」的图，模型确实给高分——靠 Luna/Gemini 的 skip 契约兜底才是有效路径（那 50 张全部被正确拦掉，没有一条垃圾记录进库，代价只是白跑一次调用）。真想减少噪音，杠杆在上游按「截图」过滤，不在阈值。
+   **误杀是双向的**：2026-11-04 一张正常的麦当劳套餐照（海陆双全堡 + 薯条 + 可乐，摆在绿色托盘上、垫纸印满食物插画）只打 **0.286**，被直接丢进 `classified_non_food`，同一张图重算缩略图与原图都是 0.28–0.29（不是取图问题）。这类误杀不可预测，也正是「选择照片必须真能绕过滤」的原因（见 §3 Android 那条约束）；灰区 `grey_zone()`（0.25–0.35）目前只记 `classifier_unsure` 事件，**不送 Gemini 复核**——若误杀频率上升，先考虑在灰区加下游复核，而不是动阈值。
 5. Gemini 会把截图、菜单、海报、包装等判成 `not real food`；这必须跳过，不能建记录。
 6. SQLite 使用 WAL、`check_same_thread=False`；服务运行时不得删除 `.db-wal` / `.db-shm`。
 6b. **变更 FTS 虚拟表结构（重建 `records_fts`、改触发器）必须先停 Flask server 再迁移**。2026-09-13 在 server 运行中重建 FTS5 虚拟表，导致跨表写入触发器损坏（UPDATE 触发 FTS 写入报 `database disk image is malformed`，表本身 quick_check 却 OK，热修无效）。最终走「干净导出业务表 → 全新 init_db → 导入 → 重建 FTS」无损恢复。加列（`ALTER TABLE ADD COLUMN`）类迁移可在线做，重建虚拟表/触发器不行。
@@ -422,3 +425,4 @@ venv/bin/python -m compileall -q main.py src web/server.py
 - [`docs/references/photoprism-api.md`](./docs/references/photoprism-api.md)：PhotoPrism API 备忘（改 `photoprism_client.py` 时查）。
 - [`docs/references/synology-photos-api.md`](./docs/references/synology-photos-api.md)：Synology Photos API 备忘（尚未接入，仅备查）。
 - [`docs/android-app-spec.md`](./docs/android-app-spec.md)：原生 Android 客户端实现文档（API 契约、页面行为、验收清单）。**首期功能已全部落地（0.11）**，各小节开头有状态标记、§14 有逐项进度、§15 是实施顺序。改客户端前先读它。
+- [`docs/incidents/2026-10-26-redroid-host-freeze.md`](./docs/incidents/2026-10-26-redroid-host-freeze.md)：redroid 拖死宿主机的故障复盘（binder 模块未加载 → Android init 触发 `reboot_on_failure` → 宿主卡死在 device_shutdown）。**动 redroid 相关配置或排查整机卡死前先读它**，里面有复发排查清单和「`--privileged` 下 cap-drop / seccomp 全部失效」的实测结论。
