@@ -32,6 +32,7 @@ function reset() {
 }
 
 function toggleSelect(photo, date) {
+  if (photo.processed) return;
   if (selected.has(photo.asset_id)) {
     selected.delete(photo.asset_id);
   } else {
@@ -221,18 +222,19 @@ reset();
                 v-for="photo in group.photos"
                 :key="photo.asset_id"
                 class="album-photo"
-                :class="{ selected: selected.has(photo.asset_id) }"
+                :class="{ selected: selected.has(photo.asset_id), locked: photo.processed }"
                 type="button"
-                :disabled="analyzing"
+                :disabled="analyzing || photo.processed"
                 :aria-pressed="selected.has(photo.asset_id)"
                 @click="toggleSelect(photo, group.date)"
               >
                 <img :src="`${API}/api/image?url=${encodeURIComponent(photo.thumbnail_url)}`" alt="">
+                <span v-if="photo.processed" class="locked-mask">已入库</span>
                 <span class="check" aria-hidden="true">✓</span>
               </button>
             </div>
           </template>
-          <div v-if="empty" class="state">没有未处理的照片</div>
+          <div v-if="empty" class="state">这段时间没有照片</div>
           <div v-else-if="loadingMore" class="state compact">加载中...</div>
         </div>
 
@@ -272,6 +274,9 @@ h2 { margin: 0; color: #e6e6e6; font-size: 16px; font-weight: 600; }
 .album-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .album-photo { position: relative; aspect-ratio: 1; padding: 0; overflow: hidden; background: #252525; border: 1px solid #303030; border-radius: 6px; cursor: pointer; }
 .album-photo:disabled { cursor: wait; opacity: .55; }
+.album-photo.locked { cursor: default; opacity: 1; }
+.album-photo.locked img { filter: brightness(.5); }
+.locked-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #e0e0e0; font-size: 12px; background: rgb(0 0 0 / 38%); pointer-events: none; }
 .album-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .album-photo.selected { border-color: #2a6eff; box-shadow: 0 0 0 2px #2a6eff; }
 .album-photo .check { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; display: none; align-items: center; justify-content: center; border-radius: 50%; background: #2a6eff; color: #fff; font-size: 11px; line-height: 1; }

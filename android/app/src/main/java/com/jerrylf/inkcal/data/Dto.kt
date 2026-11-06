@@ -190,7 +190,9 @@ data class AlbumPhotoDto(
   val thumbnailUrl: String = "",
   val photoTime: String = "",
   val source: String = "",
-  /** true 的照片必须置灰不可选：SigLIP2 已判为非食物。 */
+  /** true = 已入库（大模型判定为食物并建了记录）：灰色遮罩 + 「已入库」，不可选。 */
+  val processed: Boolean = false,
+  /** SigLIP2 曾判为「非食物」。仅作参考**不再置灰、不加角标**：误杀只能靠用户手选纠正。 */
   val classifiedNonFood: Boolean = false,
 )
 

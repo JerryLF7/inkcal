@@ -183,7 +183,7 @@ fun PhotoPickerScreen(
                 when {
                   state.atEnd ->
                     Text(
-                      "没有更多未处理的照片了",
+                      "没有更多照片了",
                       style = MaterialTheme.typography.labelSmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -279,9 +279,9 @@ private fun PhotoCell(
   onToggle: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  // 曾被判非食物的照片照样可选：置灰会把 SigLIP2 误杀的补救通道关死。
-  // 只留左上角角标提示，是否真是食物交给 Luna/Gemini 复核。
-  val flagged = photo.classifiedNonFood
+  // 相册展示全量照片：已入库的盖灰遮罩 + 「已入库」且不可点；其余（含被 SigLIP2
+  // 判成非食物的）一律正常可选——误杀只能靠用户手选纠正，不要再加任何门槛。
+  val locked = photo.processed
   Box(
     modifier =
       modifier
@@ -289,7 +289,7 @@ private fun PhotoCell(
         .aspectRatio(1f)
         .clip(RoundedCornerShape(6.dp))
         .background(MaterialTheme.colorScheme.surfaceVariant)
-        .clickable(onClick = onToggle)
+        .then(if (locked) Modifier else Modifier.clickable(onClick = onToggle))
         .then(
           if (selected) {
             Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp))
@@ -305,6 +305,14 @@ private fun PhotoCell(
       contentScale = ContentScale.Crop,
       modifier = Modifier.fillMaxSize(),
     )
+    if (locked) {
+      Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)))
+      Text(
+        text = "已入库",
+        style = MaterialTheme.typography.labelSmall,
+        color = Color.White,
+      )
+    }
     if (photo.photoTime.length >= 16) {
       Text(
         text = TimeFmt.clock(photo.photoTime),
@@ -329,18 +337,6 @@ private fun PhotoCell(
       ) {
         Text("✓", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary)
       }
-    }
-    if (flagged) {
-      Text(
-        text = "非食物",
-        style = MaterialTheme.typography.labelSmall,
-        color = Color.White,
-        modifier =
-          Modifier.align(Alignment.TopStart)
-            .padding(4.dp)
-            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
-            .padding(horizontal = 4.dp, vertical = 1.dp),
-      )
     }
   }
 }

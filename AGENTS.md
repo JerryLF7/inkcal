@@ -161,7 +161,7 @@ GitHub 推送后，Vercel 可能因发现 `web/ui/package.json` 与 Vite 自动�
 
 Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaffold 已把状态栏 inset 消化进 innerPadding，页面内嵌的 TopAppBar 必须显式 `windowInsets = WindowInsets(0, 0, 0, 0)`，否则状态栏高度被垫两次、标题与列表之间出现大段空白。全屏 Dialog（选择照片）不经 Scaffold padding，其 TopAppBar 保留默认 inset。
 
-**选择照片页的 `classified_non_food` 照片必须可选中，只加角标不置灰**（2026-11-04 修复）：SigLIP2 会误杀真餐（当晚麦当劳套餐照 0.286 < 0.35），而「用户主动从相册选图」是全系统唯一允许绕过本地过滤的补救通道，置灰等于把补救通道关死，用户只能去网页版救。真实非食物仍由 Luna/Gemini 二次判定返回 `not_food`。
+**选择照片页展示全量照片，只有「已入库」的置灰**（2026-11-05 拍板）：`/api/album-photos` 不再过滤已处理照片，改为带 `processed` 字段返回该日全部照片（`ignored_assets` 仍隐藏——那是用户主动删除的决定）；客户端给 `processed` 的格子盖遮罩标「已入库」且不可选，其余一律正常可选、**不加任何角标**（`classified_non_food` 只在数据里保留，不在 UI 呈现）。两条理由一起记：① 相册残缺会让用户分不清「这天只拍了三张」和「另外几张被系统吃掉」，也看不出某张到底处理过没有；② SigLIP2 会误杀真餐（2026-11-04 麦当劳套餐照 0.286 < 0.35），「用户主动从相册选图」是唯一允许绕过本地过滤的补救通道（§1 绝对边界），任何置灰或「非食物」标记都会把这条通道关死。真实非食物仍由 Luna/Gemini 二次判定返回 `not_food`。
 
 依赖版本的硬约束：AGP 9.0.1 的 compileSdk 上限是 36，**任何新增依赖都必须 `minCompileSdk <= 36`**，否则编译直接失败。已因此钉住 `okhttp = 5.4.0`（5.5.0 要 37）、`coil = 3.5.0`（3.6.x 要 37）。升级这类依赖前先确认不再受 compileSdk 限制，或同时升 AGP + compileSdk 到 37。
 
@@ -366,7 +366,7 @@ Inset 约定（2026-10-03 修复顶栏空白后拍板）：MainScaffold 的 Scaf
 
 ### 图片来源、上传与展示约定
 
-- 相册选择器查询所有启用源的未处理照片，按日期分页（7 天/页）；用户明确选择图片后不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。选择器支持**多选（≤10 张）**：批量 shape `{items: [...]}` 在 `AGENT_ENABLED=1` 时整批进一次 Luna harness（同餐状态延续合并为一组），harness 失败逐张降级；单条 shape 保持旧响应契约不变。
+- 相册选择器查询所有启用源的**当日全部照片**（已入库的带 `processed: true` 供 UI 置灰，只有 `ignored_assets` 不返回），按日期分页（7 天/页）；用户明确选择图片后不再跑 SigLIP2。`GET /api/album-photos` 与 `POST /api/analyze-album-photo` 是正式补漏路径。选择器支持**多选（≤10 张）**：批量 shape `{items: [...]}` 在 `AGENT_ENABLED=1` 时整批进一次 Luna harness（同餐状态延续合并为一组），harness 失败逐张降级；单条 shape 保持旧响应契约不变。
 - 记录读取 API（`/api/records`、`/api/today`、`/api/week`）返回**分组后**的数据：`records` 只含主记录，主记录带 `photos` 数组（组内全部照片，按拍摄时间排序，含 asset_id/thumbnail_url/photo_time/meal/calories）；`summary` 基于原始行求和（形态 A 从行 0 值、形态 B 从行自带数值，都正确）。聊天工具（get_records_in_range/search_meals）同样按组聚合。
 - 删除：`DELETE /api/record` 默认 `mode="meal"`（整餐级联：组内所有行删除 + 全部 asset_id 进 ignored_assets）；`mode="photo"` 仅移除单张照片，删主行时最早从行自动晋升。CLI `inkcal delete` 同理（`--photo` 仅删单张）。`inkcal merge <主> <从>` 把已有记录并入同餐组（默认从行清零=状态延续，`--keep` 保留数值=独立条目）。
 - 同餐组多图评估：同批多图或跨批次状态延续（吃前/吃后残局更新）时，均通过 `analyze_with_gemini`（回溯原图 + 联合对比）对全组照片进行综合摄入评估；形态 B（独立条目）由 `group_meals` 自动在组头累加各照片数值并拼接餐名与明细。

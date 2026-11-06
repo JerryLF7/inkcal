@@ -160,7 +160,7 @@ id、session_date、action（add/update/skip）、relation（new_meal/same_meal/
 | GET /api/decisions | date（必填） | date、decisions |
 | GET /api/burn | date（缺省今天） | date、burn |
 | GET /api/settings | 无 | chat_window、user_height、user_weight、user_birthdate、user_gender、bmr。身高/体重/出生日期未填时为空串，user_gender 默认返回 "male"（不会空）；bmr 为 null 表示未填齐。不要拿空串自己判断是否填齐——BMR 由服务端给 |
-| GET /api/album-photos | cursor（缺省今天）、days（1 到 30，默认 7） | dates（date + photos[asset_id、thumbnail_url、photo_time、source、classified_non_food]）、next_cursor |
+| GET /api/album-photos | cursor（缺省今天）、days（1 到 30，默认 7） | dates（date + photos[asset_id、thumbnail_url、photo_time、source、processed、classified_non_food]）、next_cursor。**返回该日全部照片**（含已入库的，带 `processed: true`）；只有被用户删除的 `ignored_assets` 不出现 |
 | GET /api/chat/sessions | 无 | sessions，新→旧 |
 | GET /api/chat/messages | session_id（缺省或无效=最新会话） | session_id、messages；一条会话都没有时 session_id 为 null、messages 为空 |
 | GET /api/image | url（URL 编码） | 图片字节 |
@@ -311,16 +311,17 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
 > **状态：✅ 已实现（0.8）**——相册多选与本地上传两条路径都在。
 两条来源都必须保留。
 
-(a) 相册未处理照片（GET /api/album-photos）：
+(a) 相册照片（GET /api/album-photos）：
 - 全屏页或 ModalBottomSheet。按日期分组的缩略图网格（LazyVerticalGrid + 日期 header），滚动到底自动加载更早 7 天：cursor 从今天开始，下一页用响应的 next_cursor；某页 dates 为空视为没有更多。
   - **首屏到达时必须把视口钉回顶部（0.16）**：加载中列表里只有「页脚」这一个 item，7 天的照片是**插到页脚前面**的，LazyColumn 会按 key 把页脚钉在视口顶部——打开选择照片就直接停在列表最底部，最新拍的照片反而在视口上方。故空 → 有内容时 `scrollToItem(0)`，与记录页同一个根因（§8.1 有完整机制说明）。
   - 实现用的是 `LazyColumn` + 每行 3 个 `chunked` 的固定列（不是 `LazyVerticalGrid`），效果等价；显式持有 `rememberLazyListState()` 就是为了上面这次钉回顶部。
-- 多选，最多 10 张；超出 Snackbar「一次最多选择 10 张」（错误态）。选中项保存 asset_id、source、date、thumbnail_url、photo_time。**classified_non_food 为 true 的照片必须可选**，只在左上角加「非食物」角标（曾被判非食物、供用户纠错），**不得置灰或禁用点击**——见下方约束。
+- 多选，最多 10 张；超出 Snackbar「一次最多选择 10 张」（错误态）。选中项保存 asset_id、source、date、thumbnail_url、photo_time。**`processed: true`（已入库）的格子盖灰色遮罩 + 居中「已入库」，不可点、不参与选择**；其余照片一律正常可选，**不给任何角标**（`classified_non_food` 只在数据里保留，不在 UI 体现）——见下方约束。
 - 底部操作条：已选 N 张、清除、「分析」。提交 POST /api/analyze-album-photo，体为 items 数组，每项含 asset_id、source、date、thumbnail_url、photo_time。进行中文案「正在分析 N 张照片（同一餐会合并为一条记录）…」，禁用重复提交，超时 300 s。
 - 响应：ok、results（asset_id、status、record、date）、summary（total、added、already_processed、not_food、failed）。Snackbar 拼接：「已添加 {added} 条记录」+「，{already_processed} 张已在记录中」+「，{not_food} 张非食物已跳过」+「，{failed} 张分析失败」；failed 大于 0 用错误态。完成后触发全局刷新；failed 小于选中数时清空选择并关闭页面。
 - 错误：too many items (max 10) → 「一次最多选择 10 张」；其他 → 「批量分析失败: {error}」。整批先校验，任一项缺 asset_id、source 或合法 date，整批 400。500 表示服务端缺 GEMINI_API_KEY。
 - 缩略图 thumbnail_url 是上游 URL，同样经 /api/image 代理显示。
-- **非食物照片不得置灰（2026-11-04 事故，别再改回去）**：SigLIP2 会误杀真餐——麦当劳海陆双全堡套餐照打 **0.286**，判定线 0.35，直接进 classified_non_food，`/api/album-photos` 也不会隐藏它（只带 `classified_non_food: true` 标记）。此时「用户主动从相册选图」是全系统**唯一**允许绕过本地过滤的补救通道（AGENTS.md 绝对边界：用户明确选择可绕过食物过滤）；本页把它置灰，等于让误杀永远无法纠正，用户只能去网页版补救。所以只加角标，不拦点击；真实非食物仍由 Luna/Gemini 二次判定返回 not_food（Snackbar「N 张非食物已跳过」）。
+- **相册显示全量照片（2026-11-05 拍板，别再退回「只显示未处理」）**：以前 `/api/album-photos` 把已入库和被 SigLIP2 判非食物的都过滤掉了，用户看到的是一个残缺的相册——分不清「这天只拍了三张」和「另外两张被系统吃掉了」，也就无从判断一张照片到底有没有被处理过。现在服务端返回该日全部照片，只用 `processed` 告诉客户端哪张已入库（遮罩 + 「已入库」，不可点）；`classified_non_food` 仍随响应返回但**不呈现**。
+- **非食物照片绝不能再被拦（2026-11-04 事故）**：SigLIP2 会误杀真餐——麦当劳海陆双全堡套餐照打 **0.286**，判定线 0.35，直接进 `classified_non_food`。此时「用户主动从相册选图」是全系统**唯一**允许绕过本地过滤的补救通道（AGENTS.md 绝对边界：用户明确选择可绕过食物过滤）；一旦置灰或加标记暗示「这不是食物」，就等于把补救通道关掉，用户只能去网页版救。所以这类照片在 UI 上与普通照片完全一致，是否真是食物交给 Luna/Gemini 二次判定（真非食物返回 not_food，Snackbar「N 张非食物已跳过」）。
 - 单项 shape（不带 items）仍被后端支持，App 只用批量 shape。
 - **选择态语义与返回键（0.17 复核结论，别再改回去）**：本页**点击缩略图就是选中**、没有独立的浏览态，所以 M3「选择模式」那套规则（长按进入、返回键先退出选择态、顶栏标题变成计数）**不适用**——返回键直接关闭页面是合理的，不要给返回键再加「先清空选择」这一层。真正缺的是两件事（已列入 §16 的无障碍待办）：① `PhotoCell` 只用 `Modifier.clickable`，TalkBack 会读成「按钮」而不是「可选项 + 是否选中」；② 选中态只有一圈 3dp 主色边框，属于单通道表达（M3 Selection 允许「对勾、复选框、surface 变色或组合」）。
 - 分析进行中禁止关闭页面（网页版 close 有 analyzing 保护）。

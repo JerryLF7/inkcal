@@ -680,7 +680,14 @@ def _resolve_sources() -> list[str]:
 
 @app.route("/api/album-photos")
 def api_album_photos():
-    """Return unprocessed album photos grouped by date, paginated.
+    """Return album photos grouped by date, paginated.
+
+    **Photo sources are shown in full**: every asset of the day is returned,
+    including the ones already recorded — those carry `processed: true` so the
+    client can grey them out and label them「已入库」instead of hiding them.
+    (Hiding them made the album look incomplete and left the user unsure
+    whether a shot had been picked up at all.) Deleted assets stay hidden:
+    `ignored_assets` is an explicit user decision, not a status to display.
 
     Query params:
       cursor -- YYYY-MM-DD start date (default: today)
@@ -722,7 +729,7 @@ def api_album_photos():
                     assets = client.get_date_assets(target_date)
                     for a in assets:
                         aid = a["id"]
-                        if aid in processed or aid in ignored:
+                        if aid in ignored:
                             continue
                         exif = a.get("exifInfo", {})
                         raw_photo_time = exif.get("dateTimeOriginal", "")
@@ -733,6 +740,7 @@ def api_album_photos():
                             "thumbnail_url": client.get_thumbnail_url(aid),
                             "photo_time": photo_time,
                             "source": "immich",
+                            "processed": aid in processed,
                             "classified_non_food": aid in classified_non_food,
                         })
                     client.close()
@@ -749,13 +757,14 @@ def api_album_photos():
                     assets = client.get_date_assets(target_date)
                     for a in assets:
                         aid = a["id"]
-                        if aid in processed or aid in ignored:
+                        if aid in ignored:
                             continue
                         day_photos.append({
                             "asset_id": aid,
                             "thumbnail_url": client.get_thumbnail_url(a["hash"], size="tile_500"),
                             "photo_time": a["photo_time"],
                             "source": "photoprism",
+                            "processed": aid in processed,
                             "classified_non_food": aid in classified_non_food,
                         })
                     client.close()
