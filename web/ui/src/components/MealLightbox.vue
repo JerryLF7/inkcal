@@ -343,7 +343,6 @@ async function refreshGroup(promoted, successMsg) {
           <div v-if="decisionOpen" class="ai-body">
             <div v-for="d in decisions" :key="d.id" class="ai-item">
               <div class="ai-head">{{ decisionLabel(d) }}</div>
-              <div v-if="d.reasoning" class="ai-reasoning">{{ d.reasoning }}</div>
               <div v-if="d.prompt_for_gemini" class="ai-prompt">
                 <span class="ai-prompt-label">给 Gemini 的提示词</span>
                 {{ d.prompt_for_gemini }}
@@ -490,7 +489,6 @@ async function refreshGroup(promoted, successMsg) {
 }
 .ai-item + .ai-item { margin-top: 10px; padding-top: 10px; border-top: 1px solid #242424; }
 .ai-head { font-size: 12px; color: #2a6eff; margin-bottom: 4px; }
-.ai-reasoning { font-size: 12px; color: #bbb; line-height: 1.6; white-space: pre-wrap; }
 .ai-prompt { font-size: 11px; color: #777; line-height: 1.6; margin-top: 6px; white-space: pre-wrap; }
 .ai-prompt-label {
   display: block; font-size: 10px; color: #555; margin-bottom: 2px;

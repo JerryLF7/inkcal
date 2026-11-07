@@ -606,9 +606,6 @@ private fun DecisionBlock(decisions: List<DecisionDto>) {
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
           )
-          if (decision.reasoning.isNotBlank()) {
-            Text(text = decision.reasoning, style = MaterialTheme.typography.bodySmall)
-          }
           decision.promptForGemini?.takeIf { it.isNotBlank() }?.let { prompt ->
             Text(
               text = "给 Gemini 的提示词",
