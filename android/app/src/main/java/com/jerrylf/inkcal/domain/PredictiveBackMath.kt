@@ -29,44 +29,60 @@ data class AospBackVisuals(
 /**
  * AOSP `CrossActivityBackAnimation`（Android 14–16 WM Shell）的两阶段纯几何计算。
  *
- * 严格区分两个阶段，不再混进单条时间轴：
+ * 严格区分两个阶段，并且**进退场动画一律输入线性时间进度 `rawTimeProgress ∈ [0, 1]`**，
+ * 在内部把「位移/缩放的缓动」和「透明度的淡出窗口」分开计算：
+ * - **绝不可**把已经过 `CubicBezierEasing(0, 0, 0, 1)` 缓动的进度再除以 `0.45` 算 alpha——
+ *   该曲线在 `t=0` 处斜率为无穷大，前 32ms 就冲过 0.48，导致松手 2 帧内直接闪没（0.28 踩过）。
+ *
+ * 两阶段模型：
  * 1. **跟手预览期（Pre-commit）**：前景保持完全不透明（`fgAlpha = 1f`），缩放 1.00 → 0.90，
  *    朝手势方向轻位移直至对侧留出 8dp 边距，同时带阻尼跟随纵向 `touchDeltaY`，裁出 28dp 圆角；
  *    底页带轻微视差与暗化遮罩露出。
- * 2. **松手提交期（Post-commit）**：从松手瞬间的精确快照接力，沿同一 `edge` 方向再滑出 48dp
- *    并在前 45% 时长内快速淡出；底页平滑归位至 `scale = 1f / translationX = 0f`，遮罩淡至 0。
+ * 2. **松手提交期（Post-commit）**：从松手瞬间的精确快照接力，沿同一 `edge` 方向平滑再滑出 96dp
+ *    并略微继续缩小；前景在前 12% 线性时间保持不透明以看清离手运动，随后在 12%–72% 线性时间
+ *    内平滑淡出；底页同步平滑归位至 `scale = 1f / translationX = 0f`，遮罩淡至 0。
  */
 object PredictiveBackMath {
 
   const val ENTER_DURATION_MS = 300
-  const val COMMIT_DURATION_MS = 280
+  const val COMMIT_DURATION_MS = 320
 
   const val MIN_FG_SCALE = 0.90f
-  const val COMMIT_END_FG_SCALE = 0.88f
+  const val COMMIT_END_FG_SCALE = 0.84f
   const val OPPOSITE_MARGIN_DP = 8f
   const val MAX_VERTICAL_SHIFT_DP = 36f
-  const val COMMIT_EXTRA_SHIFT_DP = 48f
-  const val ENTER_SHIFT_DP = 48f
+  const val COMMIT_EXTRA_SHIFT_DP = 96f
+  const val ENTER_SHIFT_DP = 56f
   const val BG_PARALLAX_SHIFT_DP = 28f
   const val BG_MIN_SCALE = 0.97f
   const val MAX_CORNER_DP = 28f
   const val MAX_SCRIM_ALPHA = 0.36f
-  const val ENTER_FADE_END = 0.35f
-  const val COMMIT_FADE_END = 0.45f
+
+  /** 进场淡入在 0%–45% 线性时间内完成（约 135ms）。 */
+  const val ENTER_FADE_END = 0.45f
+
+  /** 提交退场淡出窗口：12%–72% 线性时间（320ms 中约 38ms→230ms，避开离手瞬间闪没）。 */
+  const val COMMIT_FADE_START = 0.12f
+  const val COMMIT_FADE_END = 0.72f
   const val CORNER_RAMP_END = 0.25f
 
-  /** 推进进入（点击卡片进详情）：前景从右侧 48dp 轻滑并快速淡入，底页轻微后退。 */
-  fun enter(progress: Float, density: Float): AospBackVisuals {
-    val t = progress.coerceIn(0f, 1f)
+  /**
+   * 推进进入（点击卡片进详情）。
+   * [rawTimeProgress] 必须为线性时间进度 `0f..1f`（由 `LinearEasing` 驱动）。
+   */
+  fun enter(rawTimeProgress: Float, density: Float): AospBackVisuals {
+    val raw = rawTimeProgress.coerceIn(0f, 1f)
+    val motion = easeOutCubic(raw)
+    val fgAlpha = smoothstep(raw / ENTER_FADE_END)
     return AospBackVisuals(
-      fgScale = lerp(0.96f, 1f, t),
-      fgTranslationX = (1f - t) * ENTER_SHIFT_DP * density,
+      fgScale = lerp(0.95f, 1f, motion),
+      fgTranslationX = (1f - motion) * ENTER_SHIFT_DP * density,
       fgTranslationY = 0f,
-      fgAlpha = (t / ENTER_FADE_END).coerceIn(0f, 1f),
+      fgAlpha = fgAlpha,
       fgCornerRadiusDp = 0f,
-      bgScale = lerp(1f, BG_MIN_SCALE, t),
-      bgTranslationX = -t * BG_PARALLAX_SHIFT_DP * density,
-      scrimAlpha = MAX_SCRIM_ALPHA * t,
+      bgScale = lerp(1f, BG_MIN_SCALE, motion),
+      bgTranslationX = -motion * BG_PARALLAX_SHIFT_DP * density,
+      scrimAlpha = MAX_SCRIM_ALPHA * motion,
     )
   }
 
@@ -126,40 +142,52 @@ object PredictiveBackMath {
   /**
    * 阶段二：松手提交退场（Post-commit）。
    *
-   * 从松手瞬间冻结的 [snapshot] 无缝接力：前景继续朝同一 [edge] 方向滑出 48dp 并快速淡出，
-   * 底页平滑滑回原点且缩放归 1，遮罩淡至 0。点击返回按钮或外部关闭时，以 `progress = 0` 的快照进入此阶段。
+   * [rawTimeProgress] 必须为**线性**时间进度 `0f..1f`（由 `LinearEasing` 驱动）：
+   * - 位移、缩放与底页归位走 `easeOutCubic(raw)`（有限初速，不瞬移）；
+   * - 前景淡出走独立线性时间窗口 `[COMMIT_FADE_START, COMMIT_FADE_END]`，保证离手后能清楚看见
+   *   卡片顺着滑动方向滑出并柔和消隐，而不是 2 帧内闪没。
    */
   fun postCommit(
-    commitProgress: Float,
+    rawTimeProgress: Float,
     snapshot: AospBackVisuals,
     edge: BackSwipeEdge,
     density: Float,
   ): AospBackVisuals {
-    val t = commitProgress.coerceIn(0f, 1f)
+    val raw = rawTimeProgress.coerceIn(0f, 1f)
+    val motion = easeOutCubic(raw)
     val dir = directionFor(edge)
     val endScale = minOf(snapshot.fgScale, COMMIT_END_FG_SCALE)
-    val fgAlpha = snapshot.fgAlpha * (1f - t / COMMIT_FADE_END).coerceIn(0f, 1f)
+
+    val fadeFraction = (raw - COMMIT_FADE_START) / (COMMIT_FADE_END - COMMIT_FADE_START)
+    val fgAlpha = snapshot.fgAlpha * (1f - smoothstep(fadeFraction))
+
     val fgCornerRadiusDp =
-      if (snapshot.fgCornerRadiusDp > 0f) {
-        lerp(snapshot.fgCornerRadiusDp, MAX_CORNER_DP, (t * 2f).coerceIn(0f, 1f))
-      } else {
-        MAX_CORNER_DP * (t * 2f).coerceIn(0f, 1f)
-      }
+      lerp(snapshot.fgCornerRadiusDp, MAX_CORNER_DP, (raw * 3f).coerceIn(0f, 1f))
 
     return AospBackVisuals(
-      fgScale = lerp(snapshot.fgScale, endScale, t),
-      fgTranslationX = snapshot.fgTranslationX + dir * COMMIT_EXTRA_SHIFT_DP * density * t,
+      fgScale = lerp(snapshot.fgScale, endScale, motion),
+      fgTranslationX = snapshot.fgTranslationX + dir * COMMIT_EXTRA_SHIFT_DP * density * motion,
       fgTranslationY = snapshot.fgTranslationY,
       fgAlpha = fgAlpha,
       fgCornerRadiusDp = fgCornerRadiusDp,
-      bgScale = lerp(snapshot.bgScale, 1f, t),
-      bgTranslationX = lerp(snapshot.bgTranslationX, 0f, t),
-      scrimAlpha = lerp(snapshot.scrimAlpha, 0f, t),
+      bgScale = lerp(snapshot.bgScale, 1f, motion),
+      bgTranslationX = lerp(snapshot.bgTranslationX, 0f, motion),
+      scrimAlpha = lerp(snapshot.scrimAlpha, 0f, motion),
     )
   }
 
   private fun directionFor(edge: BackSwipeEdge): Float =
     if (edge == BackSwipeEdge.LEFT) 1f else -1f
+
+  private fun easeOutCubic(x: Float): Float {
+    val inv = 1f - x.coerceIn(0f, 1f)
+    return 1f - inv * inv * inv
+  }
+
+  private fun smoothstep(x: Float): Float {
+    val c = x.coerceIn(0f, 1f)
+    return c * c * (3f - 2f * c)
+  }
 
   private fun lerp(start: Float, stop: Float, fraction: Float): Float =
     start + (stop - start) * fraction

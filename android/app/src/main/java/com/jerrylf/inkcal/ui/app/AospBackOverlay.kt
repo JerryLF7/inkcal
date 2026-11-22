@@ -3,7 +3,7 @@ package com.jerrylf.inkcal.ui.app
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -36,8 +36,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
-/** AOSP `STANDARD_DECELERATE` 曲线，与 `CrossActivityBackAnimation` 一致。 */
-private val StandardDecelerate = CubicBezierEasing(0f, 0f, 0f, 1f)
 private val MaxRoundedShape = RoundedCornerShape(PredictiveBackMath.MAX_CORNER_DP.dp)
 
 /**
@@ -163,7 +161,8 @@ class AospDetailOverlayState(private val scope: CoroutineScope) {
           animationSpec =
             tween(
               durationMillis = PredictiveBackMath.ENTER_DURATION_MS,
-              easing = StandardDecelerate,
+              // 必须用线性时间进度：缓动曲线与透明度窗口由 PredictiveBackMath 分别计算
+              easing = LinearEasing,
             ),
         )
         if (phase == OverlayPhase.ENTERING) {
@@ -240,7 +239,8 @@ class AospDetailOverlayState(private val scope: CoroutineScope) {
           animationSpec =
             tween(
               durationMillis = PredictiveBackMath.COMMIT_DURATION_MS,
-              easing = StandardDecelerate,
+              // 必须用线性时间进度：0.28 用 StandardDecelerate 喂给 alpha 阈值导致 29ms 内闪没
+              easing = LinearEasing,
             ),
         )
         backProgress.snapTo(0f)
@@ -306,7 +306,7 @@ class AospDetailOverlayState(private val scope: CoroutineScope) {
         )
       OverlayPhase.CLOSING ->
         PredictiveBackMath.postCommit(
-          commitProgress = commitProgress.value,
+          rawTimeProgress = commitProgress.value,
           snapshot = commitSnapshot,
           edge = swipeEdge,
           density = layerDensity,

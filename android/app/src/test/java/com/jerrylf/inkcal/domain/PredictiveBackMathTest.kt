@@ -75,13 +75,24 @@ class PredictiveBackMathTest {
   }
 
   @Test
-  fun `postCommit fades foreground rapidly before halfway while background finishes smoothly`() {
+  fun `postCommit stays visible during early release and fades smoothly across middle frames`() {
     val snapshot =
       PredictiveBackMath.preCommit(0.5f, BackSwipeEdge.LEFT, 0f, widthPx, heightPx, density)
-    val mid = PredictiveBackMath.postCommit(0.5f, snapshot, BackSwipeEdge.LEFT, density)
-    assertEquals(0f, mid.fgAlpha, 1e-4f)
-    assertTrue("background should still be settling at 50%", mid.bgTranslationX < 0f)
-    assertTrue("scrim should still be fading at 50%", mid.scrimAlpha > 0f)
+
+    // 约 38ms（12% 线性时间）时仍在加速滑出，前景必须保持完全可见，绝不 2 帧闪没（0.28 回归护栏）
+    val early = PredictiveBackMath.postCommit(0.12f, snapshot, BackSwipeEdge.LEFT, density)
+    assertEquals(1f, early.fgAlpha, 1e-4f)
+    assertTrue("card should already be gliding outward", early.fgTranslationX > snapshot.fgTranslationX)
+
+    // 约 128ms（40% 线性时间）时处于柔和半透明过渡区
+    val mid = PredictiveBackMath.postCommit(0.40f, snapshot, BackSwipeEdge.LEFT, density)
+    assertTrue("mid-exit alpha should be visibly transitioning (was ${mid.fgAlpha})", mid.fgAlpha in 0.35f..0.70f)
+
+    // 约 240ms（75% 线性时间）后前景完全淡出，底页仍在平滑收尾
+    val late = PredictiveBackMath.postCommit(0.75f, snapshot, BackSwipeEdge.LEFT, density)
+    assertEquals(0f, late.fgAlpha, 1e-4f)
+    assertTrue("background should still be finishing settle", late.bgTranslationX < 0f)
+    assertTrue("scrim should still be finishing fade", late.scrimAlpha > 0f)
   }
 
   @Test

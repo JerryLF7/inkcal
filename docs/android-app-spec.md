@@ -4,6 +4,8 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
+> **实现进度（0.29，2026-11-23）**：**修复 0.28 预测性返回松手瞬间消失的曲线 bug**。0.28 用 `CubicBezierEasing(0, 0, 0, 1)` 驱动 `commitProgress` 又把缓动后的值直接除以 `0.45` 算前景 alpha，该曲线在 `t=0` 处斜率无穷大、前 32ms（仅 2 帧）就冲过 0.48 导致前景 alpha 瞬间归零。现改为 `LinearEasing` 驱动线性时间进度，在 `PredictiveBackMath` 内部分离「位移/缩放的 `easeOutCubic` 缓动（滑出 96dp）」与「前景透明度的独立线性淡出窗口（12%–72% 线性时间，约 38ms→230ms）」，并补上防 2 帧闪没单测。
+>
 > **实现进度（0.28，2026-11-23）**：**按 AOSP `CrossActivityBackAnimation` 两阶段模型重构详情页预测性返回**。详情覆盖层提升至 `MainScaffold` 顶层（`ui/app/AospBackOverlay.kt`，压过底部 `NavigationBar` 并延伸至状态栏/导航栏下方），统一承接记录页与 Calo 聊天页两个入口（移除 `Dialog` 兜底）；纯几何计算抽离到 `domain/PredictiveBackMath.kt`（补 6 个 JVM 单测，共 17 类 106 例）。① 跟手期前景保持完全不透明、缩放 1.00→0.90、对侧留 8dp 边距、带阻尼跟随 `touchY`、动态 28dp 圆角、底页带暗化遮罩与视差露出；② 松手提交期从当前形变快照无缝接力，沿同一 `swipeEdge` 方向继续滑出 48dp 并快速淡出，动画彻底结束后才卸载（修掉 0.24 在 `AnimatedVisibility` 内写 `detailRecord?.let` 导致的松手闪没）；③ 取消弹回与提交动画改跑在外部 `CoroutineScope` 上（修掉 `ComposePredictiveBackHandler.onBackCancelled()` 取消 `activeJob` 导致的弹回失效）；④ 全部变换在 `graphicsLayer {}` 内部零重组读取。见 §8.4 / §16.1 / §16.4。
 >
 > **实现进度（0.26，2026-11-05）**：**相册改为显示该日全部照片**。原先 `/api/album-photos` 把已入库和被 SigLIP2 判非食物的都过滤掉，用户看到的是残缺相册——分不清「这天只拍了三张」和「另外几张被系统吃掉了」。现在服务端返回全量并带 `processed` 字段，客户端给已入库的盖灰色遮罩 + 「已入库」（不可选），其余照片一律正常可选；`classified_non_food` 仍在数据里返回但**不在 UI 呈现**（0.25 加过的「非食物」角标已删除）。理由写在 §8.5(a)。
@@ -307,7 +309,7 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 详情已提升为 `MainScaffold` 顶层的同窗口全屏覆盖层（`ui/app/AospBackOverlay.kt`），**压在 `Scaffold` 与底部 `NavigationBar` 之上、`SnackbarHost` 之下**，统一承接「记录页」与「Calo 聊天页」两个入口（不再使用 `Dialog` 窗口）。返回箭头位于顶栏左侧，内容本体 `MealDetailContent` 自行处理 `statusBarsPadding()` / `navigationBarsPadding()` / `imePadding()`。
   - 纯几何计算抽离到 `domain/PredictiveBackMath.kt`（含 6 个单测），严格分两阶段，全部在 `graphicsLayer {}` 内部零重组读取：
     1. **阶段一（Pre-commit 跟手预览）**：前景始终 `alpha = 1f` 不提前淡出；缩放 `1.00 → 0.90`；按 `swipeEdge` 朝反侧轻位移至对侧留 `8dp` 边距；带阻尼跟随纵向 `touchDeltaY`（上限 `36dp`）；动态裁出 `28dp` 圆角；底页 `MainScaffold` 带暗化遮罩（`0.36 → 0.20`）与 `28dp` 轻微视差露出。
-    2. **阶段二（Post-commit 松手提交 / 点击返回箭头 / 外部删除关闭）**：冻结当前精确形变快照，沿同一 `swipeEdge` 方向再滑出 `48dp` 并在前 45% 时长内快速淡出（`280ms`，`StandardDecelerate`）；底页平滑归位至 `scale = 1f / translationX = 0f`、遮罩淡至 `0`。退场动画期间持续保留 `retainedSlot`，动画彻底结束后才通知 ViewModel 清锚点并卸载，彻底消除 0.24 中 `AnimatedVisibility` + `detailRecord?.let` 导致的松手闪没。
+    2. **阶段二（Post-commit 松手提交 / 点击返回箭头 / 外部删除关闭）**：由 `LinearEasing` 驱动 320ms 线性时间进度，冻结当前精确形变快照后分轨计算——位移/缩放用 `easeOutCubic` 沿同一 `swipeEdge` 方向再滑出 `96dp`（绝不可把 `CubicBezierEasing(0,0,0,1)` 缓动后的值直接除以阈值算 alpha，0.28 因此在 29ms / 2 帧内闪没）；前景透明度在前 12% 线性时间保持不透明、在 12%–72%（约 38ms→230ms）平滑淡出；底页同步归位至 `scale = 1f / translationX = 0f`、遮罩淡至 `0`。退场动画期间持续保留 `retainedSlot`，动画彻底结束后才通知 ViewModel 清锚点并卸载。
   - **手势取消**：`ComposePredictiveBackHandler.onBackCancelled()` 会取消自身的 `activeJob`，因此弹簧弹回必须在外部 `CoroutineScope` 上启动，绝不能在 `catch (CancellationException)` 中直接挂起 `animateTo`（否则会被立刻再次取消）。
   - 系统返回键（传统三键导航）与手势松手走同一条 `requestDismiss` 阶段二退场。
 
