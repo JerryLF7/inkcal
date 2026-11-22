@@ -8,9 +8,7 @@ import com.jerrylf.inkcal.data.ChatMessageDto
 import com.jerrylf.inkcal.data.ChatSessionDto
 import com.jerrylf.inkcal.data.ErrorDto
 import com.jerrylf.inkcal.data.ApiFactory
-import com.jerrylf.inkcal.data.RecordDto
 import com.jerrylf.inkcal.domain.ChatTools
-import com.jerrylf.inkcal.domain.TimeFmt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -241,76 +239,4 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   private fun friendly(e: Exception) = e.message ?: e.javaClass.simpleName
-
-  // ── 聊天里的餐卡 → §8.4 详情 ───────────────────────────────────
-
-  private val _detailRecord = MutableStateFlow<RecordDto?>(null)
-  val detailRecord: StateFlow<RecordDto?> = _detailRecord.asStateFlow()
-
-  private val _busy = MutableStateFlow(false)
-  val busy: StateFlow<Boolean> = _busy.asStateFlow()
-
-  fun openDetail(record: RecordDto) {
-    _detailRecord.value = record
-  }
-
-  fun closeDetail() {
-    _detailRecord.value = null
-  }
-
-  /**
-   * 详情里的删除。走的是和记录页同一条业务路径（`DELETE /api/record`）。
-   *
-   * 单张移除后**不能直接关详情**：删的是主行时最早从行会晋升，这一组还在
-   * （spec §8.4 的 refreshGroup）。这里用 promoted（没晋升就是原 asset_id）重拉
-   * 当天分组，按锚点找；找不到才关。
-   */
-  fun deleteFromDetail(assetId: String, photoOnly: Boolean) {
-    val current = _detailRecord.value ?: return
-    if (_busy.value) return
-    viewModelScope.launch {
-      _busy.value = true
-      try {
-        val resp = repo.deleteRecord(assetId, if (photoOnly) "photo" else "meal")
-        if (photoOnly) {
-          val anchor = resp.promoted ?: assetId
-          val group = runCatching { repo.recordsOfDay(TimeFmt.dateOf(current.photoTime)) }.getOrNull()
-            ?.records
-            ?.firstOrNull { it.assetId == anchor || it.photos.any { p -> p.assetId == anchor } }
-          _detailRecord.value = group
-          _state.update {
-            it.copy(
-              error =
-                if (group == null) "已移除，该餐没有剩余照片"
-                else "已移除照片，记录已更新"
-            )
-          }
-        } else {
-          _detailRecord.value = null
-          _state.update { it.copy(error = "已删除记录") }
-        }
-        container.dataSignal.bump()
-      } catch (e: Exception) {
-        _state.update { it.copy(error = "删除失败：${messageFor(e)}") }
-      }
-      _busy.value = false
-    }
-  }
-
-  fun reanalyzeFromDetail(assetId: String, notes: String, onSuccess: () -> Unit = {}) {
-    if (_busy.value) return
-    viewModelScope.launch {
-      _busy.value = true
-      try {
-        repo.reanalyze(assetId, notes)
-        _detailRecord.value = null
-        container.dataSignal.bump()
-        _state.update { it.copy(error = "已重新分析") }
-        onSuccess()
-      } catch (e: Exception) {
-        _state.update { it.copy(error = "重新分析失败：${messageFor(e)}") }
-      }
-      _busy.value = false
-    }
-  }
 }

@@ -71,10 +71,6 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
     container.settingsStore.baseUrl
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
-  /** 详情页打开的是哪一组（主行 asset_id）；null 表示没打开。 */
-  private val _detailAnchor = MutableStateFlow<String?>(null)
-  val detailAnchor: StateFlow<String?> = _detailAnchor.asStateFlow()
-
   /**
    * 决策按日期缓存。卡片的 🤖 角标与详情的决策块共用这一份。
    *
@@ -170,12 +166,7 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
     }
   }
 
-  // ── 详情页 ─────────────────────────────────────────────────────
-
-  fun openDetail(record: RecordDto) {
-    _detailAnchor.value = record.assetId
-    ensureDecisions(TimeFmt.dateOf(record.photoTime))
-  }
+  // ── 决策缓存与长按菜单写操作 ────────────────────────────────────
 
   /** 取某天的 Luna 决策，每个日期只请求一次；失败就允许下次重试。 */
   fun ensureDecisions(date: String) {
@@ -185,10 +176,6 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
         .onSuccess { list -> _decisionsByDate.update { it + (date to list) } }
         .onFailure { decisionsRequested.remove(date) }
     }
-  }
-
-  fun closeDetail() {
-    _detailAnchor.value = null
   }
 
   /**
@@ -240,13 +227,10 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
         val resp = repo.deleteRecord(assetId, if (photoOnly) "photo" else "meal")
         if (photoOnly) {
           val promoted = resp.promoted
-          // 删的是主行且最早的从行晋升：详情改锚到新主行，别让它指着一个不存在的 asset
-          if (promoted != null) _detailAnchor.value = promoted
           _toast.value =
             if (promoted != null) "已移除主照片，这餐数值需要重新估算（可点「重新分析」）"
             else "已移除照片，记录已更新"
         } else {
-          _detailAnchor.value = null
           _toast.value = "已删除整餐，照片不会再被同步"
         }
         reloadAll(manual = false)

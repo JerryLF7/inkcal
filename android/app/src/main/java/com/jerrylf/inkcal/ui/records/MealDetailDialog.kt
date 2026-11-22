@@ -93,10 +93,8 @@ private fun MacroText(p: Double, c: Double, f: Double, style: TextStyle) {
 /**
  * 餐卡详情页内容本体，对应 docs/android-app-spec.md §8.4。
  *
- * 由顶层 `AospDetailOverlay`（位于 `MainScaffold` 中、压过底部导航栏）统一承载：
- * - 它渲染的数据直接来自列表/聊天状态，删除或重分析后自动原地更新；
- * - 预测性返回的两阶段动画由外层 `AospDetailOverlay` 零重组驱动，本组件只管内容展示与交互；
- * - 外层全屏覆盖窗口（edge-to-edge），因此这里自行处理状态栏、导航栏与输入法 inset。
+ * 由独立 `MealDetailActivity` 承载，跨 Activity 预测性返回完全交由 Android 系统 WindowManager Shell
+ * 原生渲染；外层 edge-to-edge 铺满窗口，这里自行处理状态栏、导航栏与输入法 inset。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

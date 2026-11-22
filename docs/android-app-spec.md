@@ -4,6 +4,8 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
+> **实现进度（0.30，2026-11-23）**：**详情页拆为独立 `MealDetailActivity`，由 Android 系统原生接管跨 Activity 预测性返回**。0.28～0.29 在单 Activity 内用 Compose 手写两阶段动画仍存在淡出僵硬与圆角无法匹配各机型物理屏幕的问题；现彻底删除手写覆盖层状态机（`AospBackOverlay.kt` / `PredictiveBackMath.kt`），将详情页升级为独立 `MealDetailActivity`（不注册任何 `BackHandler` / `PredictiveBackHandler`），由系统 WindowManager Shell 原生渲染跨 Activity 预测性返回——自动匹配真机物理屏幕圆角、系统/ROM 原生惯性曲线、底页视差与暗化遮罩。记录页与 Calo 聊天页统一通过 `MealDetailActivity.newIntent()` 打开；写操作跑在 `AppContainer.appScope` 上保证离开页面不取消请求（§3.3），并通过 `dataSignal.bump()` 与 `globalMessages` 联动首页刷新与 Snackbar 提示；窗口主题 `Theme.Inkcal` 改为深色基类 `android:Theme.Material.NoActionBar` 防止切换闪白。新增 `domain/DetailRefresh.kt` + 3 个单测（共 17 类 103 例）。见 §8.4 / §16.1 / §16.4。
+>
 > **实现进度（0.29，2026-11-23）**：**修复 0.28 预测性返回松手瞬间消失的曲线 bug**。0.28 用 `CubicBezierEasing(0, 0, 0, 1)` 驱动 `commitProgress` 又把缓动后的值直接除以 `0.45` 算前景 alpha，该曲线在 `t=0` 处斜率无穷大、前 32ms（仅 2 帧）就冲过 0.48 导致前景 alpha 瞬间归零。现改为 `LinearEasing` 驱动线性时间进度，在 `PredictiveBackMath` 内部分离「位移/缩放的 `easeOutCubic` 缓动（滑出 96dp）」与「前景透明度的独立线性淡出窗口（12%–72% 线性时间，约 38ms→230ms）」，并补上防 2 帧闪没单测。
 >
 > **实现进度（0.28，2026-11-23）**：**按 AOSP `CrossActivityBackAnimation` 两阶段模型重构详情页预测性返回**。详情覆盖层提升至 `MainScaffold` 顶层（`ui/app/AospBackOverlay.kt`，压过底部 `NavigationBar` 并延伸至状态栏/导航栏下方），统一承接记录页与 Calo 聊天页两个入口（移除 `Dialog` 兜底）；纯几何计算抽离到 `domain/PredictiveBackMath.kt`（补 6 个 JVM 单测，共 17 类 106 例）。① 跟手期前景保持完全不透明、缩放 1.00→0.90、对侧留 8dp 边距、带阻尼跟随 `touchY`、动态 28dp 圆角、底页带暗化遮罩与视差露出；② 松手提交期从当前形变快照无缝接力，沿同一 `swipeEdge` 方向继续滑出 48dp 并快速淡出，动画彻底结束后才卸载（修掉 0.24 在 `AnimatedVisibility` 内写 `detailRecord?.let` 导致的松手闪没）；③ 取消弹回与提交动画改跑在外部 `CoroutineScope` 上（修掉 `ComposePredictiveBackHandler.onBackCancelled()` 取消 `activeJob` 导致的弹回失效）；④ 全部变换在 `graphicsLayer {}` 内部零重组读取。见 §8.4 / §16.1 / §16.4。
@@ -305,13 +307,10 @@ replacement_image 非空 → {base}/api/local-image?path={urlencode(replacement_
   - 原生实现可用 AlertDialog 做确认，但必须保留两步，且整餐与单张不能共用同一个确认状态。
   - 删除后服务端会把资产写入忽略列表，客户端无需处理。
 - 原地刷新 refreshGroup：请求 GET /api/records?date={该记录日期}，按 promoted 或当前主行 asset_id 找，找不到按已知 asset_id 交集找，都找不到视为组已消失。刷新失败不要关闭详情，提示「操作已完成，但刷新失败——关闭后页面会自动更新」。
-- **系统返回键 / 预测性返回关闭详情**（AOSP 两阶段重构）：
-  - 详情已提升为 `MainScaffold` 顶层的同窗口全屏覆盖层（`ui/app/AospBackOverlay.kt`），**压在 `Scaffold` 与底部 `NavigationBar` 之上、`SnackbarHost` 之下**，统一承接「记录页」与「Calo 聊天页」两个入口（不再使用 `Dialog` 窗口）。返回箭头位于顶栏左侧，内容本体 `MealDetailContent` 自行处理 `statusBarsPadding()` / `navigationBarsPadding()` / `imePadding()`。
-  - 纯几何计算抽离到 `domain/PredictiveBackMath.kt`（含 6 个单测），严格分两阶段，全部在 `graphicsLayer {}` 内部零重组读取：
-    1. **阶段一（Pre-commit 跟手预览）**：前景始终 `alpha = 1f` 不提前淡出；缩放 `1.00 → 0.90`；按 `swipeEdge` 朝反侧轻位移至对侧留 `8dp` 边距；带阻尼跟随纵向 `touchDeltaY`（上限 `36dp`）；动态裁出 `28dp` 圆角；底页 `MainScaffold` 带暗化遮罩（`0.36 → 0.20`）与 `28dp` 轻微视差露出。
-    2. **阶段二（Post-commit 松手提交 / 点击返回箭头 / 外部删除关闭）**：由 `LinearEasing` 驱动 320ms 线性时间进度，冻结当前精确形变快照后分轨计算——位移/缩放用 `easeOutCubic` 沿同一 `swipeEdge` 方向再滑出 `96dp`（绝不可把 `CubicBezierEasing(0,0,0,1)` 缓动后的值直接除以阈值算 alpha，0.28 因此在 29ms / 2 帧内闪没）；前景透明度在前 12% 线性时间保持不透明、在 12%–72%（约 38ms→230ms）平滑淡出；底页同步归位至 `scale = 1f / translationX = 0f`、遮罩淡至 `0`。退场动画期间持续保留 `retainedSlot`，动画彻底结束后才通知 ViewModel 清锚点并卸载。
-  - **手势取消**：`ComposePredictiveBackHandler.onBackCancelled()` 会取消自身的 `activeJob`，因此弹簧弹回必须在外部 `CoroutineScope` 上启动，绝不能在 `catch (CancellationException)` 中直接挂起 `animateTo`（否则会被立刻再次取消）。
-  - 系统返回键（传统三键导航）与手势松手走同一条 `requestDismiss` 阶段二退场。
+- **系统返回键 / 预测性返回关闭详情**（0.30 起，真·系统原生跨 Activity）：
+  - 详情页是独立 `MealDetailActivity`（`AndroidManifest.xml` 声明，`android:exported="false"`，深色 `Theme.Inkcal` 防切换闪白），记录页与 Calo 聊天页统一通过 `MealDetailActivity.newIntent(context, record, decisions)` 启动。
+  - **绝不在 `MealDetailActivity` 中注册任何 `BackHandler` / `PredictiveBackHandler`**：一旦拦截返回，Android 系统就会停用跨 Activity 预测性返回。放手不拦截，系统 WindowManager Shell 会自动接管边缘返回手势，匹配真机物理屏幕圆角、系统/ROM 原生惯性曲线、底页视差与遮罩。左上角返回箭头直接调用 `finish()` 走系统原生关闭转场。
+  - 写操作（重新分析 / 删整餐 / 单张移除）由 `MealDetailViewModel` 在 `AppContainer.appScope` 上发起（离开页面不取消，§3.3），成功后 `dataSignal.bump()` 通知首页刷新；留在页内的反馈走本页 `SnackbarHost`，删整餐/移除最后一张关闭页面时通过 `AppContainer.postGlobalMessage()` 由首页 `SnackbarHost` 展示。原地刷新分组匹配纯逻辑抽在 `domain/DetailRefresh.kt`。
 
 ### 8.5 选择照片（补漏入口）
 
@@ -534,7 +533,7 @@ android/
 | 29 | 刷新后视口不在顶部（记录页 + 选择照片页） | 两页同一根因：LazyColumn 按 key 把「原来第一个可见项」钉在视口顶部，插到它前面的新内容被顶到视口上方。记录页锚点是旧日期头（冷启动缓存 → 网络数据整体替换时新记录插到了前面），选择页锚点是页脚（首屏加载时列表里只有页脚）。修法见 §8.1 / §8.5 | ✅ 0.16 |
 | 30 | M3 规范对齐（进行中）第一批：图标修正 | §8.4 / §8.7 / §16 | 否（后续） | ✅ 0.17（详情页单张移除、设置页日期行改图标按钮；另撤回两项不适用建议，见 §8.5 / §8.7） |
 | 31 | M3 对齐：一级 Tab 切换转场 | §16.1 第 1 项 | 否（后续） | ✅ 0.17（横向滑动 → Top level fade through） |
-| 32 | 详情页预测性返回（AOSP 两阶段重构） | §8.4 / §16.1 第 4 项 | 否（后续） | ✅ 0.28（`MainScaffold` 顶层全屏覆盖层 `AospDetailOverlay` + `PredictiveBackMath`：统一记录页与 Calo，跟手期不淡出/缩放 0.90/8dp 对侧边距/纵向跟随/28dp 圆角/底页视差与遮罩，松手沿原方向接力滑出淡出，外部 scope 取消弹回，0 重组。0.18～0.23 Nav3 方案与 0.24 覆层问题复盘见 §16.4） |
+| 32 | 详情页预测性返回（真·系统原生跨 Activity） | §8.4 / §16.1 第 4 项 | 否（后续） | ✅ 0.30（拆为独立 `MealDetailActivity` 且不拦截返回，由 Android WM Shell 原生接管跨 Activity 预测性返回：自动匹配物理屏幕圆角与系统/ROM 原生曲线；记录页与 Calo 统一入口，`AppContainer.appScope` 保活慢写请求。0.18～0.29 单 Activity 模拟方案复盘见 §16.4） |
 | 33 | 选择照片：非食物照片可选 | §8.5(a) | 是 | ✅ 0.25（原先置灰 + `toggle()` 早退，堵死了 SigLIP2 误杀的唯一补救通道） |
 | 34 | 选择照片：显示全量照片 | §8.5(a) | 是 | ✅ 0.26（已入库的遮罩标「已入库」，其余正常可选；不再显示非食物角标） |
 ## 15. 建议实施顺序
@@ -569,7 +568,7 @@ android/
 | 1 | 一级 Tab 切换转场 | 点底部导航项必须用 Top level（fade through） | ✅ **0.17 已修**：原先横向滑动（Lateral 的语汇），现为 fade through（旧页 90ms 淡出 → 新页延后 90ms 再 210ms 淡入）；`tabSlide` 与那个方向布尔已删除，别再往回改 | `MainScaffold.kt` 的 `topLevelFadeThrough()` |
 | 2 | 导航栏图标 | 选中 filled、未选中 outlined，对比度 ≥3:1 | 两态同一个 filled 图标 | `MainScaffold.kt` 的 `Tab` 枚举 |
 | 3 | 重复点当前 Tab | 应回到页面顶部 | `if (current != tab.route)` 直接忽略 | 同上 |
-| 4 | 详情页层级 | 卡片→详情属 Container transform / Forward-and-backward | ✅ **已按 AOSP 两阶段模型重构**：`MainScaffold` 顶层全屏覆盖层（盖过底栏，记录页与 Calo 统一走 `AospDetailOverlay`）+ 零重组 `graphicsLayer` 跟手与接力退场（§8.4 / §16.4）。**仍缺**共享元素（container transform） | `AospBackOverlay.kt` / `PredictiveBackMath.kt` / `MainScaffold.kt` |
+| 4 | 详情页层级 | 卡片→详情属 Cross-activity / Forward-and-backward | ✅ **0.30 已改独立 `MealDetailActivity`**：彻底移除手写动画，交由 Android 系统 WM Shell 原生接管跨 Activity 预测性返回，自动匹配真机屏幕圆角与系统曲线（§8.4 / §16.4） | `MealDetailActivity.kt` / `MealDetailViewModel.kt` |
 | 5 | 反馈层 | 瞬时反馈用 Snackbar | ✅ **0.24 已修**：详情变同窗口覆盖层后 `SnackbarHost` 压得住，Toast 分支删除并统一走 Snackbar | `RecordsTab.kt` |
 | 6 | 语义色 | 颜色来自 color scheme / 令牌 | 20 处硬编码（盈亏绿红、周图柱色、P/C/F、链接蓝） | `theme/Color.kt` 等 5 个文件 |
 | 7 | 形状 | 圆角走 shape scale（4/8/12/16/28） | 14 处硬编码 `RoundedCornerShape(4/6/8/12)` | 6 个文件 |
@@ -602,12 +601,10 @@ android/
 - **设置页改 `ListItem`**：该页是表单，`OutlinedTextField` 才是对的（理由见 §8.7）。
 - **选择照片页「返回键先退出选择态」**：该页点击即选中、没有独立浏览态，M3 选择模式规则不适用（理由见 §8.5）。
 - **加 `android:enableOnBackInvokedCallback="true"`**：**targetSdk ≥ 35 不需要**这个 flag（我们是 36），加了也没用。
-- **把详情页做成 Nav3 路由、靠 `predictivePopTransitionSpec` 单条时间轴表达预测性返回**：0.18～0.23 六个版本都在这条路上调，全部失败并整条回滚（代码基线回到 0.17）。四个硬伤，任何一个都足以否掉这条路：
-  1. **单条时间轴模型与 AOSP 两阶段动画根本冲突**：反编译 `NavDisplayKt`（1.0.1）确认，`NavDisplay` 内部是从 `NavigationEventTransitionState.InProgress` 读 `progress` 去调 `SeekableTransitionState.seekTo`，传给 `predictivePopTransitionSpec` 的 `Int` 参数其实是 `swipeEdge`（不是 `progress`）；默认实现忽略 `swipeEdge` 直接返回 `fadeIn(spring) togetherWith scaleOut(0.7f)`。因为跟手和松手提交绑在同一条 `ContentTransform` 上，加 `fadeOut` 会导致手指还没松开页面就半透明消失（0.20/0.23），不加就退化成整屏硬推（0.21/0.22）。
-  2. 误以为每帧都会重调 lambda 而写成 `tween(0)`（0.19 踩过）会让 `SeekableTransitionState` 去 seek 一条 0ms 动画，结果变成瞬间切换。
-  3. `ContentTransform` 拿不到手势的 `touchY`，也无法做动态圆角裁剪（`clip + RoundedCornerShape`），且 `NavDisplay` 内部会丢弃用户传入的 `targetContentZIndex`。
-  4. 0.24 虽改用 `PredictiveBackHandler`，但因留在 `RecordsTab` 内（压不住底栏）、在 `AnimatedVisibility` 内写 `detailRecord?.let`（松手瞬间直接闪没）、把 `backProgress.value` 读在 `graphicsLayer` 外（每帧全页重组）、且在被 `onBackCancelled()` 取消的 job 内直接 `animateTo`（取消弹回失效），现已统一重构为 `MainScaffold` 顶层的 `AospDetailOverlay`（§8.4）。
-  **结论**：跟手预览（不淡出 + 缩放/8dp 边距/纵向跟随/动态圆角）与松手提交（沿原方向滑出 + 快速淡出 + 底页归位）必须是独立的两阶段状态机，挂载在 `MainScaffold` 顶层盖过底部导航栏，由 `PredictiveBackHandler` + 外部协程域 + 零重组 `graphicsLayer` 驱动。
+- **在单 Activity 内用 Nav3 `predictivePopTransitionSpec` 或手写 `PredictiveBackHandler` 模拟跨页预测性返回**：0.18～0.29 整整 12 个版本先后试过 Nav3 单时间轴（0.18～0.23）与页面内覆盖层模拟（0.24、0.28～0.29），最终全部否决，改为 **0.30 独立 `MealDetailActivity` 交由系统 WM Shell 原生渲染**。教训：
+  1. **Nav3 单条时间轴硬伤（0.18～0.23）**：`NavDisplay`（1.0.1）内部把跟手与提交绑在同一条 `SeekableTransitionState` 上，传参 `Int` 是 `swipeEdge`（不是 `progress`）；加 `fadeOut` 导致未松手先变透明，不加则退化成整屏硬推，且拿不到 `touchY` 与动态圆角。
+  2. **单 Activity 手写覆盖层硬伤（0.24、0.28～0.29）**：0.24 踩过 `AnimatedVisibility` + `nullable?.let` 松手闪没、组成阶段读 `progress` 掉帧、`ComposePredictiveBackHandler.onBackCancelled()` 取消 `activeJob` 导致弹回失效；0.28～0.29 修完所有代码 bug 后依然逃不开「应用层硬编码圆角（28dp）匹配不上各机型大 R 角物理屏幕」和「手写淡出曲线比系统/ROM 原生惯性物理僵硬」两个本质落差。
+  3. **真正的原生解法（0.30）**：把二级详情页做成独立 `MealDetailActivity`，**绝不注册任何 `BackHandler` / `PredictiveBackHandler`**，直接让 Android 系统 WM Shell 接管跨 Activity 预测性返回——物理圆角、曲线、视差、遮罩天然与当前设备系统完全一致，还省掉 400+ 行手写动画状态机。
 
 ### 16.5 平台事实（免得再查一遍）
 

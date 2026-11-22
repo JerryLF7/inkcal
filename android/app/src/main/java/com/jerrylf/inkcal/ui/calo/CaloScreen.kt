@@ -32,7 +32,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,13 +39,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jerrylf.inkcal.MealDetailActivity
 import com.jerrylf.inkcal.data.ChatMessageDto
 import com.jerrylf.inkcal.data.ChatSessionDto
-import com.jerrylf.inkcal.ui.app.DetailOverlaySlot
 
 private val SUGGESTIONS =
   listOf(
@@ -65,13 +65,11 @@ private val SUGGESTIONS =
 @Composable
 fun CaloScreen(
   snackbarHostState: SnackbarHostState,
-  onDetailSlotChanged: (owner: String, slot: DetailOverlaySlot?) -> Unit,
   viewModel: ChatViewModel = viewModel(),
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   val baseUrl by viewModel.baseUrl.collectAsStateWithLifecycle()
-  val detailRecord by viewModel.detailRecord.collectAsStateWithLifecycle()
-  val busy by viewModel.busy.collectAsStateWithLifecycle()
+  val context = LocalContext.current
 
   val listState = rememberLazyListState()
   var input by remember { mutableStateOf("") }
@@ -126,7 +124,9 @@ fun CaloScreen(
                 baseUrl = baseUrl,
                 deleteState = state.deleteStates[message.id],
                 deleting = message.id in state.deletingIds,
-                onOpenRecord = viewModel::openDetail,
+                onOpenRecord = { record ->
+                  context.startActivity(MealDetailActivity.newIntent(context, record))
+                },
                 onConfirmDelete = {
                   val assetId =
                     ChatToolsDeleteAssetId(message) ?: return@AssistantMessage
@@ -184,31 +184,6 @@ fun CaloScreen(
     ModalBottomSheet(onDismissRequest = viewModel::toggleSessions) {
       SessionList(state.sessions, state.sessionId, viewModel::selectSession)
     }
-  }
-
-  // Calo 的餐卡详情同样走 MainScaffold 顶层的 AospDetailOverlay，支持全屏 AOSP 预测性返回
-  LaunchedEffect(detailRecord, baseUrl, busy) {
-    val slot =
-      detailRecord?.let { record ->
-        DetailOverlaySlot(
-          owner = "calo",
-          record = record,
-          baseUrl = baseUrl,
-          decisions = emptyList(),
-          busy = busy,
-          onClose = viewModel::closeDetail,
-          onDeleteMeal = { viewModel.deleteFromDetail(record.assetId, photoOnly = false) },
-          onDeletePhoto = { assetId -> viewModel.deleteFromDetail(assetId, photoOnly = true) },
-          onReanalyze = { notes, done ->
-            // 成功后整条详情会关闭（见 reanalyzeFromDetail），done 只是让表单同步复位
-            viewModel.reanalyzeFromDetail(record.assetId, notes, onSuccess = done)
-          },
-        )
-      }
-    onDetailSlotChanged("calo", slot)
-  }
-  DisposableEffect(Unit) {
-    onDispose { onDetailSlotChanged("calo", null) }
   }
 }
 

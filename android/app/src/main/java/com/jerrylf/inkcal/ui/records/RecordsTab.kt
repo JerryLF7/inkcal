@@ -26,7 +26,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -43,11 +42,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jerrylf.inkcal.MealDetailActivity
 import com.jerrylf.inkcal.data.AppContainer
 import com.jerrylf.inkcal.data.RecordDto
 import com.jerrylf.inkcal.domain.Periods
 import com.jerrylf.inkcal.domain.TimeFmt
-import com.jerrylf.inkcal.ui.app.DetailOverlaySlot
 import com.jerrylf.inkcal.ui.picker.PhotoPickerScreen
 import kotlinx.coroutines.launch
 
@@ -78,7 +77,6 @@ private const val MONTH_CENTER = 1200
 @Composable
 fun RecordsTab(
   snackbarHostState: SnackbarHostState,
-  onDetailSlotChanged: (owner: String, slot: DetailOverlaySlot?) -> Unit,
   dayViewModel: RecordsViewModel = viewModel(),
   rangeViewModel: RangeViewModel = viewModel(),
 ) {
@@ -111,15 +109,12 @@ fun RecordsTab(
   var menuNotes by remember { mutableStateOf("") }
 
   val baseUrl by dayViewModel.baseUrl.collectAsStateWithLifecycle()
-  val dayState by dayViewModel.state.collectAsStateWithLifecycle()
-  val rangeState by rangeViewModel.state.collectAsStateWithLifecycle()
   val decisionsByDate by dayViewModel.decisionsByDate.collectAsStateWithLifecycle()
   val busy by dayViewModel.busy.collectAsStateWithLifecycle()
   val toast by dayViewModel.toast.collectAsStateWithLifecycle()
-  val detailAnchor by dayViewModel.detailAnchor.collectAsStateWithLifecycle()
   val scrollTarget by dayViewModel.scrollTarget.collectAsStateWithLifecycle()
 
-  // Calo 里补记/改/删成功、或 §8.6 轮询发现服务端有新数据，这里都要重拉
+  // Calo / 详情页写成功、或 §8.6 轮询发现服务端有新数据，这里都要重拉
   val context = LocalContext.current
   val dataSignal = remember(context) { AppContainer.of(context).dataSignal }
   val dataTick by dataSignal.tick.collectAsStateWithLifecycle()
@@ -132,71 +127,16 @@ fun RecordsTab(
     }
   }
 
-  // 详情从「当前视图」的记录里查；区间数据按周/月分槽缓存，全部拼起来查最稳：
-  // 在某一页点开详情后再滑走，原来的槽位还在，详情不会被误关。
-  val activeRecords = remember(dayState.groups, rangeState.chunks) {
-    (dayState.groups + rangeState.chunks.values.flatMap { it.groups })
-      .flatMap { it.records }
-      .distinctBy { it.assetId }
+  val openMealDetail: (RecordDto) -> Unit = { record ->
+    val decisions = decisionsByDate[TimeFmt.dateOf(record.photoTime)].orEmpty()
+    context.startActivity(MealDetailActivity.newIntent(context, record, decisions))
   }
-  val detailRecord = detailAnchor?.let { anchor -> activeRecords.firstOrNull { it.assetId == anchor } }
 
   LaunchedEffect(toast) {
     toast?.let {
-      // 详情现在是同窗口覆盖层，SnackbarHost 移到最外层顶层，提示统一走 Snackbar
       snackbarHostState.showSnackbar(it)
       dayViewModel.consumeToast()
     }
-  }
-
-  // 组没了（整餐被删、或单张移除后只剩这张）就收起详情。
-  // busy 期间不判：单张移除会把锚点切到晋升的新主行，那一刻它还没出现在列表里。
-  LaunchedEffect(detailAnchor, activeRecords, busy) {
-    if (!busy && detailAnchor != null && detailRecord == null && activeRecords.isNotEmpty()) {
-      dayViewModel.closeDetail()
-    }
-  }
-
-  // 把详情槽位同步到 MainScaffold 顶层的 AospDetailOverlay（盖过底部导航栏）
-  val detailDecisions =
-    detailRecord?.let { decisionsByDate[TimeFmt.dateOf(it.photoTime)].orEmpty() }.orEmpty()
-  LaunchedEffect(detailRecord, baseUrl, detailDecisions, busy) {
-    val slot =
-      detailRecord?.let { record ->
-        DetailOverlaySlot(
-          owner = "records",
-          record = record,
-          baseUrl = baseUrl,
-          decisions = detailDecisions,
-          busy = busy,
-          onClose = dayViewModel::closeDetail,
-          onDeleteMeal = {
-            dayViewModel.delete(
-              record.assetId,
-              photoOnly = false,
-              onSuccess = rangeViewModel::invalidate,
-            )
-          },
-          onDeletePhoto = { assetId ->
-            dayViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
-          },
-          onReanalyze = { notes, done ->
-            dayViewModel.reanalyze(
-              record.assetId,
-              notes,
-              onSuccess = {
-                rangeViewModel.invalidate()
-                // 真正更新完才让详情关表单，失败时 notes 原样留在框里
-                done()
-              },
-            )
-          },
-        )
-      }
-    onDetailSlotChanged("records", slot)
-  }
-  DisposableEffect(Unit) {
-    onDispose { onDetailSlotChanged("records", null) }
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
@@ -261,7 +201,7 @@ fun RecordsTab(
               viewModel = dayViewModel,
               scrollTarget = scrollTarget,
               onScrollHandled = dayViewModel::consumeScrollTarget,
-              onOpenDetail = dayViewModel::openDetail,
+              onOpenDetail = openMealDetail,
               onReanalyze = { reanalyzeTarget = it },
               onDeleteMeal = { deleteTarget = it },
             )
@@ -275,7 +215,7 @@ fun RecordsTab(
                 baseUrl = baseUrl,
                 decisionsByDate = decisionsByDate,
                 onEnsureDecisions = dayViewModel::ensureDecisions,
-                onOpenDetail = dayViewModel::openDetail,
+                onOpenDetail = openMealDetail,
                 onReanalyze = { reanalyzeTarget = it },
                 onDeleteMeal = { deleteTarget = it },
               )

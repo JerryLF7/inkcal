@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.Inkcal" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- 深色窗口底色，避免跨 Activity 转场与预测性返回首帧闪白 -->
+    <style name="Theme.Inkcal" parent="android:Theme.Material.NoActionBar" />
 </resources>
