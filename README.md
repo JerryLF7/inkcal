@@ -1,141 +1,204 @@
 # inkcal
 
-拍一张饮食照片,热量自动记好。
+> **拍完就记好** —— 本地优先、隐私友好的自动饮食热量记录器。
 
-> **还在开发中,功能不完整。** 接口、数据格式和界面都可能随时改,不要拿它当成品用。
-> 后端(Python/Flask + Vue 网页)已能日常使用;原生 Android 客户端**首期功能已完成**(日/周/月三视图、餐卡详情、设置、选择照片、Calo 聊天),只剩自动刷新没做。逐项进度见 `docs/android-app-spec.md` §14。
+手机拍照自动同步到 [Immich](https://immich.app/) 或 [PhotoPrism](https://www.photoprism.app/)，定时任务拉取新照片：先在**本机 CPU** 用 SigLIP2 过滤掉非食物照片（绝不出内网），再交由视觉模型完成同餐合并与热量 / 宏量营养素估算，最终落盘到本地 SQLite。打开网页或原生 Android App 即可浏览摄入、查看热量缺口、纠错或与饮食助手 **Calo** 对话。
 
-手机把照片备份到 Immich 或 PhotoPrism,inkcal 每 10 分钟去拉一次新照片,判断是不是食物,估算热量和蛋白质、碳水、脂肪,写进本地 SQLite。打开网页就能看,估错了可以改。
+---
 
-我做它是因为手动记饮食坚持不下去,而把食物照片直接传给云端又不放心。所以有一道本地过滤:不是食物的照片不会离开你的内网。
+## 核心特性
 
-## 处理流程
+- **零摩擦自动记账**：无需打开 App 拍照或手动填表，日常随手拍食物即可由 `cron` 自动入库；同一张照片通过 `asset_id` 保证幂等，删除后自动进入忽略列表不再重复同步。
+- **隐私门槛留在本地**：非食物照片在本地 CPU 上即被 `Food-or-Not-SigLIP2` 拦截，不会上传到任何外部模型接口；仅当用户主动从相册挑图或手动上传补漏时才绕过本地过滤。
+- **同餐多图智能归组**：支持将同一餐的多张照片自动归入同一张卡片（`×N`），区分「吃前 / 吃后状态延续（联合对比实吃量）」与「同餐分拍不同菜品（独立条目累加）」，重分析自动按整组照片联合重估。
+- **热量缺口与多维视图**：日 / 周 / 月三视图联动——结合个人体征算出的基础代谢（BMR）与每日活动消耗（Burn），直观展示 TDEE、当日及累计热量缺口、周双层柱状图与月度进度环。
+- **Calo 对话助手**：用自然语言查记录、算统计、纯文本补录（无图自动配 Emoji）、修改或重新分析；遵循安全删除契约，删除只能生成二次确认卡，必须由用户点击确认后才执行。
+- **Web + 原生 Android 双端**：Vue 3 响应式网页（桌面端三栏布局 + 移动端三 Tab）与原生 Android 客户端（Kotlin + Jetpack Compose + Material 3），两端共享同一套 Flask JSON API。
 
+---
+
+## 工作原理
+
+```text
+Immich / PhotoPrism（相册自动备份）
+  │
+  ▼
+SigLIP2（本机 CPU 食物过滤，非食物不出内网）
+  │
+  ▼
+Luna（可选 · AGENT_ENABLED=1：视觉编排，仅判断新餐 / 同餐 / 跳过）
+  │
+  ▼
+Gemini（数值专家：估算短标题、菜品明细、热量与 P / C / F）
+  │
+  ▼
+SQLite（data/inkcal.db，WAL 模式 + FTS5 全文检索）
+  │
+  ▼
+Flask JSON API
+  ├── Web UI（web/，Vue 3 + Vite）
+  └── Android App（android/，Kotlin + Jetpack Compose）
 ```
-Immich / PhotoPrism
-  → SigLIP2      本机 CPU 判断是不是食物,不是就丢弃
-  → Luna         可选。判断同餐、新餐还是跳过,只负责编排
-  → Gemini       估算热量和宏量营养素
-  → SQLite       data/inkcal.db
-  → Flask API + Vue 页面
-```
 
-Luna 和 Gemini 各管一段:哪几张照片算一餐由 Luna 判断,热量数字只由 Gemini 给,两边不越界。Luna 默认关着(`AGENT_ENABLED=0`),这时食物照片直接送 Gemini,一张一条记录。
+**职责严格解耦**：Luna 只管多图之间的餐次关系，不编造热量；Gemini 只管根据照片估算营养数值，不决定同餐归属。默认 `AGENT_ENABLED=0`，食物照片直送 Gemini（单张成条）；开启 `AGENT_ENABLED=1` 后启用同餐归组，批处理异常时自动降级回单图直发路径。
 
-## 快速开始
+---
 
-需要 Python 3.11 以上,以及一个 Immich 或 PhotoPrism。
+## 客户端
+
+### Web 端（Vue 3）
+
+- **记录**：日视图无限滚动时间轴（吸顶日期汇总与缺口标签）、周视图双层摄入/消耗柱状图、月视图二值缺口圆环日历；卡片点开可看大图画廊、逐张明细、AI 决策审计，并支持组级重新分析、单张移除与整餐删除。
+- **Calo**：桌面端常驻右侧栏，移动端独立 Tab；支持多会话切换、工具调用步骤折叠、结果产物卡片分流与删除确认卡。
+- **选择照片补漏**：支持从相册按天浏览全量照片（已入库自动置灰标注，支持一次多选 ≤ 10 张）或本地上传（自动读 EXIF 定日期，无 EXIF 可手动修正）。
+- **设置**：维护身高 / 体重 / 出生日期 / 性别（用于计算 BMR）以及 Calo 上下文窗口长度。
+
+### 原生 Android 客户端（`android/`）
+
+基于 Kotlin + Jetpack Compose + Material 3 独立构建，仅调用 Flask API，不套壳 WebView：
+
+- **功能完整覆盖**：日 / 周 / 月三视图（含冷启动缓存、下拉刷新与左右滑切周/月）、独立详情页（`MealDetailActivity`，由 Android 系统原生接管跨 Activity 预测性返回）、长按快捷菜单、全量相册多选与系统照片选择器上传、Calo 聊天、设置页与前台 30 秒自动同步。
+- **获取与更新**：
+  - 直接从 [GitHub Releases](https://github.com/JerryLF7/inkcal/releases/latest) 下载最新 APK；
+  - 推荐使用 [Obtainium](https://github.com/ImranR98/Obtainium) 订阅本仓库自动跟进版本更新。
+  - 首次启动填入自建服务地址（局域网 `IP:端口` 或反代域名）并按需登录即可。
+
+> Android 客户端详细规格、API 契约与演进记录见 [`docs/android-app-spec.md`](docs/android-app-spec.md)。
+
+---
+
+## 快速部署
+
+### 1. 环境准备
+
+- Python 3.11+
+- 已部署的 Immich 或 PhotoPrism 实例
+- OpenAI 兼容格式的视觉模型 API（用于 Gemini 热量估算；启用同餐编排时另需 Luna 接口）
 
 ```bash
 git clone https://github.com/JerryLF7/inkcal.git
 cd inkcal
+
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 
-cp .env.example .env    # 填上照片源和 Gemini 的地址、密钥
-./setup.sh              # 生成 ~/.local/bin/inkcal,并加一条每 10 分钟的 cron
+cp .env.example .env
+# 编辑 .env，填入照片源与模型凭据
 ```
 
-所有 Python 命令都用 `venv/bin/python` 跑。系统自带的 Python 缺 `pillow-heif`、`imagehash` 这些依赖,上传和 HEIC 处理会悄悄失败。
+> 所有 Python 命令请统一使用 `venv/bin/python`，避免系统 Python 缺少图像处理依赖导致隐性失败。首次运行 SigLIP2 时会自动从 HuggingFace 拉取权重并缓存到本地。
 
-第一次用 SigLIP2 会从 HuggingFace 下载模型,之后走本地缓存。
+### 2. 配置定时流水线
 
-启动网页:
+```bash
+./setup.sh
+```
+
+脚本会创建 `~/.local/bin/inkcal` 包装器（自动激活 `venv`），并幂等添加每 10 分钟执行一次 `inkcal run` 的 `crontab` 任务。
+
+### 3. 启动 Web 服务
+
+本地调试：
 
 ```bash
 INKCAL_PORT=5800 venv/bin/python web/server.py
 ```
 
-默认只监听本机 `127.0.0.1:5800`。长期运行请交给 systemd 用户单元(`systemctl --user restart inkcal-web.service`),不要手动起进程。手动起的进程一旦占住端口,systemd 那份会不停重启,孤儿进程还可能一直握着数据库写锁,让 cron 静默失败。
+生产环境请交给 `systemd` 用户服务托管（如 `systemctl --user restart inkcal-web.service`），不要长期手动前台启动，以免与托管进程争抢端口或持住 SQLite 写锁。
 
-## 配置
+服务默认仅监听 `127.0.0.1:5800`。如需通过公网或手机访问，请在前面放置 Caddy / Nginx 等 HTTPS 反向代理，并务必开启登录鉴权（设置 `INKCAL_USER`、`INKCAL_PASS`、`INKCAL_SECRET` 与 `INKCAL_HTTPS=1`）。
 
-全部写在 `.env` 里,完整清单以 `.env.example` 为准。最常改的几项:
+### 常用环境变量
 
-| 变量 | 作用 |
+完整说明见 [`.env.example`](.env.example)：
+
+| 变量 | 说明 |
 |---|---|
-| `SOURCE` | 照片源,`immich`、`photoprism` 或 `immich,photoprism` |
-| `IMMICH_URL` `IMMICH_API_KEY` | Immich 地址和密钥 |
-| `PHOTOPRISM_URL` `PHOTOPRISM_API_KEY` | 用 PhotoPrism 时才需要 |
-| `GEMINI_API_KEY` `GEMINI_BASE_URL` `GEMINI_MODEL` | 热量估算,走 OpenAI 兼容格式 |
-| `LUNA_*` `AGENT_ENABLED` | Luna 的接入和开关,默认关闭 |
-| `INKCAL_USER` `INKCAL_PASS` | 网页登录。要么都填,要么都空 |
-| `INKCAL_SECRET` | 会话签名密钥,必须固定,否则每次重启都要重新登录 |
-| `INKCAL_HOST` `INKCAL_PORT` | 监听地址和端口 |
-| `INKCAL_HTTPS` | 放在 HTTPS 反向代理后面时设为 1 |
+| `SOURCE` | 启用的照片源：`immich`、`photoprism` 或 `immich,photoprism` |
+| `IMMICH_URL` / `IMMICH_API_KEY` | Immich 服务地址与 API Key |
+| `PHOTOPRISM_URL` / `PHOTOPRISM_API_KEY` | PhotoPrism 服务地址与 App Password（按需） |
+| `GEMINI_API_KEY` / `GEMINI_BASE_URL` / `GEMINI_MODEL` | 热量估算模型配置（OpenAI 兼容格式） |
+| `GEMINI_REASONING_EFFORT` | 推理强度（`none`/`minimal`/`low`/`medium`/`high`，默认 `high`，改后实时生效无需重启） |
+| `FOOD_THRESHOLD` | SigLIP2 本地食物过滤阈值（`0~1` 小数，默认 `0.35`，改后实时生效） |
+| `AGENT_ENABLED` / `LUNA_*` | 是否开启 Luna 批处理同餐编排（默认 `0` 关闭）及接口配置 |
+| `INKCAL_USER` / `INKCAL_PASS` | Web/API 登录账号密码（必须同时设置或同时留空，自带防爆破限速） |
+| `INKCAL_SECRET` | Flask 会话签名密钥，务必设为固定随机串（变动会导致登录态失效） |
+| `INKCAL_HOST` / `INKCAL_PORT` / `INKCAL_HTTPS` | 服务绑定地址、端口及是否位于 HTTPS 反代之后 |
 
-Flask 自带的服务器不适合直接暴露到公网。要从手机或外网访问,请挂 Caddy 或 nginx 之类的反向代理,并打开登录。
+---
 
-## 命令行
+## 命令行（CLI）
+
+安装完 wrapper 后可直接使用 `inkcal`（等价于 `venv/bin/python main.py`）：
 
 ```bash
-inkcal run                          # 跑一遍流水线(cron 就是调它)
-inkcal view --date 2026-09-30       # 看某天;还有 --week、--month、--from/--to
-inkcal stats --last 7d --group-by day
-inkcal search 咖喱                  # 全文搜索餐名和明细
+# 流水线与排障
+inkcal run                                  # 立即处理今日新照片（支持 --date YYYY-MM-DD）
+inkcal explain --date 2026-11-23            # 查看当天每张照片在流水线中的去向
+inkcal explain --id <asset_id>              # 追踪单张照片状态
+inkcal decisions --date 2026-11-23          # 查看 Luna 当天决策审计
+inkcal analyze --id <asset_id>              # 绕过本地过滤强制分析某张照片
 
-inkcal add --meal "拿铁" --calories 190 --protein 9 --carbs 15 --fat 10
-inkcal edit --last --new-meal "美式" --calories 5
+# 查询与统计（均支持 --json）
+inkcal view --date 2026-11-23               # 查看单日；另支持 --week / --month YYYY-MM / --from --to
+inkcal stats --last 7d --group-by day       # 区间汇总（支持 7d / 2w / 1m）
+inkcal search 咖喱                          # FTS5 全文检索餐名与明细
+
+# 录入、纠错与分组
+inkcal add --meal "冰美式" --calories 15 --protein 0 --carbs 3 --fat 0
+inkcal edit --last --new-meal "拿铁" --calories 180
 inkcal reanalyze --last --notes "米饭只吃了一半"
-inkcal delete --meal 汉堡 --date 2026-09-30
-inkcal merge <主记录> <从记录>       # 把两张照片并成同一餐
-
-inkcal analyze --id <asset_id>      # 强制分析被过滤器漏掉的照片
-inkcal explain --id <asset_id>      # 这张照片在流水线里去哪了
-inkcal decisions --date 2026-09-30  # Luna 当天的决策记录
-inkcal burn --date 2026-09-30 --kcal 480 --steps 8200
+inkcal merge <主asset_id> <从asset_id>      # 并入同餐（默认清零从行；加 --keep 保留独立数值）
+inkcal delete --meal 汉堡 --date 2026-11-23 # 删除整餐并忽略资产（加 --photo 仅移单张）
+inkcal burn --date 2026-11-23 --kcal 480 --steps 8200
 ```
 
-读命令都支持 `--json`。改、删、重估这类命令用四种方式指定记录:`--ref <记录 ID>`、`--id <asset_id 前缀>`、`--last`、`--meal <关键词> --date <日期>`。关键词匹配到多条时会列出候选,让你换成精确的 `--ref` 再执行。
+修改、重分析与删除类命令支持四种记录定位方式：`--ref <记录ID>`、`--id <asset_id前缀>`、`--last`、`--meal <关键词> [--date <日期>]`；关键词命中多条时会列出候选提示改用精确 `--ref`。
 
-## 网页
+---
 
-底部有三个 Tab(桌面端 Calo 固定在右侧)。
+## 核心设计约束
 
-记录页按日、周、月看餐食。每餐一张卡片,点开能看大图、逐张照片的明细和 AI 的决策过程,也可以在这里重新分析或删除。
+- **拍摄地当地日历日**：餐食归属严格以照片拍摄地钟表日期为准（`photo_time` 前 10 位 `YYYY-MM-DD`），不向 UTC 折算，防止跨零点 / 凌晨照片倒退到前一天。
+- **幂等与防复生**：所有照片以 `asset_id` 去重；通过 CLI / Web / App 删除记录时，关联资产会自动写入 `ignored_assets`，后续定时任务不会再次入库。
+- **数据写入边界**：请始终通过 `inkcal` CLI、`src/db.py` 或 Flask API 修改数据，不要用 SQLite shell 直接篡改表，也不要在服务运行时手动删除 `data/` 下的 `.db-wal` / `.db-shm` 文件。
 
-Calo 是对话助手。你可以问"昨天午餐吃了什么",或者说"记一下下午吃了包薯片",它会去查库、估算、写入。它不能自己删记录,只能弹出确认卡,由你点了才删。
+---
 
-设置页填身高、体重、出生日期和性别,用来算基础代谢(BMR),也能调 Calo 记住多少轮对话。
+## 本地开发与测试
 
-日视图和周视图会显示热量缺口:总消耗 = 基础代谢 + 当天活动消耗,缺口 = 总消耗 − 摄入。没填体征时按固定 2500 kcal 兜底。
+### 仓库结构
 
-「选择照片」按钮(桌面在左侧栏,手机在顶栏)用来补漏。SigLIP2 对透明杯饮料、咖啡、奶茶偶尔判不准,你可以从相册里手动挑,或者本地上传,这些照片会跳过食物过滤。
+```text
+main.py           CLI 入口与批处理决策落地
+src/              核心业务（db、照片源客户端、SigLIP2、Gemini、Luna harness、Calo 聊天）
+src/prompts/      提示词模板（analyze.md / reanalyze.md / analyze_text.md）
+web/server.py     Flask JSON API 与静态资源托管
+web/ui/           Vue 3 + Vite 前端源码
+web/static/       Vue 生产构建产物（随仓库提交，Flask 直接提供）
+android/          原生 Android 客户端（独立 Gradle 工程）
+scripts/          隔离库回归测试与每日消耗同步脚本
+docs/             Android 客户端规格书、事故复盘、照片库 API 参考与 UI 原型
+```
 
-## Android 客户端
-
-`android/` 是原生客户端(Kotlin + Jetpack Compose),只调 Flask API,不共享 Python 或 Vue 代码。
-
-**首期功能已完成**(0.10):记录页日/周/月三视图(带下拉刷新与冷启动缓存)、餐卡详情(画廊、重新分析、删除)、设置页(体征与 BMR、Calo 上下文窗口、服务器)、选择照片(相册多选 + 本地上传)、Calo 聊天(步骤折叠、产物卡、删除确认)。
-
-还没做的:后台自动刷新(data-version 轮询,现在靠下拉手动刷新)、分享入口与桌面小组件。逐项状态见 `docs/android-app-spec.md` 的 §14。
-
-安装包从 [Releases](https://github.com/JerryLF7/inkcal/releases/latest) 下载,也可以把本仓库地址加进 [Obtainium](https://github.com/ImranR98/Obtainium) 自动跟进更新。首次启动填服务器地址(局域网 `IP:端口`,或反代域名)再登录。
-
-自己构建需要 Android SDK;构建、签名和发布方式写在 `AGENTS.md` 里。
-
-## 几个容易踩到的点
-
-日期按照片拍摄地的当地日历日算,不按 UTC,所以凌晨拍的照片不会被算到前一天。
-
-每张照片靠 `asset_id` 去重。删掉一条记录后,那张照片会进忽略列表,cron 不会再把它捡回来。
-
-同一餐的多张照片挂在一条主记录下(`records.merged_into`),页面上只显示一张卡片,右上角有 `×N`。
-
-改数据请走命令行或网页,不要直接开 SQLite 改。服务在跑的时候也别删 `data/` 下的 `.db-wal` 和 `.db-shm`。
-
-更细的规则和踩过的坑在 `AGENTS.md`。
-
-## 开发
+### 前端构建
 
 ```bash
 npm --prefix web/ui install
-npm --prefix web/ui run build       # 产物写到 web/static/,需要一并提交
+npm --prefix web/ui run build    # 构建产物输出到 web/static/
 ```
 
-前端是 Vue 3 + Vite,源码在 `web/ui/src/`。`web/static/` 是构建产物,生产环境直接用它,所以改了前端要重新构建并提交。
+### Android 构建与单测
 
-回归测试(都用隔离的临时数据库,不碰真实数据):
+```bash
+cd android
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleRelease
+```
+
+### 后端回归测试
+
+所有日常回归均使用隔离临时数据库，不触碰生产 `data/inkcal.db`：
 
 ```bash
 PYTHONPATH=. venv/bin/python scripts/test_reasoning_effort.py
@@ -149,24 +212,10 @@ PYTHONPATH=. venv/bin/python scripts/test_group_reanalyze.py
 PYTHONPATH=. venv/bin/python scripts/test_daily_burn.py
 ```
 
-`test_cross_batch_update.py` 会真的调用 Luna 和 Gemini,需要网关可用,跑一次大约一分半钟,不适合放进日常回归。
+---
 
-代码布局:
+## 延伸文档
 
-```
-main.py            命令行入口
-src/               业务逻辑:数据库、照片源、食物检测、热量估算、Luna 批处理、聊天
-src/prompts/       提示词模板(.md)
-web/server.py      Flask API
-web/ui/            Vue 前端源码
-web/static/        前端构建产物
-android/           原生 Android 客户端(独立 Gradle 根)
-scripts/           回归测试和热量消耗同步脚本
-docs/              界面原型、照片库 API 备忘、Android 客户端实现文档
-```
-
-## 相关文档
-
-- `AGENTS.md`:项目的交接说明,包含已拍板的规则、事故复盘和下一步。改代码前先读它。
-- `docs/android-app-spec.md`:Android 客户端的实现规格与进度。
-- `docs/references/`:PhotoPrism 和 Synology Photos 的 API 备忘。
+- [`AGENTS.md`](AGENTS.md) —— 工程约束、架构决策、运行排障与历史事故护栏（修改代码前请先阅读）
+- [`docs/android-app-spec.md`](docs/android-app-spec.md) —— Android 原生客户端功能规格、API 契约与版本演进
+- [`docs/references/`](docs/references/) —— PhotoPrism 与 Synology Photos API 调研记录
