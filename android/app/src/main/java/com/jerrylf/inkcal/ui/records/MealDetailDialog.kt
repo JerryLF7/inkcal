@@ -8,30 +8,26 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.activity.BackEventCompat
-import androidx.activity.compose.PredictiveBackHandler
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import kotlinx.coroutines.CancellationException
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -63,8 +59,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import com.jerrylf.inkcal.data.DecisionDto
 import com.jerrylf.inkcal.data.PhotoDto
@@ -97,63 +91,13 @@ private fun MacroText(p: Double, c: Double, f: Double, style: TextStyle) {
 }
 
 /**
- * 餐卡详情，对应 docs/android-app-spec.md §8.4。
+ * 餐卡详情页内容本体，对应 docs/android-app-spec.md §8.4。
  *
- * 用全屏 Dialog 而不是 Nav3 路由：它渲染的数据**就来自列表状态**（按 asset_id 查出来），
- * 所以删除/重分析之后列表一重拉，详情自动跟着更新，不需要再维护一份副本。
- * 组被删光时外面会把 anchor 置空，这个组件随之消失。
+ * 由顶层 `AospDetailOverlay`（位于 `MainScaffold` 中、压过底部导航栏）统一承载：
+ * - 它渲染的数据直接来自列表/聊天状态，删除或重分析后自动原地更新；
+ * - 预测性返回的两阶段动画由外层 `AospDetailOverlay` 零重组驱动，本组件只管内容展示与交互；
+ * - 外层全屏覆盖窗口（edge-to-edge），因此这里自行处理状态栏、导航栏与输入法 inset。
  */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MealDetailDialog(
-  record: RecordDto,
-  baseUrl: String,
-  decisions: List<DecisionDto>,
-  busy: Boolean,
-  onClose: () -> Unit,
-  onDeleteMeal: () -> Unit,
-  onDeletePhoto: (String) -> Unit,
-  /** 第二个参数是成功回调：外层在真正更新完成后才调，用于关表单；失败时不调，notes 留着好改。 */
-  onReanalyze: (String, () -> Unit) -> Unit,
-  /**
-   * true = 作为覆盖层一页渲染（带 PredictiveBackHandler 跟手动效，左上角返回箭头）；
-   * false = 全屏 Dialog 弹窗（用于 Calo）。
-   */
-  asPage: Boolean = false,
-) {
-  if (asPage) {
-    MealDetailContent(
-      record = record,
-      baseUrl = baseUrl,
-      decisions = decisions,
-      busy = busy,
-      onClose = onClose,
-      onDeleteMeal = onDeleteMeal,
-      onDeletePhoto = onDeletePhoto,
-      onReanalyze = onReanalyze,
-      asPage = true,
-    )
-  } else {
-    Dialog(
-      onDismissRequest = onClose,
-      properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-      MealDetailContent(
-        record = record,
-        baseUrl = baseUrl,
-        decisions = decisions,
-        busy = busy,
-        onClose = onClose,
-        onDeleteMeal = onDeleteMeal,
-        onDeletePhoto = onDeletePhoto,
-        onReanalyze = onReanalyze,
-        asPage = false,
-      )
-    }
-  }
-}
-
-/** 详情内容本体，支持 Telegram 同款预测性返回跟手（缩放 1.0->0.9，微位移 <=56dp，加圆角）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MealDetailContent(
@@ -164,27 +108,9 @@ fun MealDetailContent(
   onClose: () -> Unit,
   onDeleteMeal: () -> Unit,
   onDeletePhoto: (String) -> Unit,
+  /** 第二个参数是成功回调：外层在真正更新完成后才调，用于关表单；失败时不调，notes 留着好改。 */
   onReanalyze: (String, () -> Unit) -> Unit,
-  asPage: Boolean,
 ) {
-  val backProgress = remember { Animatable(0f) }
-  var swipeEdge by remember { mutableStateOf(BackEventCompat.EDGE_LEFT) }
-
-  PredictiveBackHandler(enabled = asPage) { progressFlow ->
-    try {
-      progressFlow.collect { backEvent ->
-        swipeEdge = backEvent.swipeEdge
-        backProgress.snapTo(backEvent.progress)
-      }
-      onClose()
-    } catch (e: CancellationException) {
-      backProgress.animateTo(
-        targetValue = 0f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-      )
-    }
-  }
-
   val photos = remember(record) { MealGrouping.sortedPhotos(record) }
   val pagerState = rememberPagerState(pageCount = { photos.size })
   val scope = rememberCoroutineScope()
@@ -221,47 +147,29 @@ fun MealDetailContent(
   val canReanalyze =
     photos.any { it.thumbnailUrl.isNotBlank() } || record.replacementImage.isNotBlank()
 
-  val progress = backProgress.value
-  Box(
-    modifier =
-      Modifier.fillMaxSize().graphicsLayer {
-        if (asPage && progress > 0f) {
-          // Telegram 同款：缩放 1.00 -> 0.90
-          val scale = 1f - (progress * 0.10f)
-          scaleX = scale
-          scaleY = scale
-
-          // Telegram 同款：微位移最大 56dp，方向跟手
-          val maxOffsetPx = 56.dp.toPx()
-          val sign = if (swipeEdge == BackEventCompat.EDGE_LEFT) 1 else -1
-          translationX = sign * progress * maxOffsetPx
-
-          // Telegram 同款：整页加圆角露出底页
-          clip = true
-          shape = RoundedCornerShape((progress * 28).dp)
+  Surface(modifier = Modifier.fillMaxSize()) {
+    Column(
+      modifier =
+        Modifier.fillMaxSize()
+          .statusBarsPadding()
+          .navigationBarsPadding()
+          .imePadding()
+          .verticalScroll(rememberScrollState())
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        IconButton(onClick = onClose) {
+          Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
         }
+        Text(
+          text = record.meal.ifBlank { "未命名" },
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.SemiBold,
+          modifier = Modifier.weight(1f),
+        )
       }
-  ) {
-    Surface(modifier = Modifier.fillMaxSize()) {
-      Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            text = record.meal.ifBlank { "未命名" },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(1f),
-          )
-          IconButton(onClick = onClose) {
-            if (asPage) {
-              Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-            } else {
-              Icon(Icons.Filled.Close, contentDescription = "关闭")
-            }
-          }
-        }
 
         // 大图 + 多图翻页
         Box(
@@ -501,7 +409,6 @@ fun MealDetailContent(
       }
     }
   }
-}
 
 /** 单张照片一行：缩略图、时间，以及形态 A/B 各自的明细。 */
 @Composable

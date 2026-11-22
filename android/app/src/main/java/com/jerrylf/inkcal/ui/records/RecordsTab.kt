@@ -22,16 +22,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -51,8 +46,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jerrylf.inkcal.data.AppContainer
 import com.jerrylf.inkcal.data.RecordDto
 import com.jerrylf.inkcal.domain.Periods
-import com.jerrylf.inkcal.ui.picker.PhotoPickerScreen
 import com.jerrylf.inkcal.domain.TimeFmt
+import com.jerrylf.inkcal.ui.app.DetailOverlaySlot
+import com.jerrylf.inkcal.ui.picker.PhotoPickerScreen
 import kotlinx.coroutines.launch
 
 private enum class RecordsMode(val label: String) {
@@ -81,6 +77,8 @@ private const val MONTH_CENTER = 1200
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordsTab(
+  snackbarHostState: SnackbarHostState,
+  onDetailSlotChanged: (owner: String, slot: DetailOverlaySlot?) -> Unit,
   dayViewModel: RecordsViewModel = viewModel(),
   rangeViewModel: RangeViewModel = viewModel(),
 ) {
@@ -121,8 +119,6 @@ fun RecordsTab(
   val detailAnchor by dayViewModel.detailAnchor.collectAsStateWithLifecycle()
   val scrollTarget by dayViewModel.scrollTarget.collectAsStateWithLifecycle()
 
-  val snackbarHostState = remember { SnackbarHostState() }
-
   // Calo 里补记/改/删成功、或 §8.6 轮询发现服务端有新数据，这里都要重拉
   val context = LocalContext.current
   val dataSignal = remember(context) { AppContainer.of(context).dataSignal }
@@ -161,8 +157,49 @@ fun RecordsTab(
     }
   }
 
-  Box(modifier = Modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize()) {
+  // 把详情槽位同步到 MainScaffold 顶层的 AospDetailOverlay（盖过底部导航栏）
+  val detailDecisions =
+    detailRecord?.let { decisionsByDate[TimeFmt.dateOf(it.photoTime)].orEmpty() }.orEmpty()
+  LaunchedEffect(detailRecord, baseUrl, detailDecisions, busy) {
+    val slot =
+      detailRecord?.let { record ->
+        DetailOverlaySlot(
+          owner = "records",
+          record = record,
+          baseUrl = baseUrl,
+          decisions = detailDecisions,
+          busy = busy,
+          onClose = dayViewModel::closeDetail,
+          onDeleteMeal = {
+            dayViewModel.delete(
+              record.assetId,
+              photoOnly = false,
+              onSuccess = rangeViewModel::invalidate,
+            )
+          },
+          onDeletePhoto = { assetId ->
+            dayViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
+          },
+          onReanalyze = { notes, done ->
+            dayViewModel.reanalyze(
+              record.assetId,
+              notes,
+              onSuccess = {
+                rangeViewModel.invalidate()
+                // 真正更新完才让详情关表单，失败时 notes 原样留在框里
+                done()
+              },
+            )
+          },
+        )
+      }
+    onDetailSlotChanged("records", slot)
+  }
+  DisposableEffect(Unit) {
+    onDispose { onDetailSlotChanged("records", null) }
+  }
+
+  Column(modifier = Modifier.fillMaxSize()) {
       Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -258,54 +295,8 @@ fun RecordsTab(
               )
             }
         }
-
-
+      }
     }
-  }
-
-  AnimatedVisibility(
-    visible = detailRecord != null,
-    enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
-    exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
-  ) {
-    detailRecord?.let { record ->
-      MealDetailDialog(
-        record = record,
-        baseUrl = baseUrl,
-        decisions = decisionsByDate[TimeFmt.dateOf(record.photoTime)].orEmpty(),
-        busy = busy,
-        onClose = dayViewModel::closeDetail,
-        onDeleteMeal = {
-          dayViewModel.delete(
-            record.assetId,
-            photoOnly = false,
-            onSuccess = rangeViewModel::invalidate,
-          )
-        },
-        onDeletePhoto = { assetId ->
-          dayViewModel.delete(assetId, photoOnly = true, onSuccess = rangeViewModel::invalidate)
-        },
-        onReanalyze = { notes, done ->
-          dayViewModel.reanalyze(
-            record.assetId,
-            notes,
-            onSuccess = {
-              rangeViewModel.invalidate()
-              // 真正更新完才让详情关表单，失败时 notes 原样留在框里
-              done()
-            },
-          )
-        },
-        asPage = true,
-      )
-    }
-  }
-
-    SnackbarHost(
-      hostState = snackbarHostState,
-      modifier = Modifier.align(Alignment.BottomCenter),
-    )
-  }
 
   // ── 长按菜单的确认弹窗 ────────────────────────────────────────
 

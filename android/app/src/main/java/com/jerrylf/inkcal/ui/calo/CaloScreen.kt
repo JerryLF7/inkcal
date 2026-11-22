@@ -26,13 +26,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,7 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jerrylf.inkcal.data.ChatMessageDto
 import com.jerrylf.inkcal.data.ChatSessionDto
-import com.jerrylf.inkcal.ui.records.MealDetailDialog
+import com.jerrylf.inkcal.ui.app.DetailOverlaySlot
 
 private val SUGGESTIONS =
   listOf(
@@ -63,14 +63,17 @@ private val SUGGESTIONS =
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CaloScreen(viewModel: ChatViewModel = viewModel()) {
+fun CaloScreen(
+  snackbarHostState: SnackbarHostState,
+  onDetailSlotChanged: (owner: String, slot: DetailOverlaySlot?) -> Unit,
+  viewModel: ChatViewModel = viewModel(),
+) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   val baseUrl by viewModel.baseUrl.collectAsStateWithLifecycle()
   val detailRecord by viewModel.detailRecord.collectAsStateWithLifecycle()
   val busy by viewModel.busy.collectAsStateWithLifecycle()
 
   val listState = rememberLazyListState()
-  val snackbarHostState = remember { SnackbarHostState() }
   var input by remember { mutableStateOf("") }
 
   LaunchedEffect(state.error) {
@@ -148,11 +151,6 @@ fun CaloScreen(viewModel: ChatViewModel = viewModel()) {
           }
         }
       }
-
-      SnackbarHost(
-        hostState = snackbarHostState,
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
-      )
     }
 
     HorizontalDivider()
@@ -188,20 +186,29 @@ fun CaloScreen(viewModel: ChatViewModel = viewModel()) {
     }
   }
 
-  detailRecord?.let { record ->
-    MealDetailDialog(
-      record = record,
-      baseUrl = baseUrl,
-      decisions = emptyList(),
-      busy = busy,
-      onClose = viewModel::closeDetail,
-      onDeleteMeal = { viewModel.deleteFromDetail(record.assetId, photoOnly = false) },
-      onDeletePhoto = { assetId -> viewModel.deleteFromDetail(assetId, photoOnly = true) },
-      onReanalyze = { notes, done ->
-        // 成功后整条详情会关闭（见 reanalyzeFromDetail），done 只是让表单同步复位
-        viewModel.reanalyzeFromDetail(record.assetId, notes, onSuccess = done)
-      },
-    )
+  // Calo 的餐卡详情同样走 MainScaffold 顶层的 AospDetailOverlay，支持全屏 AOSP 预测性返回
+  LaunchedEffect(detailRecord, baseUrl, busy) {
+    val slot =
+      detailRecord?.let { record ->
+        DetailOverlaySlot(
+          owner = "calo",
+          record = record,
+          baseUrl = baseUrl,
+          decisions = emptyList(),
+          busy = busy,
+          onClose = viewModel::closeDetail,
+          onDeleteMeal = { viewModel.deleteFromDetail(record.assetId, photoOnly = false) },
+          onDeletePhoto = { assetId -> viewModel.deleteFromDetail(assetId, photoOnly = true) },
+          onReanalyze = { notes, done ->
+            // 成功后整条详情会关闭（见 reanalyzeFromDetail），done 只是让表单同步复位
+            viewModel.reanalyzeFromDetail(record.assetId, notes, onSuccess = done)
+          },
+        )
+      }
+    onDetailSlotChanged("calo", slot)
+  }
+  DisposableEffect(Unit) {
+    onDispose { onDetailSlotChanged("calo", null) }
   }
 }
 

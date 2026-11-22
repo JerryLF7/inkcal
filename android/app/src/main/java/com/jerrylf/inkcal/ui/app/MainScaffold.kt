@@ -4,6 +4,10 @@ import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
@@ -13,10 +17,20 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -73,40 +87,92 @@ private fun topLevelFadeThrough(): ContentTransform =
 @Composable
 fun MainScaffold(viewModel: AppViewModel) {
   val backStack = rememberNavBackStack(RecordsRoute)
+  val snackbarHostState = remember { SnackbarHostState() }
+  val detailOverlay = rememberAospDetailOverlayState()
+  val density = LocalDensity.current
+  var bottomBarHeightPx by remember { mutableIntStateOf(0) }
 
-  Scaffold(
-    bottomBar = {
-      NavigationBar {
-        val current = backStack.lastOrNull()
-        Tab.entries.forEach { tab ->
-          NavigationBarItem(
-            selected = current == tab.route,
-            onClick = {
-              if (current != tab.route) {
-                // 一级 Tab 之间不叠栈：切走就清空，返回键不会在 Tab 间来回跳
-                backStack.clear()
-                backStack.add(tab.route)
-              }
-            },
-            icon = { Icon(tab.icon, contentDescription = null) },
-            label = { Text(tab.label) },
-          )
-        }
+  Box(
+    modifier =
+      Modifier.fillMaxSize().onSizeChanged { size ->
+        detailOverlay.updateMetrics(
+          width = size.width.toFloat(),
+          height = size.height.toFloat(),
+          density = density.density,
+        )
       }
-    },
-  ) { inner ->
-    NavDisplay(
-      backStack = backStack,
-      onBack = { backStack.removeLastOrNull() },
-      modifier = Modifier.padding(inner),
-      // 一级 Tab 切换走 M3 的 Top level 过渡（fade through）
-      transitionSpec = { topLevelFadeThrough() },
-      entryProvider =
-        entryProvider {
-          entry<RecordsRoute> { RecordsTab() }
-          entry<CaloRoute> { CaloScreen() }
-          entry<SettingsRoute> { SettingsScreen(appViewModel = viewModel) }
-        },
+  ) {
+    Scaffold(
+      modifier = Modifier.fillMaxSize().aospBackBackground(detailOverlay),
+      bottomBar = {
+        NavigationBar(
+          modifier = Modifier.onSizeChanged { bottomBarHeightPx = it.height },
+        ) {
+          val current = backStack.lastOrNull()
+          Tab.entries.forEach { tab ->
+            NavigationBarItem(
+              selected = current == tab.route,
+              onClick = {
+                if (current != tab.route) {
+                  // 一级 Tab 之间不叠栈：切走就清空，返回键不会在 Tab 间来回跳
+                  backStack.clear()
+                  backStack.add(tab.route)
+                }
+              },
+              icon = { Icon(tab.icon, contentDescription = null) },
+              label = { Text(tab.label) },
+            )
+          }
+        }
+      },
+    ) { inner ->
+      NavDisplay(
+        backStack = backStack,
+        onBack = { backStack.removeLastOrNull() },
+        modifier = Modifier.padding(inner),
+        // 一级 Tab 切换走 M3 的 Top level 过渡（fade through）
+        transitionSpec = { topLevelFadeThrough() },
+        entryProvider =
+          entryProvider {
+            entry<RecordsRoute> {
+              RecordsTab(
+                snackbarHostState = snackbarHostState,
+                onDetailSlotChanged = detailOverlay::syncSlot,
+              )
+            }
+            entry<CaloRoute> {
+              CaloScreen(
+                snackbarHostState = snackbarHostState,
+                onDetailSlotChanged = detailOverlay::syncSlot,
+              )
+            }
+            entry<SettingsRoute> { SettingsScreen(appViewModel = viewModel) }
+          },
+      )
+    }
+
+    // 详情页覆盖层：位于 Scaffold 之上，盖过底部导航栏，支持 AOSP 两阶段预测性返回
+    AospDetailOverlay(state = detailOverlay)
+
+    // 全局 Snackbar：始终压在 Scaffold 与详情页之上，避免被覆盖层挡住
+    val snackbarBottomPad =
+      if (detailOverlay.isVisible) {
+        0.dp
+      } else {
+        with(density) { bottomBarHeightPx.toDp() }
+      }
+    SnackbarHost(
+      hostState = snackbarHostState,
+      modifier =
+        Modifier.align(Alignment.BottomCenter)
+          .imePadding()
+          .then(
+            if (detailOverlay.isVisible) {
+              Modifier.navigationBarsPadding()
+            } else {
+              Modifier.padding(bottom = snackbarBottomPad)
+            }
+          ),
     )
   }
 }
