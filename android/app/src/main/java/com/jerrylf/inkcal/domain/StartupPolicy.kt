@@ -25,7 +25,7 @@ object StartupPolicy {
    * 只对幂等的 `GET` 请求启用：
    * - `502 / 503 / 504`：网关或上游瞬时不可用；
    * - `404` 且 `Content-Type` 为 `text/html`（路径含 `/api/`）：
-   *   inkcal Flask 的 `/api/*` 端点（含真实的 404 错误）一律返回 `application/json` 或 `image/*`，
+   *   inkcal Flask 的 `/api/` 端点（含真实的 404 错误）一律返回 `application/json` 或 `image/`，
    *   绝不返回 HTML。收到 HTML 404 说明请求在 `frps` HTTP vhost 连接池撞上了半开死连接
    *   （`frps` 把上游转发错误统一映成自带的 HTML 404 页），请求从未到达 Flask，重试完全安全。
    */
