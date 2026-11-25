@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jerrylf.inkcal.data.RecordDto
 import com.jerrylf.inkcal.domain.Decisions
+import com.jerrylf.inkcal.domain.StartupPolicy
 import com.jerrylf.inkcal.domain.TimeFmt
 
 /**
@@ -60,12 +61,12 @@ fun RecordsScreen(
   val listState = rememberLazyListState()
   val today = remember { TimeFmt.hktToday() }
 
-  // ── 刷新后把视口留在顶部（2026-10-15 bug 修复）────────────────────
+  // ── 刷新后把视口留在顶部（2026-10-15 bug 修复；2026-11-25 补同日新记录）────
   // 冷启动先画缓存、随后被网络数据整体替换，新记录被插到列表最前面。LazyColumn
   // 在 item 集合变化时会**按 key 把「原来第一个可见项」钉在视口顶部**，于是新卡片
-  // 被顶到视口**上方**：打开 app 看到的是昨天那条，得把列表往下拖才看得到今天新入库的。
-  // 用户本来就贴着顶部时，替他钉回顶部；已经翻到别处则一律不动他的位置。
-  val topKey = state.groups.firstOrNull()?.let { "header-${it.date}" }
+  // 被顶到视口**上方**。锚点同时看最新日期与首条记录 id，跨天与同日新餐都能钉回顶部；
+  // 用户已经自己翻到别处则一律不动他的位置。
+  val topKey = StartupPolicy.topAnchorKey(state.groups)
   var lastTopKey by remember { mutableStateOf<String?>(null) }
 
   // 「用户自己滚离了顶部」。必须只认用户滚的：上面那次重排是 LazyColumn 干的，

@@ -1,6 +1,8 @@
 package com.jerrylf.inkcal.data
 
 import com.jerrylf.inkcal.domain.ServerUrl
+import com.jerrylf.inkcal.domain.StartupPolicy
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -9,6 +11,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import retrofit2.HttpException
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /** 与服务器的连接状态，App 的顶层状态机。 */
@@ -61,10 +64,52 @@ private object TimeoutInterceptor : Interceptor {
 }
 
 /**
+ * 反代 / FRP HTTP 代理死连接池透明重试拦截器。
+ *
+ * 2026-11-25 实测：空闲一段时间后 NAT 会静默回收 `frpc` 工作连接，`frps` HTTP vhost 抽到
+ * 死连接时会直接返回自带的 HTML `404 Not Found`（不经 Flask），需连续发 3–5 次请求才能把池里
+ * 的死连接排空。这里仅对幂等的 `GET` 请求、命中 HTML 404 或 `502/503/504` 时自动短退避重试，
+ * 避免用户被误判成连不上服务器或踢回配置页。
+ */
+private object ProxyRetryInterceptor : Interceptor {
+  private val retryDelaysMs = longArrayOf(150L, 200L, 250L, 300L, 400L, 500L)
+
+  override fun intercept(chain: Interceptor.Chain): Response {
+    val request = chain.request()
+    var response = chain.proceed(request)
+    for (delayMs in retryDelaysMs) {
+      val contentType = response.header("Content-Type")
+      if (
+        !StartupPolicy.shouldRetryProxyResponse(
+          method = request.method,
+          path = request.url.encodedPath,
+          code = response.code,
+          contentType = contentType,
+        )
+      ) {
+        return response
+      }
+      if (chain.call().isCanceled()) return response
+      response.close()
+      try {
+        Thread.sleep(delayMs)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        throw IOException("Interrupted during retry")
+      }
+      if (chain.call().isCanceled()) throw IOException("Canceled")
+      response = chain.proceed(request)
+    }
+    return response
+  }
+}
+
+/**
  * 连接、认证与业务数据访问。
  *
  * 启动时不做探测，直接请求 /api/data-version：200 就是免登录或已登录，401 才要登录页。
- */class AppRepository(
+ */
+class AppRepository(
   private val store: SettingsStore,
   private val cookieStore: CookieStore,
   private val recordsCache: RecordsCache,
@@ -74,6 +119,7 @@ private object TimeoutInterceptor : Interceptor {
   val httpClient: OkHttpClient =
     OkHttpClient.Builder()
       .cookieJar(cookieStore)
+      .addInterceptor(ProxyRetryInterceptor)
       .addInterceptor(TimeoutInterceptor)
       .connectTimeout(15, TimeUnit.SECONDS)
       .readTimeout(DEFAULT_READ_TIMEOUT_S, TimeUnit.SECONDS)
@@ -123,13 +169,20 @@ private object TimeoutInterceptor : Interceptor {
   suspend fun probe(): ConnState {
     val baseUrl = store.currentBaseUrl()
     if (baseUrl.isBlank()) return ConnState.NeedServer
-    return try {
-      ConnState.Ready(api().dataVersion().version)
-    } catch (e: HttpException) {
-      if (e.code() == 401) ConnState.NeedLogin else ConnState.Failed("HTTP ${e.code()}")
-    } catch (e: Exception) {
-      ConnState.Failed(e.message ?: e.javaClass.simpleName)
+    val backoffMs = longArrayOf(0L, 250L, 500L)
+    var lastError: Exception? = null
+    for (waitMs in backoffMs) {
+      if (waitMs > 0L) delay(waitMs)
+      try {
+        return ConnState.Ready(api().dataVersion().version)
+      } catch (e: HttpException) {
+        return if (e.code() == 401) ConnState.NeedLogin else ConnState.Failed("HTTP ${e.code()}")
+      } catch (e: Exception) {
+        lastError = e
+        if (!StartupPolicy.isTransientNetworkException(e)) break
+      }
     }
+    return ConnState.Failed(lastError?.message ?: lastError?.javaClass?.simpleName ?: "连接失败")
   }
 
   suspend fun login(user: String, password: String): ConnState = try {

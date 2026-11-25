@@ -30,9 +30,10 @@ import com.jerrylf.inkcal.data.ConnState
 import com.jerrylf.inkcal.ui.app.AppViewModel
 
 /**
- * 首启向导：填服务器地址 → 需要时登录。两种形态共用一屏，由 [state] 决定。
- *
- * 地址与登录凭据只在这里使用；密码不落盘（只有会话 cookie 持久化）。
+ * 启动连接页：按状态分为三种明确形态，不再在已配好服务器却瞬时断网时把用户踢回「填地址表单」：
+ * 1. 未配地址或用户主动点「修改服务器地址」→ 服务器地址输入表单；
+ * 2. 服务端要求登录（401）→ 账号密码表单；
+ * 3. 已配地址但暂时连不上（[ConnState.Failed]）→ 简洁的重试页（主按钮「重试」，副按钮「修改服务器地址」）。
  */
 @Composable
 fun SetupScreen(state: ConnState, viewModel: AppViewModel) {
@@ -46,7 +47,8 @@ fun SetupScreen(state: ConnState, viewModel: AppViewModel) {
 
   LaunchedEffect(baseUrl) { if (urlInput.isBlank()) urlInput = baseUrl }
 
-  val serverForm = state !is ConnState.NeedLogin || editingServer
+  val showServerInput = state is ConnState.NeedServer || baseUrl.isBlank() || editingServer
+  val showLoginForm = !showServerInput && state is ConnState.NeedLogin
 
   Column(
     modifier =
@@ -57,66 +59,108 @@ fun SetupScreen(state: ConnState, viewModel: AppViewModel) {
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     Text("inkcal", style = MaterialTheme.typography.headlineMedium)
-    Text(
-      if (serverForm) "填服务器地址（局域网 IP:端口 或反代域名）" else "登录后继续",
-      style = MaterialTheme.typography.bodyMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
 
-    if (serverForm) {
-      OutlinedTextField(
-        value = urlInput,
-        onValueChange = { urlInput = it },
-        label = { Text("服务器地址") },
-        placeholder = { Text("https://inkcal.example.com") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth(),
-      )
-      Button(
-        onClick = { viewModel.saveServer(urlInput) },
-        enabled = !busy && urlInput.isNotBlank(),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Text("保存并连接")
+    when {
+      showServerInput -> {
+        Text(
+          "填服务器地址（局域网 IP:端口 或反代域名）",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+          value = urlInput,
+          onValueChange = { urlInput = it },
+          label = { Text("服务器地址") },
+          placeholder = { Text("https://inkcal.example.com") },
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+          modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+          onClick = { viewModel.saveServer(urlInput) },
+          enabled = !busy && urlInput.isNotBlank(),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Text("保存并连接")
+        }
+        if (editingServer && baseUrl.isNotBlank()) {
+          TextButton(onClick = { viewModel.toggleServerForm() }, enabled = !busy) {
+            Text(if (state is ConnState.NeedLogin) "返回登录" else "返回")
+          }
+        }
+        if (state is ConnState.Failed) {
+          Text(
+            state.message,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+          )
+        }
       }
-      if (state is ConnState.NeedLogin) {
-        TextButton(onClick = { viewModel.toggleServerForm() }) { Text("返回登录") }
-      }
-    } else {
-      OutlinedTextField(
-        value = user,
-        onValueChange = { user = it },
-        label = { Text("用户名") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-      )
-      OutlinedTextField(
-        value = password,
-        onValueChange = { password = it },
-        label = { Text("密码") },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        modifier = Modifier.fillMaxWidth(),
-      )
-      Button(
-        onClick = { viewModel.login(user, password) },
-        enabled = !busy && user.isNotBlank() && password.isNotBlank(),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Text("登录")
-      }
-      TextButton(onClick = { viewModel.toggleServerForm() }) { Text("修改服务器地址") }
-    }
 
-    if (state is ConnState.Failed) {
-      Text(
-        state.message,
-        color = MaterialTheme.colorScheme.error,
-        style = MaterialTheme.typography.bodyMedium,
-      )
-      TextButton(onClick = { viewModel.retry() }, enabled = !busy) { Text("重试") }
+      showLoginForm -> {
+        Text(
+          "登录后继续",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+          value = user,
+          onValueChange = { user = it },
+          label = { Text("用户名") },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+          value = password,
+          onValueChange = { password = it },
+          label = { Text("密码") },
+          singleLine = true,
+          visualTransformation = PasswordVisualTransformation(),
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+          modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+          onClick = { viewModel.login(user, password) },
+          enabled = !busy && user.isNotBlank() && password.isNotBlank(),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Text("登录")
+        }
+        TextButton(onClick = { viewModel.toggleServerForm() }, enabled = !busy) {
+          Text("修改服务器地址")
+        }
+      }
+
+      else -> {
+        // 已保存服务器地址但瞬时连接失败：默认给「重试」，不把人踢回首启填地址页
+        Text(
+          "暂时无法连接服务器",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+          baseUrl.trimEnd('/'),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (state is ConnState.Failed) {
+          Text(
+            state.message,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+          )
+        }
+        Button(
+          onClick = { viewModel.retry() },
+          enabled = !busy,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Text("重试")
+        }
+        TextButton(onClick = { viewModel.toggleServerForm() }, enabled = !busy) {
+          Text("修改服务器地址")
+        }
+      }
     }
 
     if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

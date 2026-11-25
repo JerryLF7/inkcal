@@ -13,7 +13,10 @@ import com.jerrylf.inkcal.data.RecordsCache
 import com.jerrylf.inkcal.data.RecordsCachePayload
 import com.jerrylf.inkcal.domain.DayGroup
 import com.jerrylf.inkcal.domain.MealGrouping
+import com.jerrylf.inkcal.domain.StartupPolicy
 import com.jerrylf.inkcal.domain.TimeFmt
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -107,16 +110,23 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
   init {
     viewModelScope.launch {
       paintFromCache()
-      reloadAll(manual = false)
+      // 冷启动固定只拉最近 7 天（~15KB）并展示顶部刷新指示：
+      // 1) 避免之前翻过 73–365 天历史导致每次冷启动重拉百 KB 慢到 5 秒；
+      // 2) refreshing = true 既让自动刷新肉眼可见，也防触底 loadMore 抢占 seq 取消刷新。
+      reloadAll(coldStart = true, showSpinner = true)
     }
     // BMR 不挡内容，单独拉
     viewModelScope.launch { bmrCache.ensureLoaded() }
   }
 
-  /** 下拉刷新，以及写操作后的重载入口。 */
-  fun refresh() {
-    if (_state.value.refreshing) return
-    viewModelScope.launch { reloadAll(manual = true) }
+  /**
+   * 下拉刷新，以及写操作 / 数据版本变化后的重载入口。
+   * - `force = false`（用户下拉）：若已有刷新在跑则忽略，防误杀进行中的冷启动拉取；
+   * - `force = true`（写操作完成或 data-version 变化）：强制发新一轮重拉，不漏新数据。
+   */
+  fun refresh(force: Boolean = false) {
+    if (!force && _state.value.refreshing) return
+    viewModelScope.launch { reloadAll(coldStart = false, showSpinner = true) }
   }
 
   /** 触底加载更早的 7 天。 */
@@ -209,7 +219,7 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
         val resp = repo.reanalyze(assetId, notes)
         val kcal = resp.record?.calories?.roundToInt()
         _toast.value = if (kcal != null) "已更新：$kcal kcal" else "已更新"
-        reloadAll(manual = false)
+        reloadAll(coldStart = false, showSpinner = false)
         onSuccess()
       } catch (e: Exception) {
         _toast.value = "重新分析失败: ${message(e)}"
@@ -233,7 +243,7 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
         } else {
           _toast.value = "已删除整餐，照片不会再被同步"
         }
-        reloadAll(manual = false)
+        reloadAll(coldStart = false, showSpinner = false)
         onSuccess()
       } catch (e: Exception) {
         _toast.value = "删除失败: ${message(e)}"
@@ -245,32 +255,76 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
   // ── 内部 ───────────────────────────────────────────────────────
 
   /**
-   * 重拉**已加载的整个范围**整体替换（而不是只重拉最近 7 天），这样下拉刷新
-   * 不会把用户翻过的历史抖掉。
+   * 重载记录列表：
+   * - [coldStart] = true：固定只拉最近 7 天（约 15 KB），与 `/api/dates` 并发，拿到记录立刻上屏，
+   *   不被历史翻页留下的旧 `earliestLoaded` 拖成百 KB 慢请求。若最近 7 天恰为空且库里还有更早记录，
+   *   自动往回补拉至首屏有内容（最多 4 片）。
+   * - [coldStart] = false（会话内下拉/写后重载）：重拉当前会话已加载的整个范围（上限 365 天），
+   *   不把用户刚翻过的历史抖掉。
    */
-  private suspend fun reloadAll(manual: Boolean) {
+  private suspend fun reloadAll(coldStart: Boolean, showSpinner: Boolean) {
     val mine = ++seq
     _state.update {
       it.copy(
         initialLoading = it.groups.isEmpty(),
-        refreshing = manual && it.groups.isNotEmpty(),
+        refreshing = showSpinner && it.groups.isNotEmpty(),
         error = null,
       )
     }
     try {
       val today = TimeFmt.hktToday()
-      val requested = earliestLoaded ?: TimeFmt.minusDays(today, CHUNK_DAYS - 1)
+      val windowStart = StartupPolicy.coldStartRangeStart(today, CHUNK_DAYS)
+      val requested =
+        if (coldStart) windowStart
+        else earliestLoaded ?: windowStart
       val floor = TimeFmt.minusDays(today, MAX_RANGE_DAYS)
       val start = if (requested < floor) floor else requested
 
-      val resp = repo.recordsInRange(start, today)
-      minDate = runCatching { repo.availableDates().lastOrNull() }.getOrNull()
-      if (mine != seq) return
+      coroutineScope {
+        // 与 recordsInRange 并行拉取最早日期，绝不串行阻塞首屏渲染
+        val datesDeferred =
+          if (minDate == null) async { runCatching { repo.availableDates().lastOrNull() }.getOrNull() }
+          else null
 
-      loadedRecords = resp.records
-      burns = resp.burns
-      earliestLoaded = start
-      publishResult()
+        val resp = repo.recordsInRange(start, today)
+        if (mine != seq) {
+          datesDeferred?.cancel()
+          return@coroutineScope
+        }
+
+        loadedRecords = resp.records
+        burns = resp.burns
+        earliestLoaded = start
+
+        // 最近 7 天恰无记录时等一下 minDate，确认还有更早历史就自动往前补几片，避免空屏
+        if (loadedRecords.isEmpty() && datesDeferred != null) {
+          minDate = datesDeferred.await()
+          if (mine != seq) return@coroutineScope
+          var cursor = start
+          var guard = 0
+          while (loadedRecords.isEmpty() && minDate != null && cursor > minDate!! && guard++ < 4) {
+            val prevEnd = TimeFmt.minusDays(cursor, 1)
+            val prevStart = TimeFmt.minusDays(prevEnd, CHUNK_DAYS - 1)
+            val older = repo.recordsInRange(prevStart, prevEnd)
+            if (mine != seq) return@coroutineScope
+            loadedRecords = loadedRecords + older.records
+            burns = burns + older.burns
+            cursor = prevStart
+            earliestLoaded = cursor
+          }
+          publishResult()
+        } else {
+          publishResult()
+          if (datesDeferred != null) {
+            val resolvedMin = datesDeferred.await()
+            if (mine == seq && resolvedMin != null) {
+              minDate = resolvedMin
+              val atEnd = reachedEnd(earliestLoaded ?: start, loadedRecords.isEmpty())
+              _state.update { it.copy(atEnd = atEnd) }
+            }
+          }
+        }
+      }
       // 顺路重试 BMR：冷启动时它可能因为网络抖动没拿到（见 BmrCache）
       bmrCache.ensureLoaded()
     } catch (e: Exception) {
@@ -318,13 +372,16 @@ class RecordsViewModel(app: Application) : AndroidViewModel(app) {
   private suspend fun persistCache(atEnd: Boolean) {
     val base = container.settingsStore.currentBaseUrl()
     if (base.isBlank() || loadedRecords.isEmpty()) return
+    // 落盘只保留最近 7 天窗口，防止历史翻页让缓存与下次冷启动越滚越大
+    val trimmed = StartupPolicy.trimForDiskCache(loadedRecords, burns, TimeFmt.hktToday(), CHUNK_DAYS)
+    val trimmedAtEnd = atEnd && trimmed.earliest <= (earliestLoaded ?: trimmed.earliest)
     cache.write(
       RecordsCachePayload(
         baseUrl = base,
-        records = loadedRecords,
-        burns = burns,
-        earliest = earliestLoaded ?: "",
-        atEnd = atEnd,
+        records = trimmed.records,
+        burns = trimmed.burns,
+        earliest = trimmed.earliest,
+        atEnd = trimmedAtEnd,
       )
     )
   }

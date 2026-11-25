@@ -123,7 +123,7 @@ fun RecordsTab(
       // 新数据可能带新的 Luna 决策，角标要跟着更新
       dayViewModel.refreshDecisions()
       rangeViewModel.invalidate()
-      dayViewModel.refresh()
+      dayViewModel.refresh(force = true)
     }
   }
 
@@ -316,7 +316,7 @@ fun RecordsTab(
       // 加完不关窗：可以接着选下一餐；时间轴在后台先刷新
       onAdded = {
         rangeViewModel.invalidate()
-        dayViewModel.refresh()
+        dayViewModel.refresh(force = true)
       },
     )
   }

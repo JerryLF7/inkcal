@@ -4,6 +4,8 @@
 > 事实来源：`web/server.py`、`src/db.py`、`web/ui/src/**`（截至 2026-09-30）。文档与代码冲突时以代码为准，并回来改本文。
 > 项目规则见根目录 `AGENTS.md`，尤其 §1「绝对边界」，实现客户端时同样适用。
 >
+> **实现进度（0.31，2026-11-25）**：**修复冷启动自动刷新极慢与启动偶发 `HTTP 404` 退回填地址页两个线上问题**。① 冷启动固定只拉最近 7 天（~15 KB，不再被历史上翻过 73–365 天留下的 `earliestLoaded` 拖成 147 KB / 5 秒慢请求），落盘缓存同步裁剪到最近 7 天窗口；`/api/dates` 改为并行拉取不阻塞首屏渲染；冷启动刷新显示顶部转圈指示并防 `loadMore` 抢占 `seq`；置顶锚点升级为「日期 + 首条 assetId」覆盖同日新餐。② 新增 `ProxyRetryInterceptor`（仅对幂等 `GET` 请求，命中 `frps` 半开死连接池吐出的 HTML 404 或 `502/503/504` 时短退避自动重试最多 6 次）与 `probe()` 瞬时 `IOException` 重试；`SetupScreen` 在已保存服务器地址但瞬时连不上时改显简洁的「暂时无法连接服务器 + 重试」，不再误把人踢回首次启动填地址表单。新增 `domain/StartupPolicy.kt` + 6 个单测（共 18 类 109 例）。
+>
 > **实现进度（0.30，2026-11-23）**：**详情页拆为独立 `MealDetailActivity`，由 Android 系统原生接管跨 Activity 预测性返回**。0.28～0.29 在单 Activity 内用 Compose 手写两阶段动画仍存在淡出僵硬与圆角无法匹配各机型物理屏幕的问题；现彻底删除手写覆盖层状态机（`AospBackOverlay.kt` / `PredictiveBackMath.kt`），将详情页升级为独立 `MealDetailActivity`（不注册任何 `BackHandler` / `PredictiveBackHandler`），由系统 WindowManager Shell 原生渲染跨 Activity 预测性返回——自动匹配真机物理屏幕圆角、系统/ROM 原生惯性曲线、底页视差与暗化遮罩。记录页与 Calo 聊天页统一通过 `MealDetailActivity.newIntent()` 打开；写操作跑在 `AppContainer.appScope` 上保证离开页面不取消请求（§3.3），并通过 `dataSignal.bump()` 与 `globalMessages` 联动首页刷新与 Snackbar 提示；窗口主题 `Theme.Inkcal` 改为深色基类 `android:Theme.Material.NoActionBar` 防止切换闪白。新增 `domain/DetailRefresh.kt` + 3 个单测（共 17 类 103 例）。见 §8.4 / §16.1 / §16.4。
 >
 > **实现进度（0.29，2026-11-23）**：**修复 0.28 预测性返回松手瞬间消失的曲线 bug**。0.28 用 `CubicBezierEasing(0, 0, 0, 1)` 驱动 `commitProgress` 又把缓动后的值直接除以 `0.45` 算前景 alpha，该曲线在 `t=0` 处斜率无穷大、前 32ms（仅 2 帧）就冲过 0.48 导致前景 alpha 瞬间归零。现改为 `LinearEasing` 驱动线性时间进度，在 `PredictiveBackMath` 内部分离「位移/缩放的 `easeOutCubic` 缓动（滑出 96dp）」与「前景透明度的独立线性淡出窗口（12%–72% 线性时间，约 38ms→230ms）」，并补上防 2 帧闪没单测。
@@ -236,11 +238,13 @@ deficit(kcal, ...) = tdee - kcal      // 正=有缺口，负=超标
   - 为什么需要显式处理：Compose 的 `LazyColumn` 在 item 集合变化时会按 key 把「原来第一个可见项」钉在视口顶部。新记录插到它前面时，保持不动的是**那一项**，视觉上等于列表整体下移，新卡片被顶到视口上方——打开 app 看到的是昨天那条，得把列表往下拖才看得到今天新入库的。
   - 实现（`RecordsScreen`）：只在「顶部日期头变了」且「用户自己没滚离过顶部」时 `scrollToItem(0)`。「用户有没有滚离」必须用 `snapshotFlow { isScrollInProgress to firstVisibleItemIndex }` 只认 `isScrollInProgress` 期间的位移——上面那次重排是 LazyColumn 干的，也会把 `firstVisibleItemIndex` 改掉，直接读它会把「用户翻到了别处」误判出来，于是永远不修。
 
-**Android 侧的缓存与刷新（0.3 起，已实现）**：
-- 冷启动是 **stale-while-revalidate**：先画 `filesDir/records-cache.json` 里的上次结果，再后台重拉覆盖。**不做**「缓存没过期就不请求」——服务端 cron 随时写新记录，缓存永远不算可信。
-- 下拉刷新重拉的是**已加载的整个范围**（上限 365 天），不是只重拉最近 7 天，否则会把用户翻过的历史抖掉。
+**Android 侧的缓存与刷新（0.3 起，0.31 优化冷启动窗口）**：
+- 冷启动是 **stale-while-revalidate**：先画 `filesDir/records-cache.json` 里的上次结果，再立刻在顶部显示刷新指示并拉取**最近 7 天**覆盖（~15 KB），`/api/dates` 并行拉取不阻塞首屏。**不做**「缓存没过期就不请求」——服务端 cron 随时写新记录，缓存永远不算可信。
+- **落盘缓存只保留最近 7 天窗口**（`StartupPolicy.trimForDiskCache`，近 7 天为空时兜底保留最新 ≤20 条）：0.30 之前曾把用户翻过的整段历史（如 73 天 / 147 KB）永久落盘并在每次冷启动全量重拉，导致走 FRP 慢到 4–5 秒且无转圈反馈，看起来像没自动刷新。
+- **会话内**下拉刷新与写后重载仍重拉已加载的整个范围（上限 365 天），不把用户刚翻过的历史抖掉；`dataSignal.bump()` 走 `refresh(force = true)` 防止被进行中的刷新吞掉。
+- **反代死连接池透明重试（0.31）**：`AppRepository.httpClient` 挂 `ProxyRetryInterceptor`，仅对幂等 `GET` 请求在命中反代/FRP 半开死连接池吐出的 HTML `404`（Flask `/api/*` 绝不返回 HTML）或 `502/503/504` 时短退避自动重试最多 6 次；`probe()` 另对瞬时 `IOException` 重试最多 3 次。已保存地址却连接失败时，`SetupScreen` 默认给「暂时无法连接服务器 + 重试」，不再把用户踢回首次启动填地址表单。
 - 缓存 payload 带 `baseUrl`，换服务器即失效（`saveBaseUrl` / `logout` 也会主动清）；写入先落临时文件再改名，避免写一半被杀留下坏 JSON；解码失败一律当「没有缓存」，不崩。
-- 三个 loading 状态要分开：`initialLoading`（首次且无缓存，整屏转圈）、`loadingMore`（触底，底部条）、`refreshing`（下拉，顶部指示器）。
+- 三个 loading 状态要分开：`initialLoading`（首次且无缓存，整屏转圈）、`loadingMore`（触底，底部条）、`refreshing`（冷启动同步与下拉刷新，顶部指示器）。
 - 请求序号防抖：每次加载带递增 id，只采纳最新响应（对应网页 _loadSeq）。
 
 ### 8.2 周视图
@@ -536,6 +540,7 @@ android/
 | 32 | 详情页预测性返回（真·系统原生跨 Activity） | §8.4 / §16.1 第 4 项 | 否（后续） | ✅ 0.30（拆为独立 `MealDetailActivity` 且不拦截返回，由 Android WM Shell 原生接管跨 Activity 预测性返回：自动匹配物理屏幕圆角与系统/ROM 原生曲线；记录页与 Calo 统一入口，`AppContainer.appScope` 保活慢写请求。0.18～0.29 单 Activity 模拟方案复盘见 §16.4） |
 | 33 | 选择照片：非食物照片可选 | §8.5(a) | 是 | ✅ 0.25（原先置灰 + `toggle()` 早退，堵死了 SigLIP2 误杀的唯一补救通道） |
 | 34 | 选择照片：显示全量照片 | §8.5(a) | 是 | ✅ 0.26（已入库的遮罩标「已入库」，其余正常可选；不再显示非食物角标） |
+| 35 | 冷启动 7 天快刷 + 启动 404/反代死连接透明重试 | §3.2 / §8.1 | 是 | ✅ 0.31（冷启动固定拉最近 7 天 + 并行 `/api/dates` + 顶部刷新指示 + 缓存 7 天裁剪 + 同日置顶锚点；`ProxyRetryInterceptor` 透明排空 `frps` HTML 404 死连接池；已配地址连不上时改显重试页不再踢回填地址表单） |
 ## 15. 建议实施顺序
 
 1. ✅ 0.1 搭环境与空壳（三 Tab、主题、Base URL、登录、OkHttp + cookie）。里程碑 A：能登录并拉到 /api/data-version。

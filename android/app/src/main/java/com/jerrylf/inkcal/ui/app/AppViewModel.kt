@@ -57,8 +57,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = ConnState.Failed("请填写服务器地址")
       } else {
         _baseUrl.value = normalized
-        _showServerForm.value = false
-        _state.value = applyProbe(repo.probe())
+        val result = applyProbe(repo.probe())
+        _state.value = result
+        // 只有连上或进入登录态才收起地址表单；输错地址连不上时留在表单里方便直接改
+        if (result is ConnState.Ready || result is ConnState.NeedLogin) {
+          _showServerForm.value = false
+        }
       }
       _busy.value = false
     }
@@ -115,9 +119,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
   /** 设置页的「数据概况」；每次轮询与连接探测都会刷新，没取到时为 null。 */
   val dataSummary: StateFlow<DataSummary?> = _dataSummary.asStateFlow()
 
-  /** 连接探测同时也是一次版本查询，顺手把概况填上（不然要等 30 秒后的第一次轮询）。 */
+  /** 连接探测同时也是一次版本查询，顺手把概况和轮询基线填上（省掉冷启动重复探测与基线空窗）。 */
   private fun applyProbe(result: ConnState): ConnState {
-    if (result is ConnState.Ready) _dataSummary.value = DataVersion.summarize(result.version)
+    if (result is ConnState.Ready) {
+      _dataSummary.value = DataVersion.summarize(result.version)
+      if (lastDataVersion == null) lastDataVersion = result.version
+    }
     return result
   }
 }
